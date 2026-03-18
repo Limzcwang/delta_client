@@ -1,0 +1,8 @@
+# Delta Client 依赖包
+websockets>=10.0
+aiohttp>=3.8.0
+
+# GUI相关（tkinter通常是Python内置，无需额外安装）
+# 如果需要更现代的GUI，可以考虑安装：
+# customtkinter>=5.0.0  # 现代化的tkinter主题
+# tkinterweb>=3.0.0    # tkinter的web组件支持
