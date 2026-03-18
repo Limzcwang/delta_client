@@ -2,49 +2,49 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import threading
 import asyncio
-import sys
-import os
-
-# 添加服务模块路径
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'services'))
-
-from client_service import http_client, websocket_client_8765, interactive_client
+import aiohttp
+import json
 
 
-class ClientApp:
+class LoginApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Delta Client - 连接管理器")
+        self.root.title("Delta Client - 用户登录")
         self.root.geometry("400x300")
         
         # 创建主框架
-        main_frame = ttk.Frame(root, padding="20")
+        main_frame = ttk.Frame(root, padding="30")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         # 标题
-        title_label = ttk.Label(main_frame, text="选择连接方式", font=("Arial", 16))
-        title_label.grid(row=0, column=0, columnspan=2, pady=(0, 20))
+        title_label = ttk.Label(main_frame, text="用户登录/注册", font=("Arial", 16))
+        title_label.grid(row=0, column=0, columnspan=2, pady=(0, 30))
         
-        # 连接选项
-        self.connection_var = tk.StringVar(value="1")
+        # 用户名输入
+        ttk.Label(main_frame, text="用户名:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.username_entry = ttk.Entry(main_frame, width=20)
+        self.username_entry.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=5, padx=(10, 0))
         
-        options = [
-            ("HTTP客户端（8000端口）", "1"),
-            ("WebSocket客户端（8765端口）", "2"),
-            ("WebSocket客户端（8000端口）", "3")
-        ]
+        # 密码输入
+        ttk.Label(main_frame, text="密码:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        self.password_entry = ttk.Entry(main_frame, width=20, show="*")
+        self.password_entry.grid(row=2, column=1, sticky=(tk.W, tk.E), pady=5, padx=(10, 0))
         
-        for i, (text, value) in enumerate(options):
-            ttk.Radiobutton(main_frame, text=text, variable=self.connection_var, 
-                           value=value).grid(row=i+1, column=0, sticky=tk.W, pady=5)
+        # 按钮框架
+        button_frame = ttk.Frame(main_frame)
+        button_frame.grid(row=3, column=0, columnspan=2, pady=20)
         
-        # 连接按钮
-        connect_button = ttk.Button(main_frame, text="连接", command=self.start_connection)
-        connect_button.grid(row=4, column=0, pady=20)
+        # 登录按钮
+        login_button = ttk.Button(button_frame, text="登录", command=self.login)
+        login_button.grid(row=0, column=0, padx=(0, 10))
+        
+        # 注册按钮
+        register_button = ttk.Button(button_frame, text="注册", command=self.register)
+        register_button.grid(row=0, column=1, padx=(10, 0))
         
         # 日志区域
-        log_frame = ttk.LabelFrame(main_frame, text="日志输出")
-        log_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=10)
+        log_frame = ttk.LabelFrame(main_frame, text="操作日志")
+        log_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=10)
         
         self.log_text = tk.Text(log_frame, height=8, width=50)
         self.log_text.grid(row=0, column=0, padx=5, pady=5)
@@ -56,52 +56,89 @@ class ClientApp:
         # 配置网格权重
         root.columnconfigure(0, weight=1)
         root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(0, weight=1)
-        main_frame.rowconfigure(5, weight=1)
+        main_frame.columnconfigure(1, weight=1)
+        main_frame.rowconfigure(4, weight=1)
         
     def log_message(self, message):
         """在日志区域添加消息"""
         self.log_text.insert(tk.END, message + "\n")
         self.log_text.see(tk.END)
         
-    def start_connection(self):
-        """启动选定的连接"""
-        choice = self.connection_var.get()
+    def login(self):
+        """登录操作"""
+        username = self.username_entry.get().strip()
+        password = self.password_entry.get().strip()
         
-        # 在新线程中运行异步代码
-        thread = threading.Thread(target=self.run_async_client, args=(choice,))
+        if not username or not password:
+            messagebox.showwarning("输入错误", "请输入用户名和密码")
+            return
+        
+        # 在新线程中运行登录
+        thread = threading.Thread(target=self.run_login, args=(username, password))
         thread.daemon = True
         thread.start()
         
-    def run_async_client(self, choice):
-        """在新线程中运行异步客户端"""
-        # 创建新的事件循环
+    def register(self):
+        """注册操作"""
+        username = self.username_entry.get().strip()
+        password = self.password_entry.get().strip()
+        
+        if not username or not password:
+            messagebox.showwarning("输入错误", "请输入用户名和密码")
+            return
+        
+        # 在新线程中运行注册
+        thread = threading.Thread(target=self.run_register, args=(username, password))
+        thread.daemon = True
+        thread.start()
+        
+    def run_login(self, username, password):
+        """在新线程中运行登录请求"""
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
         try:
-            if choice == "1":
-                self.log_message("启动HTTP客户端连接8000端口...")
-                loop.run_until_complete(http_client())
-            elif choice == "2":
-                self.log_message("启动WebSocket客户端连接8765端口...")
-                loop.run_until_complete(websocket_client_8765())
-            elif choice == "3":
-                self.log_message("启动WebSocket客户端连接8000端口...")
-                loop.run_until_complete(interactive_client())
-            else:
-                self.log_message("无效的选择")
+            self.log_message(f"正在登录用户: {username}")
+            result = loop.run_until_complete(self.http_request("/api/user/login", {
+                "username": username,
+                "password": password
+            }))
+            self.log_message(f"登录结果: {result}")
         except Exception as e:
-            self.log_message(f"连接错误: {e}")
+            self.log_message(f"登录错误: {e}")
         finally:
             loop.close()
-            self.log_message("连接已关闭")
+            
+    def run_register(self, username, password):
+        """在新线程中运行注册请求"""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            self.log_message(f"正在注册用户: {username}")
+            result = loop.run_until_complete(self.http_request("/api/user/register", {
+                "username": username,
+                "password": password
+            }))
+            self.log_message(f"注册结果: {result}")
+        except Exception as e:
+            self.log_message(f"注册错误: {e}")
+        finally:
+            loop.close()
+            
+    async def http_request(self, endpoint, data):
+        """发送HTTP请求到8000端口"""
+        url = f"http://114.132.161.169:8000{endpoint}"
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=data) as response:
+                return await response.json()
 
 
 def main():
     """启动GUI应用程序"""
     root = tk.Tk()
-    app = ClientApp(root)
+    app = LoginApp(root)
     root.mainloop()
 
 

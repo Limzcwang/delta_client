@@ -38,7 +38,7 @@ python main.py
 
 ### 直接使用服务层（命令行模式）
 ```bash
-cd services
+cd service
 python client_service.py
 ```
 
