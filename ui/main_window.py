@@ -2,347 +2,381 @@ import sys
 import threading
 import asyncio
 import aiohttp
-import json
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                               QHBoxLayout, QLabel, QLineEdit, QPushButton, 
-                               QMessageBox, QFrame)
-from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QRect, Property
-from PySide6.QtGui import QFont, QPalette, QColor, QMouseEvent
-
-
-class TipWidget(QWidget):
-    """自定义提示组件"""
-    
-    def __init__(self, parent=None, title="", message=""):
-        super().__init__(parent)
-        self.title = title
-        self.message = message
-        self.is_expanded = False
-        self.hover_timer = QTimer()
-        self.hover_timer.setSingleShot(True)
-        self.hover_timer.timeout.connect(self.start_close_timer)
-        
-        self.setup_ui()
-        self.setup_animations()
-        
-    def setup_ui(self):
-        """设置UI界面"""
-        self.setFixedWidth(300)
-        self.setMinimumHeight(80)
-        self.setMaximumHeight(200)
-        
-        # 设置样式
-        self.setStyleSheet("""
-            QWidget {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #3498db, stop:1 #2980b9);
-                border: 1px solid #21618c;
-                border-radius: 8px;
-            }
-        """)
-        
-        # 主布局
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
-        
-        # 标题栏（包含关闭按钮）
-        title_layout = QHBoxLayout()
-        
-        # 标题
-        self.title_label = QLabel(self.title)
-        self.title_label.setStyleSheet("""
-            QLabel {
-                color: white;
-                font-weight: bold;
-                font-size: 14px;
-            }
-        """)
-        
-        # 关闭按钮
-        self.close_button = QPushButton("×")
-        self.close_button.setFixedSize(20, 20)
-        self.close_button.setStyleSheet("""
-            QPushButton {
-                background: transparent;
-                color: white;
-                border: 1px solid white;
-                border-radius: 10px;
-                font-size: 12px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background: rgba(255,255,255,0.2);
-            }
-        """)
-        self.close_button.clicked.connect(self.close_tip)
-        
-        title_layout.addWidget(self.title_label)
-        title_layout.addStretch()
-        title_layout.addWidget(self.close_button)
-        
-        # 消息内容
-        self.message_label = QLabel()
-        self.message_label.setStyleSheet("""
-            QLabel {
-                color: white;
-                font-size: 12px;
-                background: transparent;
-            }
-        """)
-        self.message_label.setWordWrap(True)
-        
-        # 更多按钮
-        self.more_button = QLabel()
-        self.more_button.setStyleSheet("""
-            QLabel {
-                color: #aed6f1;
-                font-size: 11px;
-                text-decoration: underline;
-                background: transparent;
-            }
-        """)
-        self.more_button.setText("<a href='more' style='color: #aed6f1; text-decoration: underline;'>more</a>")
-        self.more_button.setOpenExternalLinks(False)
-        self.more_button.linkActivated.connect(self.toggle_expand)
-        self.more_button.hide()
-        
-        layout.addLayout(title_layout)
-        layout.addWidget(self.message_label)
-        layout.addWidget(self.more_button)
-        
-        # 设置初始消息
-        self.set_message(self.message)
-        
-    def setup_animations(self):
-        """设置动画效果"""
-        # 渐入动画
-        self.fade_in = QPropertyAnimation(self, b"windowOpacity")
-        self.fade_in.setDuration(500)
-        self.fade_in.setStartValue(0.0)
-        self.fade_in.setEndValue(1.0)
-        self.fade_in.setEasingCurve(QEasingCurve.OutCubic)
-        
-        # 渐出动画
-        self.fade_out = QPropertyAnimation(self, b"windowOpacity")
-        self.fade_out.setDuration(500)
-        self.fade_out.setStartValue(1.0)
-        self.fade_out.setEndValue(0.0)
-        self.fade_out.setEasingCurve(QEasingCurve.InCubic)
-        self.fade_out.finished.connect(self.hide)
-        
-        # 高度动画
-        self.height_anim = QPropertyAnimation(self, b"minimumHeight")
-        self.height_anim.setDuration(300)
-        self.height_anim.setEasingCurve(QEasingCurve.OutCubic)
-        
-    def set_message(self, message):
-        """设置消息内容"""
-        self.full_message = message
-        
-        # 检查是否需要显示more按钮
-        self.message_label.setText(message)
-        self.message_label.adjustSize()
-        
-        # 如果文本高度超过限制，则截断并显示more按钮
-        if self.message_label.height() > 60:  # 3行文本的高度
-            # 计算截断位置
-            lines = message.split('\n')
-            truncated_message = ''
-            current_height = 0
-            font_metrics = self.message_label.fontMetrics()
-            line_height = font_metrics.height()
-            
-            for line in lines:
-                if current_height + line_height <= 60:
-                    truncated_message += line + '\n'
-                    current_height += line_height
-                else:
-                    break
-            
-            truncated_message = truncated_message.strip() + "..."
-            self.message_label.setText(truncated_message)
-            self.more_button.show()
-        else:
-            self.more_button.hide()
-    
-    def toggle_expand(self):
-        """切换展开/收起状态"""
-        self.is_expanded = not self.is_expanded
-        
-        if self.is_expanded:
-            # 展开显示完整内容
-            self.message_label.setText(self.full_message)
-            self.more_button.setText("<a href='more' style='color: #aed6f1; text-decoration: underline;'>less</a>")
-            self.setMinimumHeight(200)
-        else:
-            # 收起显示截断内容
-            self.set_message(self.full_message)
-            self.more_button.setText("<a href='more' style='color: #aed6f1; text-decoration: underline;'>more</a>")
-            self.setMinimumHeight(80)
-    
-    def show_tip(self):
-        """显示提示"""
-        self.show()
-        self.fade_in.start()
-        self.start_close_timer()
-    
-    def start_close_timer(self):
-        """启动关闭计时器"""
-        self.close_timer = QTimer()
-        self.close_timer.setSingleShot(True)
-        self.close_timer.timeout.connect(self.close_tip)
-        self.close_timer.start(3000)  # 3秒后关闭
-    
-    def close_tip(self):
-        """关闭提示"""
-        if hasattr(self, 'close_timer'):
-            self.close_timer.stop()
-        self.fade_out.start()
-    
-    def enterEvent(self, event):
-        """鼠标进入事件"""
-        if hasattr(self, 'close_timer'):
-            self.close_timer.stop()
-        self.hover_timer.start(100)  # 鼠标离开后100ms重新启动计时器
-    
-    def leaveEvent(self, event):
-        """鼠标离开事件"""
-        self.hover_timer.stop()
-        self.start_close_timer()
+                               QHBoxLayout, QLabel, QLineEdit, QPushButton)
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QFont, QMouseEvent
 
 
 class LoginApp(QMainWindow):
+    """Delta Client 登录主窗口"""
+    
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Delta Client - 用户登录")
-        self.setFixedSize(400, 300)
-        self.tips = []  # 存储当前显示的提示
+        self.setFixedSize(800, 500)
+        
+        # 设置无边框窗口
+        self.setWindowFlags(Qt.FramelessWindowHint)
+        
+        # 鼠标拖动相关变量
+        self._drag_pos = None
+        
         self.setup_ui()
         self.center_window()
         
     def setup_ui(self):
-        """设置用户界面"""
+        """设置用户界面 - 左右分栏布局"""
         # 创建中央部件
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
-        # 主布局
-        main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(40, 40, 40, 40)
-        main_layout.setSpacing(20)
+        # 主水平布局 - 左右分栏
+        main_layout = QHBoxLayout(central_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
         
-        # 标题
-        title_label = QLabel("用户登录")
-        title_font = QFont("微软雅黑", 18, QFont.Bold)
-        title_label.setFont(title_font)
-        title_label.setAlignment(Qt.AlignCenter)
-        title_label.setStyleSheet("color: #2c3e50; margin-bottom: 20px;")
-        main_layout.addWidget(title_label)
+        # ========== 左侧：品牌展示区 ==========
+        left_panel = self._create_left_panel()
         
-        # 用户名输入区域
-        username_layout = QHBoxLayout()
-        username_label = QLabel("用户名:")
-        username_label.setFont(QFont("微软雅黑", 10))
-        username_label.setFixedWidth(80)
+        # ========== 右侧：表单区域 ==========
+        right_panel = self._create_right_panel()
         
-        self.username_entry = QLineEdit()
-        self.username_entry.setFont(QFont("微软雅黑", 10))
-        self.username_entry.setPlaceholderText("请输入用户名")
-        self.username_entry.setStyleSheet("""
-            QLineEdit {
-                padding: 8px;
-                border: 1px solid #bdc3c7;
-                border-radius: 4px;
-                background-color: #ecf0f1;
-            }
-            QLineEdit:focus {
-                border: 1px solid #3498db;
+        # 添加到主布局
+        main_layout.addWidget(left_panel)
+        main_layout.addWidget(right_panel)
+        
+    def _create_left_panel(self):
+        """创建左侧品牌面板"""
+        left_panel = QWidget()
+        left_panel.setFixedWidth(380)
+        left_panel.setStyleSheet("""
+            QWidget {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
+                    stop:0 #667eea, stop:1 #764ba2);
+                border-top-left-radius: 8px;
+                border-bottom-left-radius: 8px;
             }
         """)
         
-        username_layout.addWidget(username_label)
-        username_layout.addWidget(self.username_entry)
-        main_layout.addLayout(username_layout)
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setAlignment(Qt.AlignCenter)
+        left_layout.setSpacing(30)
         
-        # 密码输入区域
-        password_layout = QHBoxLayout()
-        password_label = QLabel("密码:")
-        password_label.setFont(QFont("微软雅黑", 10))
-        password_label.setFixedWidth(80)
-        
-        self.password_entry = QLineEdit()
-        self.password_entry.setFont(QFont("微软雅黑", 10))
-        self.password_entry.setPlaceholderText("请输入密码")
-        self.password_entry.setEchoMode(QLineEdit.Password)
-        self.password_entry.setStyleSheet("""
-            QLineEdit {
-                padding: 8px;
-                border: 1px solid #bdc3c7;
-                border-radius: 4px;
-                background-color: #ecf0f1;
+        # Logo 容器
+        logo_container = QWidget()
+        logo_container.setFixedSize(140, 140)
+        logo_container.setStyleSheet("""
+            QWidget {
+                background-color: rgba(255, 255, 255, 0.15);
+                border-radius: 70px;
+                border: 3px solid rgba(255, 255, 255, 0.4);
             }
-            QLineEdit:focus {
-                border: 1px solid #3498db;
+        """)
+        logo_layout = QVBoxLayout(logo_container)
+        logo_layout.setAlignment(Qt.AlignCenter)
+        
+        logo_label = QLabel("◆")
+        logo_label.setAlignment(Qt.AlignCenter)
+        logo_label.setStyleSheet("""
+            QLabel {
+                color: white;
+                font-size: 64px;
+                font-weight: bold;
+                background: transparent;
+            }
+        """)
+        logo_layout.addWidget(logo_label)
+        
+        # 应用名称
+        app_name = QLabel("Delta")
+        app_name.setAlignment(Qt.AlignCenter)
+        app_name.setFont(QFont("微软雅黑", 24, QFont.Bold))
+        app_name.setStyleSheet("""
+            QLabel {
+                color: white;
+                font-size: 36px;
+                font-weight: bold;
+                background: transparent;
+                letter-spacing: 3px;
             }
         """)
         
-        password_layout.addWidget(password_label)
-        password_layout.addWidget(self.password_entry)
-        main_layout.addLayout(password_layout)
+        # 副标题
+        app_slogan = QLabel("Secure Connection Client")
+        app_slogan.setAlignment(Qt.AlignCenter)
+        app_slogan.setFont(QFont("微软雅黑", 10))
+        app_slogan.setStyleSheet("""
+            QLabel {
+                color: rgba(255, 255, 255, 0.7);
+                font-size: 14px;
+                background: transparent;
+                letter-spacing: 1px;
+            }
+        """)
+        
+        left_layout.addWidget(logo_container, alignment=Qt.AlignCenter)
+        left_layout.addWidget(app_name)
+        left_layout.addWidget(app_slogan)
+        
+        # 支持拖动
+        left_panel.mousePressEvent = self._on_drag_start
+        left_panel.mouseMoveEvent = self._on_drag_move
+        left_panel.mouseReleaseEvent = self._on_drag_end
+        
+        return left_panel
+        
+    def _create_right_panel(self):
+        """创建右侧表单面板"""
+        right_panel = QWidget()
+        right_panel.setStyleSheet("""
+            QWidget {
+                background-color: #ffffff;
+                border-top-right-radius: 8px;
+                border-bottom-right-radius: 8px;
+            }
+        """)
+        
+        layout = QVBoxLayout(right_panel)
+        layout.setContentsMargins(50, 20, 50, 50)
+        layout.setSpacing(16)
+        
+        # 关闭按钮
+        layout.addLayout(self._create_close_button_layout())
+        
+        # 欢迎文字
+        welcome_label = QLabel("欢迎回来")
+        welcome_label.setFont(QFont("微软雅黑", 22, QFont.Bold))
+        welcome_label.setStyleSheet("color: #2c3e50; background: transparent;")
+        layout.addWidget(welcome_label)
+        
+        # 副标题
+        sub_label = QLabel("请登录您的账户以继续")
+        sub_label.setFont(QFont("微软雅黑", 10))
+        sub_label.setStyleSheet("color: #7f8c8d; background: transparent;")
+        layout.addWidget(sub_label)
+        
+        layout.addSpacing(20)
+        
+        # 用户名输入框
+        self.username_entry = self._create_input_field("用户名")
+        layout.addWidget(self.username_entry)
+        
+        # 密码输入框
+        self.password_entry = self._create_input_field("密码", is_password=True)
+        layout.addWidget(self.password_entry)
+        
+        # 错误提示区域（现代化设计）
+        self.error_container = QWidget()
+        self.error_container.hide()
+        self.error_layout = QHBoxLayout(self.error_container)
+        self.error_layout.setContentsMargins(12, 10, 12, 10)
+        self.error_layout.setSpacing(8)
+        self.error_container.setStyleSheet("""
+            QWidget {
+                background-color: #fef2f2;
+                border: 1px solid #fecaca;
+                border-radius: 8px;
+            }
+        """)
+        
+        self.error_icon = QLabel("⚠")
+        self.error_icon.setStyleSheet("color: #dc2626; font-size: 14px; background: transparent;")
+        self.error_icon.setFixedWidth(18)
+        
+        self.error_label = QLabel()
+        self.error_label.setWordWrap(True)
+        self.error_label.setStyleSheet("color: #dc2626; font-size: 13px; background: transparent;")
+        self.error_label.setFont(QFont("微软雅黑", 10))
+        
+        self.error_layout.addWidget(self.error_icon)
+        self.error_layout.addWidget(self.error_label, stretch=1)
+        layout.addWidget(self.error_container)
+        
+        # 成功提示区域
+        self.success_container = QWidget()
+        self.success_container.hide()
+        success_layout = QHBoxLayout(self.success_container)
+        success_layout.setContentsMargins(12, 10, 12, 10)
+        success_layout.setSpacing(8)
+        self.success_container.setStyleSheet("""
+            QWidget {
+                background-color: #f0fdf4;
+                border: 1px solid #bbf7d0;
+                border-radius: 8px;
+            }
+        """)
+        
+        self.success_icon = QLabel("✓")
+        self.success_icon.setStyleSheet("color: #16a34a; font-size: 14px; font-weight: bold; background: transparent;")
+        self.success_icon.setFixedWidth(18)
+        
+        self.success_label = QLabel()
+        self.success_label.setWordWrap(True)
+        self.success_label.setStyleSheet("color: #16a34a; font-size: 13px; background: transparent;")
+        self.success_label.setFont(QFont("微软雅黑", 10))
+        
+        success_layout.addWidget(self.success_icon)
+        success_layout.addWidget(self.success_label, stretch=1)
+        layout.addWidget(self.success_container)
         
         # 按钮区域
-        button_layout = QHBoxLayout()
-        button_layout.setSpacing(20)
+        layout.addSpacing(10)
+        layout.addWidget(self._create_login_button())
+        layout.addWidget(self._create_register_button())
         
-        # 登录按钮
-        self.login_button = QPushButton("登录")
-        self.login_button.setFont(QFont("微软雅黑", 10, QFont.Bold))
-        self.login_button.setFixedHeight(40)
-        self.login_button.setStyleSheet("""
+        layout.addStretch()
+        
+        return right_panel
+        
+    def _create_close_button_layout(self):
+        """创建关闭按钮布局"""
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addStretch()
+        
+        close_button = QPushButton("×")
+        close_button.setFixedSize(24, 24)
+        close_button.setCursor(Qt.PointingHandCursor)
+        close_button.setStyleSheet("""
             QPushButton {
-                background-color: #3498db;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 10px;
+                background-color: transparent;
+                color: #95a5a6;
+                border: 1.5px solid #bdc3c7;
+                border-radius: 12px;
+                font-size: 14px;
+                font-weight: bold;
+                padding-bottom: 2px;
             }
             QPushButton:hover {
-                background-color: #2980b9;
+                background-color: #e74c3c;
+                color: white;
+                border-color: #e74c3c;
             }
             QPushButton:pressed {
-                background-color: #21618c;
+                background-color: #c0392b;
+                border-color: #c0392b;
+            }
+        """)
+        close_button.clicked.connect(self.close)
+        layout.addWidget(close_button)
+        
+        return layout
+        
+    def _create_input_field(self, placeholder, is_password=False):
+        """创建输入框"""
+        entry = QLineEdit()
+        entry.setFont(QFont("微软雅黑", 11))
+        entry.setPlaceholderText(placeholder)
+        entry.setFixedHeight(48)
+        if is_password:
+            entry.setEchoMode(QLineEdit.Password)
+        
+        # 存储默认样式，用于恢复
+        entry.default_style = """
+            QLineEdit {
+                padding: 0 16px;
+                border: 2px solid #e0e6ed;
+                border-radius: 10px;
+                background-color: #f8fafc;
+                color: #2c3e50;
+                font-size: 14px;
+            }
+            QLineEdit:focus {
+                border: 2px solid #667eea;
+                background-color: #ffffff;
+            }
+            QLineEdit::placeholder {
+                color: #a0aec0;
+            }
+        """
+        entry.error_style = """
+            QLineEdit {
+                padding: 0 16px;
+                border: 2px solid #dc2626;
+                border-radius: 10px;
+                background-color: #fef2f2;
+                color: #2c3e50;
+                font-size: 14px;
+            }
+            QLineEdit:focus {
+                border: 2px solid #dc2626;
+                background-color: #ffffff;
+            }
+            QLineEdit::placeholder {
+                color: #a0aec0;
+            }
+        """
+        entry.setStyleSheet(entry.default_style)
+        
+        # 输入时清除错误状态
+        entry.textChanged.connect(lambda: self._clear_error_state(entry))
+        
+        return entry
+        
+    def _create_login_button(self):
+        """创建登录按钮"""
+        self.login_button = QPushButton("登 录")
+        self.login_button.setFont(QFont("微软雅黑", 12, QFont.Bold))
+        self.login_button.setFixedHeight(50)
+        self.login_button.setCursor(Qt.PointingHandCursor)
+        self.login_button.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                    stop:0 #667eea, stop:1 #764ba2);
+                color: white;
+                border: none;
+                border-radius: 10px;
+                font-size: 14px;
+                font-weight: bold;
+                letter-spacing: 2px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                    stop:0 #5a6fd6, stop:1 #6a4190);
+            }
+            QPushButton:pressed {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                    stop:0 #4e5fc4, stop:1 #5e3580);
+            }
+            QPushButton:disabled {
+                background: #cbd5e0;
+                color: #7f8c8d;
             }
         """)
         self.login_button.clicked.connect(self.login)
+        return self.login_button
         
-        # 注册按钮
-        self.register_button = QPushButton("注册")
-        self.register_button.setFont(QFont("微软雅黑", 10))
-        self.register_button.setFixedHeight(40)
+    def _create_register_button(self):
+        """创建注册按钮"""
+        self.register_button = QPushButton("创 建 账 户")
+        self.register_button.setFont(QFont("微软雅黑", 11))
+        self.register_button.setFixedHeight(48)
+        self.register_button.setCursor(Qt.PointingHandCursor)
         self.register_button.setStyleSheet("""
             QPushButton {
-                background-color: #27ae60;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 10px;
+                background-color: transparent;
+                color: #667eea;
+                border: 2px solid #667eea;
+                border-radius: 10px;
+                font-size: 13px;
+                font-weight: bold;
+                letter-spacing: 2px;
             }
             QPushButton:hover {
-                background-color: #229954;
+                background-color: rgba(102, 126, 234, 0.1);
             }
             QPushButton:pressed {
-                background-color: #1e8449;
+                background-color: rgba(102, 126, 234, 0.2);
+            }
+            QPushButton:disabled {
+                background-color: transparent;
+                color: #a0aec0;
+                border-color: #cbd5e0;
             }
         """)
         self.register_button.clicked.connect(self.register)
-        
-        button_layout.addWidget(self.login_button)
-        button_layout.addWidget(self.register_button)
-        main_layout.addLayout(button_layout)
-        
-        # 添加弹性空间
-        main_layout.addStretch()
+        return self.register_button
         
     def center_window(self):
         """将窗口居中显示"""
@@ -352,20 +386,97 @@ class LoginApp(QMainWindow):
         y = (screen_geometry.height() - self.height()) // 2
         self.move(x, y)
         
+    # ========== 鼠标拖动窗口功能 ==========
+    def _on_drag_start(self, event):
+        """开始拖动"""
+        if event.button() == Qt.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+            
+    def _on_drag_move(self, event):
+        """拖动中"""
+        if event.buttons() == Qt.LeftButton and self._drag_pos is not None:
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            event.accept()
+            
+    def _on_drag_end(self, event):
+        """结束拖动"""
+        self._drag_pos = None
+        event.accept()
+        
+    def mousePressEvent(self, event: QMouseEvent):
+        """鼠标按下事件"""
+        if event.button() == Qt.LeftButton and event.position().y() <= 60:
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+        super().mousePressEvent(event)
+        
+    def mouseMoveEvent(self, event: QMouseEvent):
+        """鼠标移动事件"""
+        if event.buttons() == Qt.LeftButton and self._drag_pos is not None:
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+        super().mouseMoveEvent(event)
+        
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        """鼠标释放事件"""
+        self._drag_pos = None
+        super().mouseReleaseEvent(event)
+        
+    # ========== 错误处理 ==========
+    def _show_error(self, message):
+        """显示错误信息（现代化样式）"""
+        # 隐藏成功提示
+        self.success_container.hide()
+        
+        # 显示错误提示
+        self.error_label.setText(message)
+        self.error_container.show()
+        
+        # 高亮输入框
+        self.username_entry.setStyleSheet(self.username_entry.error_style)
+        self.password_entry.setStyleSheet(self.password_entry.error_style)
+        
+        # 重新启用按钮（错误时允许重试）
+        self._set_buttons_enabled(True)
+        
+    def _show_success(self, message):
+        """显示成功信息"""
+        # 隐藏错误提示
+        self.error_container.hide()
+        self.username_entry.setStyleSheet(self.username_entry.default_style)
+        self.password_entry.setStyleSheet(self.password_entry.default_style)
+        
+        # 显示成功提示
+        self.success_label.setText(message)
+        self.success_container.show()
+        
+    def _clear_error_state(self, entry):
+        """清除错误状态"""
+        entry.setStyleSheet(entry.default_style)
+        # 如果错误提示显示中，也清除它
+        if self.error_container.isVisible():
+            self.error_container.hide()
+            
+    def _set_buttons_enabled(self, enabled):
+        """设置按钮启用状态"""
+        self.login_button.setEnabled(enabled)
+        self.register_button.setEnabled(enabled)
+        
+    # ========== 业务逻辑 ==========
     def login(self):
         """登录操作"""
         username = self.username_entry.text().strip()
         password = self.password_entry.text().strip()
         
+        # 禁用按钮
+        self._set_buttons_enabled(False)
+        
+        # 验证输入
         if not username or not password:
-            QMessageBox.warning(self, "输入错误", "请输入用户名和密码")
+            self._show_error("请输入用户名和密码")
             return
-        
-        # 禁用按钮防止重复点击
-        self.set_buttons_enabled(False)
-        
+            
         # 在新线程中运行登录
-        thread = threading.Thread(target=self.run_login, args=(username, password))
+        thread = threading.Thread(target=self._run_login, args=(username, password))
         thread.daemon = True
         thread.start()
         
@@ -374,117 +485,85 @@ class LoginApp(QMainWindow):
         username = self.username_entry.text().strip()
         password = self.password_entry.text().strip()
         
+        # 禁用按钮
+        self._set_buttons_enabled(False)
+        
+        # 验证输入
         if not username or not password:
-            QMessageBox.warning(self, "输入错误", "请输入用户名和密码")
+            self._show_error("请输入用户名和密码")
             return
-        
-        # 禁用按钮防止重复点击
-        self.set_buttons_enabled(False)
-        
+            
         # 在新线程中运行注册
-        thread = threading.Thread(target=self.run_register, args=(username, password))
+        thread = threading.Thread(target=self._run_register, args=(username, password))
         thread.daemon = True
         thread.start()
         
-    def set_buttons_enabled(self, enabled):
-        """设置按钮启用状态"""
-        self.login_button.setEnabled(enabled)
-        self.register_button.setEnabled(enabled)
+    def _run_login(self, username, password):
+        """后台执行登录"""
+        def on_success(result):
+            self._show_success(f"登录成功！欢迎回来，{username}")
+            self._set_buttons_enabled(True)
+            
+        def on_error(error_msg):
+            self._show_error(f"登录失败：{error_msg}")
+            
+        self._run_async_task("/api/users/login", {"username": username, "password": password}, 
+                            on_success, on_error)
         
-    def run_login(self, username, password):
-        """在新线程中运行登录请求"""
+    def _run_register(self, username, password):
+        """后台执行注册"""
+        def on_success(result):
+            self._show_success(f"注册成功！请使用新账户登录")
+            self._set_buttons_enabled(True)
+            # 清空密码方便登录
+            self.password_entry.clear()
+            
+        def on_error(error_msg):
+            self._show_error(f"注册失败：{error_msg}")
+            
+        self._run_async_task("/api/users/create", {"username": username, "password": password}, 
+                            on_success, on_error)
+        
+    def _run_async_task(self, endpoint, data, on_success, on_error):
+        """运行异步任务并处理回调"""
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
         try:
-            # 在UI线程中显示消息
-            self.show_message_in_ui("登录中", f"正在登录用户: {username}")
-            result = loop.run_until_complete(self.http_request("/api/users/login", {
-                "username": username,
-                "password": password
-            }))
-            self.show_message_in_ui("登录成功", f"登录结果: {result}")
+            result = loop.run_until_complete(self._http_request(endpoint, data))
+            # 在UI线程中回调
+            QTimer.singleShot(0, lambda: on_success(result))
         except Exception as e:
-            self.show_message_in_ui("登录错误", f"登录过程中发生错误: {e}")
+            error_msg = str(e)
+            # 简化错误信息
+            if "Cannot connect" in error_msg or "Connection refused" in error_msg:
+                error_msg = "无法连接到服务器，请检查网络"
+            elif "Timeout" in error_msg:
+                error_msg = "连接超时，请稍后重试"
+            elif "401" in error_msg or "Unauthorized" in error_msg:
+                error_msg = "用户名或密码错误"
+            elif "409" in error_msg or "Conflict" in error_msg:
+                error_msg = "用户名已存在"
+            QTimer.singleShot(0, lambda: on_error(error_msg))
         finally:
             loop.close()
-            # 重新启用按钮
-            self.set_buttons_enabled_in_ui(True)
             
-    def run_register(self, username, password):
-        """在新线程中运行注册请求"""
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        try:
-            self.show_message_in_ui("注册中", f"正在注册用户: {username}")
-            result = loop.run_until_complete(self.http_request("/api/users/create", {
-                "username": username,
-                "password": password
-            }))
-            self.show_message_in_ui("注册成功", f"注册结果: {result}")
-        except Exception as e:
-            self.show_message_in_ui("注册错误", f"注册过程中发生错误: {e}")
-        finally:
-            loop.close()
-            self.set_buttons_enabled_in_ui(True)
-            
-    def show_message_in_ui(self, title, message):
-        """在UI线程中显示消息"""
-        def show():
-            # 创建新的提示窗口
-            tip = TipWidget(self, title, message)
-            
-            # 设置位置（右上角）
-            tip_width = tip.width()
-            tip_height = tip.height()
-            x = self.width() - tip_width - 20  # 距离右边20像素
-            y = 20  # 距离顶部20像素
-            
-            # 调整位置避免重叠
-            for existing_tip in self.tips:
-                y = max(y, existing_tip.y() + existing_tip.height() + 10)
-            
-            tip.move(x, y)
-            
-            # 添加到提示列表
-            self.tips.append(tip)
-            
-            # 显示提示
-            tip.show_tip()
-            
-            # 设置关闭回调
-            def on_tip_closed():
-                if tip in self.tips:
-                    self.tips.remove(tip)
-                tip.deleteLater()
-            
-            tip.fade_out.finished.connect(on_tip_closed)
-        
-        # 使用QTimer确保在UI线程中执行
-        QTimer.singleShot(0, show)
-        
-    def set_buttons_enabled_in_ui(self, enabled):
-        """在UI线程中设置按钮状态"""
-        def set_enabled():
-            self.set_buttons_enabled(enabled)
-        
-        QTimer.singleShot(0, set_enabled)
-            
-    async def http_request(self, endpoint, data):
-        """发送HTTP请求到8000端口"""
+    async def _http_request(self, endpoint, data):
+        """发送HTTP请求"""
         url = f"http://114.132.161.169:8000{endpoint}"
         
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=data) as response:
-                return await response.json()
+            async with session.post(url, json=data, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    text = await response.text()
+                    raise Exception(f"HTTP {response.status}: {text}")
 
 
 def main():
     """启动GUI应用程序"""
     app = QApplication(sys.argv)
-    
-    # 设置应用程序样式
     app.setStyle("Fusion")
     
     window = LoginApp()
