@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from config import AppConfig, ConfigError, normalize_server_url, normalize_ws_url, save_config
 from core.backoff import ReconnectBackoff
+from core.clock import ServerClock
 from core.canvas import (
     CanvasError,
     CanvasRateLimiter,
@@ -138,6 +139,7 @@ class MainWindow(QMainWindow):
         # E2：技能 CD 共享（默认关闭，收到/模拟状态后本地缓存）
         self._skills = SkillBook()
         self._skill_offset_ms = 0
+        self._server_clock = ServerClock()
         self._skill_throttle = SkillShareThrottle(max_events=2, window_ms=1000)
         self._skill_share_enabled = False
         self._skill_sim_index = 0
@@ -168,6 +170,7 @@ class MainWindow(QMainWindow):
         self.room_list_view = RoomListView()
         self.room_view = RoomView()
         self.room_view.skill_panel.set_operator_catalog(self.operator_catalog)
+        self.room_view.skill_panel.set_server_now_provider(self._server_clock.now_ms)
         self.stack.addWidget(self.login_view)
         self.stack.addWidget(self.room_list_view)
         self.stack.addWidget(self.room_view)
@@ -699,7 +702,7 @@ class MainWindow(QMainWindow):
         self._skill_share_enabled = False
         self.room_view.skill_panel.clear()
         self.room_view.skill_panel.set_sharing(False)
-        self.room_view.skill_panel.set_clock_offset(self._skill_offset_ms)
+        self.room_view.skill_panel.set_clock_offset(0)
         self.room_view.set_room(room)
         self.room_view.set_user(self._username(), self._user_id())
         self.room_view.clear_chat()
@@ -925,6 +928,9 @@ class MainWindow(QMainWindow):
         if mtype == "auth_ok":
             self._set_skill_server_time(message.get("server_time"))
             return
+        if mtype == "pong":
+            self._observe_skill_pong(message)
+            return
         if self._current_room is None:
             return
         if mtype == "room_joined":
@@ -1075,11 +1081,24 @@ class MainWindow(QMainWindow):
             return
         if server <= 0:
             return
-        self._skill_offset_ms = int(server - now_ms())
-        self.room_view.skill_panel.set_clock_offset(self._skill_offset_ms)
+        self._server_clock.observe(server, now_ms(), time.monotonic() * 1000)
+
+    def _observe_skill_pong(self, message: Mapping[str, Any]) -> None:
+        server_time = message.get("server_time")
+        client_sent = message.get("_client_sent_ms") or message.get("ts")
+        if server_time is None or client_sent is None:
+            return
+        try:
+            self._server_clock.observe_rtt(
+                int(server_time),
+                int(client_sent),
+                now_ms(),
+            )
+        except (TypeError, ValueError):
+            return
 
     def _server_now_ms(self) -> int:
-        return int(now_ms() + self._skill_offset_ms)
+        return int(self._server_clock.now_ms())
 
     def _on_skill_share_state(self, message: Mapping[str, Any]) -> None:
         state = SkillState.from_ws(message)

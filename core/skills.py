@@ -77,6 +77,7 @@ class SkillSlot:
     kind: str = SLOT_ULTIMATE
     state: str = SKILL_UNKNOWN
     remaining_ms: int = 0
+    ready_at: int = 0
     percent: float = 0.0
     charges: int = 0
     max_charges: int = 0
@@ -110,6 +111,7 @@ class SkillSlot:
         )
         charges = _as_int(_first(payload, "charges", "current", "count"), 0)
         max_charges = _as_int(_first(payload, "max_charges", "max", "max_count"), 0)
+        ready_at = _as_int(_first(payload, "ready_at", "readyAt"), 0)
         percent = _as_float(
             _first(payload, "pct", "percent", "percentage", "charge_percent"), 0.0
         )
@@ -122,6 +124,7 @@ class SkillSlot:
             kind=kind,
             state=state,
             remaining_ms=max(0, remaining),
+            ready_at=max(0, ready_at),
             percent=percent,
             charges=max(0, charges),
             max_charges=max(0, max_charges),
@@ -141,7 +144,9 @@ class SkillSlot:
         return self.state == SKILL_UNKNOWN
 
     def remaining_now(self, captured_at: int, server_now: int) -> int:
-        """remaining_ms - (server_now - captured_at)，不小于 0。"""
+        """优先用服务端绝对 ``ready_at - server_now``；无 ready_at 时退回旧公式。"""
+        if self.ready_at:
+            return max(0, int(self.ready_at) - int(server_now))
         elapsed = max(0, int(server_now) - int(captured_at or 0))
         return max(0, int(self.remaining_ms) - elapsed)
 
@@ -161,6 +166,7 @@ class SkillState:
     operator: str = ""
     captured_at: int = 0
     updated_at: int = 0
+    server_received_at: int = 0
     slots: Mapping[str, SkillSlot] = field(default_factory=dict)
     raw: Mapping[str, Any] = field(default_factory=dict, compare=False, repr=False)
 
@@ -203,6 +209,9 @@ class SkillState:
             _first(payload, "captured_at", "capturedAt", "server_time"), 0
         )
         updated_at = _as_int(_first(payload, "updated_at", "updatedAt"), 0)
+        server_received_at = _as_int(
+            _first(payload, "server_received_at", "serverReceivedAt"), 0
+        )
         if not captured_at:
             captured_at = updated_at
         slots_raw = payload.get("skills")
@@ -237,6 +246,7 @@ class SkillState:
             operator=operator,
             captured_at=max(0, captured_at),
             updated_at=max(0, updated_at),
+            server_received_at=max(0, server_received_at),
             slots=slots,
             raw=dict(payload),
         )

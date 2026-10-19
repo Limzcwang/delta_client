@@ -101,6 +101,29 @@ class SkillPanelTests(unittest.TestCase):
         panel._tick()
         self.assertEqual("0:24", ability.text_lines()[2])
 
+    def test_ready_at_absolute_countdown_and_past_ready(self) -> None:
+        panel = self._panel()
+        st = SkillState.from_ws(
+            {
+                "user_id": "2",
+                "nickname": "队友2",
+                "operator": "红狼",
+                "captured_at": CAPTURED_AT - 10_000,
+                "server_received_at": CAPTURED_AT,
+                "skills": [
+                    {"slot": 0, "state": "charging", "pct": 16, "ready_at": CAPTURED_AT + 5_000},
+                    {"slot": 1, "state": "ready", "ready_at": CAPTURED_AT - 1},
+                    {"slot": 2, "state": "unknown"},
+                ],
+            }
+        )
+        panel.set_states([st])
+        row = panel._rows["2"]
+        self.assertEqual("0:05", row.slot_widgets[SLOT_ULTIMATE].text_lines()[2])
+        self.assertEqual("就绪", row.slot_widgets[SLOT_ABILITY].text_lines()[2])
+        row.update_state(st, CAPTURED_AT + 6_000)
+        self.assertEqual("就绪", row.slot_widgets[SLOT_ULTIMATE].text_lines()[2])
+
     def test_ready_vs_unshared_row_status(self) -> None:
         panel = self._panel()
         old = state()
