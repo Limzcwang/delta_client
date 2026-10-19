@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import unittest
 from dataclasses import dataclass
+from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -70,15 +71,41 @@ class OverlayTests(unittest.TestCase):
         window[0] = None
         ctl.follow()
         self.assertFalse(ctl.attached)
+        self.assertFalse(self.overlay.isVisible())
         self.assertIn("等待游戏窗口", ctl.last_reason)
         window[0] = FakeWindow(is_minimized=True)
         ctl.follow()
         self.assertFalse(self.overlay.isVisible())
         self.assertIn("最小化", ctl.last_reason)
-        window[0] = FakeWindow(client_rect=(0, 0, 1920, 1080))
-        ctl.follow()
-        self.assertIn("独占全屏", ctl.last_reason)
         ctl.stop()
+
+    def test_fullscreen_client_rect_still_attaches(self) -> None:
+        window = [FakeWindow(client_rect=(0, 0, 1920, 1080))]
+        ctl = OverlayController(self.overlay, lambda: window[0], lambda: (1920, 1080))
+        try:
+            with mock.patch("ui.skill_overlay._apply_win32_topmost", return_value=True) as topmost:
+                ctl.start()
+            self.assertTrue(ctl.attached)
+            self.assertNotIn("独占", ctl.last_reason)
+            self.assertTrue(self.overlay.isVisible())
+            topmost.assert_called()
+        finally:
+            ctl.stop()
+
+    def test_topmost_each_follow_but_not_edit_mode(self) -> None:
+        window = [FakeWindow(client_rect=(0, 0, 1920, 1080))]
+        ctl = OverlayController(self.overlay, lambda: window[0], lambda: (1920, 1080))
+        try:
+            with mock.patch("ui.skill_overlay._apply_win32_topmost", return_value=True) as topmost:
+                ctl.start()
+                ctl.follow()
+                self.assertGreaterEqual(topmost.call_count, 2)
+                self.overlay.set_edit_mode(True)
+                before = topmost.call_count
+                ctl.follow()
+                self.assertEqual(before, topmost.call_count)
+        finally:
+            ctl.stop()
 
     def test_fixed_position_after_edit(self) -> None:
         window = [FakeWindow()]

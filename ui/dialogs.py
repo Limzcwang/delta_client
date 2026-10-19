@@ -757,8 +757,8 @@ class SettingsDialog(QDialog):
         self.overlay_status_label.setWordWrap(True)
         layout.addWidget(self.overlay_status_label)
         hint = QLabel(
-            "悬浮窗保留房间内面板不变；仅覆盖无边框窗口模式。独占全屏/找不到游戏窗口时自动回落，"
-            "并提示使用房间内面板。数值持久化到本地配置。"
+            "悬浮窗保留房间内面板不变，自动置顶并跟随游戏窗口；游戏最小化/窗口消失时自动隐藏。"
+            "若游戏为独占全屏，悬浮窗可能被覆盖，请使用无边框窗口。数值持久化到本地配置。"
         )
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
