@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
 from core import protocol
+from core.canvas import CanvasSnapshot, parse_canvas_snapshot
 from core.connection import ConnectionCheck, ProbeResult, probe_from_error, probe_ok
 from core.errors import ApiError, ErrorKind, api_error_from_exception, api_error_from_response
 from core.models import ChatPage, Room, RoomDetail, parse_chat_page, parse_room_detail, parse_room_list
@@ -283,6 +284,17 @@ class ApiClient:
             params=params,
         )
         return parse_chat_page(body)
+
+    async def get_canvas(self, room_id_or_code: str) -> CanvasSnapshot:
+        """画板快照（PROTOCOL D）：``GET /api/v1/rooms/{ref}/canvas``。
+
+        ``room_joined.canvas_snapshot`` 缺失/为空时用作 fallback；无快照时服务端
+        返回 ``strokes:[], rev:0``。
+        """
+        body = await self.request_data(
+            "GET", protocol.room_canvas_path(room_reference(room_id_or_code))
+        )
+        return parse_canvas_snapshot(body)
 
     async def check_connection(self) -> ConnectionCheck:
         """连通性自检：``/health`` + ``GET /api/v1/rooms?page=1``。

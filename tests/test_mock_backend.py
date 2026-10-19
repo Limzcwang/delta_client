@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import unittest
 
+from core.canvas import make_stroke_op
 from core.errors import ApiError, ErrorKind
 from core.models import Room
 from core.rooms import is_valid_room_code
@@ -185,6 +186,52 @@ class MockApiTests(unittest.TestCase):
             with self.assertRaises(ApiError) as not_found:
                 await api.get_messages("ZZZZZ")
             self.assertEqual(not_found.exception.kind, ErrorKind.ROOM_NOT_FOUND)
+
+        asyncio.run(scenario())
+
+
+class MockCanvasTests(unittest.TestCase):
+    def test_canvas_snapshot_flow(self) -> None:
+        async def scenario() -> None:
+            api = MockApiClient(latency=0)
+            await api.login("demo", "demo123")
+            room = await api.create_room("画板房", "public")
+
+            initial = await api.get_canvas(room.code)
+            self.assertEqual(0, len(initial.strokes))
+            self.assertEqual(0, initial.rev)
+
+            messages: list[dict] = []
+            ws = MockWsClient(
+                on_message=messages.append,
+                user={"id": "1", "username": "demo"},
+                room=room,
+                latency=0,
+                store=api,
+            )
+            task = asyncio.create_task(ws.run())
+            await asyncio.sleep(0.02)
+            await ws.join_room(room.code)
+            await asyncio.sleep(0.02)
+            joined = next(message for message in messages if message["type"] == "room_joined")
+            self.assertEqual([], joined["canvas_snapshot"]["strokes"])
+
+            op = make_stroke_op([(0.1, 0.1), (0.2, 0.2)], "#FF3B30", 4)
+            self.assertTrue(await ws.send_canvas_op(op, 0, room.id))
+            snapshot = await api.get_canvas(room.code)
+            self.assertEqual(1, len(snapshot.strokes))
+            self.assertEqual(0, snapshot.rev)
+
+            ack = await ws.save_canvas_snapshot([op], 1, room.id)
+            self.assertIsNotNone(ack)
+            self.assertEqual(1, ack["rev"])
+            saved = await api.get_canvas(room.code)
+            self.assertEqual(1, len(saved.strokes))
+            self.assertEqual(1, saved.rev)
+
+            await ws.close()
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
         asyncio.run(scenario())
 

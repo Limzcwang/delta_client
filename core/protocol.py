@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 from urllib.parse import quote, urlsplit, urlunsplit
 
 #: 协议版本（PROTOCOL.md §10，A=1）
@@ -36,13 +36,15 @@ WS_JOIN_ROOM = "join_room"
 WS_LEAVE_ROOM = "leave_room"
 WS_CHAT_SEND = "chat_send"
 WS_CANVAS_OP = "canvas_op"
+WS_CANVAS_SNAPSHOT = "canvas_snapshot"
+WS_CANVAS_SNAPSHOT_SAVE = "canvas_snapshot_save"
+WS_CANVAS_SNAPSHOT_SAVED = "canvas_snapshot_saved"
 WS_SKILL_REPORT = "skill_report"
 WS_PING = "ping"
 WS_ROOM_JOINED = "room_joined"
 WS_USER_JOINED = "user_joined"
 WS_USER_LEFT = "user_left"
 WS_CHAT_MESSAGE = "chat_message"
-WS_CANVAS_SNAPSHOT = "canvas_snapshot"
 WS_SKILL_STATE = "skill_state"
 WS_HEARTBEAT = "heartbeat"
 WS_PONG = "pong"
@@ -70,6 +72,28 @@ def room_detail_path(room_code: str) -> str:
 def room_messages_path(room_id_or_code: str) -> str:
     """聊天历史：``GET /api/v1/rooms/{room_id_or_code}/messages``（C）。"""
     return f"{API_V1_ROOMS}/{quote(str(room_id_or_code), safe='')}/messages"
+
+
+def room_canvas_path(room_id_or_code: str) -> str:
+    """画板快照：``GET /api/v1/rooms/{room_id_or_code}/canvas``（D）。"""
+    return f"{API_V1_ROOMS}/{quote(str(room_id_or_code), safe='')}/canvas"
+
+
+def canvas_op_message(room_id: str, rev: int, op: Mapping[str, Any]) -> dict[str, Any]:
+    """WS ``canvas_op``（PROTOCOL §6.7）：rev 每连接每房间从 0 单调递增。"""
+    return {"type": WS_CANVAS_OP, "room_id": str(room_id), "rev": int(rev), "op": dict(op)}
+
+
+def canvas_snapshot_save_message(
+    room_id: str, rev: int, strokes: Sequence[Mapping[str, Any]]
+) -> dict[str, Any]:
+    """WS ``canvas_snapshot_save``（离开/关窗前全量落库）。"""
+    return {
+        "type": WS_CANVAS_SNAPSHOT_SAVE,
+        "room_id": str(room_id),
+        "rev": int(rev),
+        "strokes": [dict(op) for op in strokes],
+    }
 
 
 def ws_url_for(server_url: str, ws_path: str = "/ws") -> str:

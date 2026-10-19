@@ -93,6 +93,8 @@ CODE_KINDS: dict[Any, ErrorKind] = {
     "INVALID_MESSAGE": ErrorKind.VALIDATION,
     "INVALID_JSON": ErrorKind.VALIDATION,
     "CANVAS_SEQ_GAP": ErrorKind.VALIDATION,
+    "CANVAS_OUT_OF_ORDER": ErrorKind.VALIDATION,
+    "INVALID_CANVAS_OP": ErrorKind.VALIDATION,
     # PROTOCOL PR#9 §7.3 HTTP data.error_code
     "ROOM_NAME_INVALID": ErrorKind.VALIDATION,
     "INVALID_BACKGROUND": ErrorKind.VALIDATION,
@@ -155,6 +157,8 @@ CODE_MESSAGES: dict[Any, str] = {
     "INVALID_MESSAGE": "消息内容不合法（1-2000 字符）",
     "INVALID_JSON": "消息不是合法 JSON",
     "CANVAS_SEQ_GAP": "画板状态不同步，正在重新同步",
+    "CANVAS_OUT_OF_ORDER": "画板操作序号过期，已丢弃",
+    "INVALID_CANVAS_OP": "画板操作不合法（点数/坐标/尺寸超限）",
     # PROTOCOL PR#9 §7.3 HTTP data.error_code
     "ROOM_NAME_INVALID": "房间名称不合法（1-32 字符）",
     "INVALID_BACKGROUND": "房间底图不合法",

@@ -75,6 +75,19 @@ class MessageTests(unittest.TestCase):
         self.assertEqual(protocol.room_messages_path("AB12C"), "/api/v1/rooms/AB12C/messages")
         self.assertEqual(protocol.room_messages_path("a/b"), "/api/v1/rooms/a%2Fb/messages")
 
+    def test_canvas_messages_and_path(self) -> None:
+        self.assertEqual(protocol.room_canvas_path("AB12C"), "/api/v1/rooms/AB12C/canvas")
+        op = {"kind": "stroke", "points": [{"x": 0.1, "y": 0.2}], "color": "#FF3B30", "width": 4, "tool": "pen"}
+        message = protocol.canvas_op_message("room-1", 3, op)
+        self.assertEqual("canvas_op", message["type"])
+        self.assertEqual("room-1", message["room_id"])
+        self.assertEqual(3, message["rev"])
+        self.assertEqual(op, message["op"])
+        save = protocol.canvas_snapshot_save_message("room-1", 5, [op])
+        self.assertEqual("canvas_snapshot_save", save["type"])
+        self.assertEqual(5, save["rev"])
+        self.assertEqual([op], save["strokes"])
+
     def test_ids_are_unique(self) -> None:
         self.assertTrue(protocol.make_request_id().startswith("c-"))
         self.assertTrue(protocol.make_client_msg_id().startswith("m-"))

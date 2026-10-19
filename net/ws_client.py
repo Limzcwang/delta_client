@@ -62,6 +62,7 @@ class WsClient:
         self._state = "idle"
         self._last_rx = 0.0
         self._stop_event = asyncio.Event()
+        self._canvas_save_waiters: list[asyncio.Future] = []
 
     # ---------- 状态 ----------
     @property
@@ -186,11 +187,14 @@ class WsClient:
                     text = str(message.get("message") or "认证失败，请重新登录")
                     self._set_state("auth_error", code=message.get("code"), message=text)
                     raise WsAuthError(text)
+                elif mtype == protocol.WS_CANVAS_SNAPSHOT_SAVED:
+                    self._resolve_save_waiters(message)
                 self._emit(message)
         finally:
             for task in (heartbeat, watchdog):
                 task.cancel()
             await asyncio.gather(heartbeat, watchdog, return_exceptions=True)
+            self._resolve_save_waiters(None)
 
     async def _heartbeat_loop(self, ws: Any) -> None:
         while True:
@@ -246,9 +250,45 @@ class WsClient:
         sent = await self._send(protocol.chat_send_message(content, client_msg_id, room_id))
         return client_msg_id if sent else None
 
+    async def send_canvas_op(self, op: dict[str, Any], rev: int, room_id: str) -> bool:
+        """发送一条画板增量；``rev`` 由调用方保证每连接单调递增。"""
+        return await self._send(protocol.canvas_op_message(room_id, rev, op))
+
+    async def save_canvas_snapshot(
+        self,
+        strokes: list[dict[str, Any]],
+        rev: int,
+        room_id: str,
+        timeout: float = 3.0,
+    ) -> dict[str, Any] | None:
+        """发送全量画板快照并等待 ``canvas_snapshot_saved`` ack；超时返回 None。"""
+        loop = asyncio.get_running_loop()
+        waiter = loop.create_future()
+        self._canvas_save_waiters.append(waiter)
+        sent = await self._send(
+            protocol.canvas_snapshot_save_message(room_id, rev, strokes)
+        )
+        if not sent:
+            self._canvas_save_waiters.remove(waiter)
+            return None
+        try:
+            return await asyncio.wait_for(waiter, timeout=timeout)
+        except asyncio.TimeoutError:
+            return None
+        finally:
+            if waiter in self._canvas_save_waiters:
+                self._canvas_save_waiters.remove(waiter)
+
+    def _resolve_save_waiters(self, payload: dict[str, Any] | None = None) -> None:
+        for waiter in list(self._canvas_save_waiters):
+            if not waiter.done():
+                waiter.set_result(payload)
+        self._canvas_save_waiters.clear()
+
     async def close(self) -> None:
         """停止重连并关闭当前连接（可重复调用）。"""
         self._stopped = True
+        self._resolve_save_waiters(None)
         try:
             self._stop_event.set()
         except RuntimeError:

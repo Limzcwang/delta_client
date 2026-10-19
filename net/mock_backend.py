@@ -15,6 +15,7 @@ import uuid
 from typing import Any, Mapping
 
 from core import protocol
+from core.canvas import CanvasSnapshot, parse_canvas_snapshot
 from core.connection import ConnectionCheck, probe_ok
 from core.errors import ApiError, ErrorKind
 from core.models import ChatMessage, ChatPage, Member, Room, RoomDetail, now_ms
@@ -148,6 +149,8 @@ class MockApiClient:
         self._messages: dict[str, list[dict[str, Any]]] = {
             code: [dict(message) for message in messages] for code, messages in _SEED_MESSAGES.items()
         }
+        #: 画板状态（内存，mock 下按房间保存 strokes/rev）
+        self._room_canvas: dict[str, dict[str, Any]] = {}
 
     # ---------- 基础 ----------
     async def _tick(self) -> None:
@@ -397,6 +400,45 @@ class MockApiClient:
             next_before=next_before,
         )
 
+    # ---------- 画板 ----------
+    def _canvas_state(self, room_ref: str) -> dict[str, Any]:
+        payload = self._find_room(room_ref)
+        key = str(payload["code"]) if payload is not None else room_reference(str(room_ref))
+        return self._room_canvas.setdefault(
+            key, {"strokes": [], "rev": 0, "updated_at": None}
+        )
+
+    def canvas_payload(self, room_ref: str) -> dict[str, Any]:
+        state = self._canvas_state(room_ref)
+        return {
+            "strokes": [dict(op) for op in state.get("strokes", [])],
+            "rev": int(state.get("rev", 0)),
+        }
+
+    def apply_canvas_op(self, room_ref: str, op: Mapping[str, Any], rev: int) -> None:
+        state = self._canvas_state(room_ref)
+        state["rev"] = max(int(state.get("rev", 0)), int(rev))
+        if op.get("kind") == "clear":
+            state["strokes"] = []
+        else:
+            state["strokes"].append(dict(op))
+
+    def save_canvas_snapshot(
+        self, room_ref: str, strokes: list[Mapping[str, Any]], rev: int
+    ) -> dict[str, Any]:
+        state = self._canvas_state(room_ref)
+        state["strokes"] = [dict(op) for op in strokes]
+        state["rev"] = int(rev)
+        state["updated_at"] = now_ms()
+        return {"strokes": list(state["strokes"]), "rev": state["rev"], "updated_at": state["updated_at"]}
+
+    async def get_canvas(self, room_id_or_code: str) -> CanvasSnapshot:
+        await self._tick()
+        payload = self._find_room(room_id_or_code)
+        if payload is None:
+            raise ApiError(ErrorKind.ROOM_NOT_FOUND, "房间不存在或已关闭", status=404, code=40402)
+        return parse_canvas_snapshot(self.canvas_payload(str(payload["code"])))
+
     def _generate_room_code(self) -> str:
         while True:
             code = "".join(secrets.choice(_ROOM_CODE_ALPHABET) for _ in range(5))
@@ -476,17 +518,17 @@ class MockWsClient:
             members.append({"id": "2", "username": "队友-Alpha", "online": True})
         if self.user.get("username") != "队友-Bravo":
             members.append({"id": "3", "username": "队友-Bravo", "online": True})
+        canvas_snapshot = (
+            self.store.canvas_payload(str(raw.get("code") or room_code))
+            if self.store is not None
+            else {"strokes": [], "rev": 0}
+        )
         self._emit(
             {
                 "type": protocol.WS_ROOM_JOINED,
                 "room": raw,
                 "members": members,
-                "canvas_snapshot": {
-                    "seq": 0,
-                    "canvas_size": [1920, 1080],
-                    "background": {"id": raw.get("background_id", "bg_default_01")},
-                    "ops": [],
-                },
+                "canvas_snapshot": canvas_snapshot,
                 "skill_state": {"items": []},
                 "server_time": now_ms(),
             }
@@ -525,6 +567,33 @@ class MockWsClient:
 
         asyncio.get_running_loop().create_task(_echo())
         return client_msg_id
+
+    async def send_canvas_op(self, op: dict[str, Any], rev: int, room_id: str) -> bool:
+        room_ref = self.room.code if self.room is not None else str(room_id)
+        if self.store is not None:
+            self.store.apply_canvas_op(room_ref, op, rev)
+        return True
+
+    async def save_canvas_snapshot(
+        self,
+        strokes: list[dict[str, Any]],
+        rev: int,
+        room_id: str,
+        timeout: float = 3.0,
+    ) -> dict[str, Any] | None:
+        room_ref = self.room.code if self.room is not None else str(room_id)
+        if self.store is not None:
+            saved = self.store.save_canvas_snapshot(room_ref, strokes, rev)
+        else:
+            saved = {"strokes": list(strokes), "rev": int(rev), "updated_at": now_ms()}
+        ack = {
+            "type": protocol.WS_CANVAS_SNAPSHOT_SAVED,
+            "room_id": str(room_id),
+            "rev": saved.get("rev", rev),
+            "updated_at": saved.get("updated_at"),
+        }
+        self._emit(ack)
+        return ack
 
     async def leave_room(self, room_id_or_code: str) -> bool:
         return True

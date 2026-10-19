@@ -18,7 +18,8 @@ from PySide6.QtWidgets import (
 )
 
 from core.chat import STATUS_FAILED, STATUS_PENDING, ChatEntry
-from core.models import ChatMessage, Member, Room
+from core.models import Member, Room
+from ui.canvas_view import CanvasView
 
 
 class RoomView(QWidget):
@@ -135,40 +136,15 @@ class RoomView(QWidget):
     def _build_canvas_panel(self) -> QWidget:
         panel = QFrame()
         panel.setObjectName("Card")
-        panel.setFixedWidth(320)
+        panel.setFixedWidth(400)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
 
-        title = QLabel("画板协同")
-        title.setObjectName("SectionTitle")
-        layout.addWidget(title)
+        self.canvas = CanvasView()
+        layout.addWidget(self.canvas, stretch=1)
 
-        placeholder = QFrame()
-        placeholder.setObjectName("CanvasPlaceholder")
-        placeholder_layout = QVBoxLayout(placeholder)
-        placeholder_layout.setContentsMargins(16, 16, 16, 16)
-        placeholder_layout.setSpacing(8)
-        placeholder_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        icon = QLabel("◈")
-        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon.setStyleSheet("color: #4a5c72; font-size: 48px;")
-        caption = QLabel("画板协同（D 阶段占位）")
-        caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        caption.setObjectName("Muted")
-        details = QLabel(
-            "逻辑画布 1920×1080\n底图由运营方配置\n\nD 协议接入后实现绘制，\n不上传任何截图"
-        )
-        details.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        details.setObjectName("Hint")
-
-        placeholder_layout.addWidget(icon)
-        placeholder_layout.addWidget(caption)
-        placeholder_layout.addWidget(details)
-        layout.addWidget(placeholder, stretch=1)
-
-        note = QLabel("技能 CD 共享（E）同样是占位，截屏与识别只会在本机进行")
+        note = QLabel("技能 CD 共享（E）仍为占位；截屏与识别只会在本机进行")
         note.setObjectName("Hint")
         note.setWordWrap(True)
         layout.addWidget(note)
