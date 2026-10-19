@@ -1,0 +1,112 @@
+# CLIENT-NOTES —— 客户端交接/踩坑记录（聊天 C + 画板 D）
+
+> 面向后续接手客户端的人。协议以 `delta_service/PROTOCOL.md` 为准，本文件只记录**实现时踩过的坑、易错点、已知限制和 TODO**。
+> 更新时间：2026-10-19；对应客户端 commit：`3d0216c` 之后。
+
+---
+
+## 1. 当前进度与分支
+
+| 项 | 状态 |
+|---|---|
+| C1 骨架/配置/登录/房间 | 完成 |
+| C 聊天（收发/历史/乐观更新/失败重试） | 完成，已对线上双账号实测 |
+| D 共享画板（实时增量/快照/撤销重做） | 完成，已对线上双账号实测 |
+| E 技能共享（截屏/OCR/技能 CD） | **未开始**（等方案拍板；客户端不传截图） |
+
+- 本地工作副本：`.tmp/client-work`，分支 `feat/client-skeleton`（最新 `3d0216c`）。
+- 远端集成分支：`feat/client-chat`（lead 用 patch 应用，不要直接改远端）。
+- 测试：`python -m unittest discover -s tests -v` → **171 用例**，纯 stdlib、离线可跑。
+- GUI 冒烟脚本在 `.tmp/client-work-smoke/`（不在仓库内）：`smoke.py`（登录/房间/聊天/设置）、`smoke_canvas.py`（画板保存/恢复）、`live_*.py`（真实后端联调）。
+- 本机沙箱曾把 PySide6 装到 `.tmp/pydeps` 并用 `PYTHONPATH` 跑 GUI；正常开发直接 `pip install -r requirements.txt`。
+
+---
+
+## 2. 协议注意事项（聊天 C）
+
+1. **统一错误包**：`{code,message,data,request_id}`，具体业务码在 **`data.error_code`**（字符串），顶层 `code` 只是 40000/40100 之类类别。客户端 `core.errors.parse_error_body` 已同时读 `data.error_code`。
+2. **WS 错误**：`{"type":"error","code","error_code","message"}`；错误**不带 `client_msg_id`**，所以一次错误只能把当前所有 pending 聊天标记失败（通常只有一条）。`RATE_LIMITED` 要恢复输入框内容。
+3. **chat_send**：必须已认证 + 已 HTTP join + 已 WS join；服务端**不读 `room_id`**（用会话房间），但客户端仍按约定带上便于日志。限频 **5 条/秒/用户**。
+4. **chat_message**：字段固定 `id/room_id/user{id,username}/content/client_msg_id/created_at`；**发送者本人也会收到广播**，必须按 `client_msg_id` 原地认领（发送中→已发送），不能重复插入。
+5. **历史**：`GET /rooms/{room_id_or_code}/messages?before=<消息 id>&limit=50`，`items` **新→旧**，游标是**消息 id 字符串**（不是时间戳）；进房拉第一页，上滚用 `next_before`。
+6. **重试**：服务端无幂等承诺；同一条内容重试要复用**同一个 `client_msg_id`**，UI 侧靠它避免自己重复渲染（服务端仍可能落两条，属已知限制）。
+7. **加入前置**：WS `join_room` 前必须先 HTTP join，否则 `NOT_ROOM_MEMBER`。
+8. **离开**：先 WS `leave_room`（触发 `user_left(reason=left)`）再 HTTP leave；HTTP leave 会摘除该用户 WS 房间会话。房主直接 HTTP leave 会失败（需先关房）。
+9. **心跳**：服务端每 30s 下发；客户端 25s ping、90s 无消息判失联（`net/ws_client.py` 默认值）。
+10. **房间关闭**：HTTP close 会摘除全部成员 WS 会话并广播 `user_left(reason=closed)`；之后 `chat_send`/`canvas_op` 返回 `NOT_ROOM_MEMBER`。
+
+---
+
+## 3. 协议注意事项（画板 D）
+
+1. **坐标**：一律 **0–1 归一化** `{x,y}`（显示基准 1920×1080），不要发像素；客户端鼠标换算在 `ui/canvas_view.py`。
+2. **op**：`stroke{points≤512,color:#RRGGBB,width:1–32,tool:pen|eraser}` 或 `clear`；单笔 >512 点客户端自动分段（相邻段共享端点）。
+3. **rev**：**每连接、每房间**独立单调递增，重连/重进房从 0 重新计数；服务端丢弃 `rev<=上次` 并回 `CANVAS_OUT_OF_ORDER`。客户端对**别人**的 op 按 `(user_id,rev)` 去重；收到 `rev=0` 视为该用户新连接，`user_joined` 时清掉该用户旧水位。
+4. **不回显发送者**：`canvas_op` 广播**不含发送者**；本地绘制必须自己先渲染（`CanvasDocument`），不要等广播。
+5. **快照**：`room_joined.canvas_snapshot={strokes,rev}`（DB 快照 ∪ 内存未保存增量）；`strokes` 里可能含 `clear`，按顺序应用即可（client `CanvasDocument.apply_snapshot` 处理）。缺失/为空时 fallback `GET /rooms/{ref}/canvas`（无快照返回 `strokes:[],rev:0,updated_at:null`）。
+6. **保存**：只在显式 `canvas_snapshot_save{room_id,rev,strokes}` 或房主关房时落库；**无定时快照**。客户端在离开/退出/关窗/切服务器前保存并等 `canvas_snapshot_saved` ack（3s 超时）。
+7. **上限**：快照 ≤5000 笔、序列化 ≤512KB；op 校验失败 `INVALID_CANVAS_OP`；画板限频 **30 条/秒/用户**（客户端本地节流队列）。
+8. **重连**：一律以 `room_joined.canvas_snapshot` 为准，不保留重连前的本地增量（客户端会直接覆盖本地画布）。
+9. **clear**：全房间生效，任何成员都可发；服务端把状态置空。
+10. **undo/redo**：服务端**没有 undo**；客户端只用本地 `CanvasDocument` 历史实现，队友看不到撤销，直到再次 `canvas_snapshot_save` 才落库。
+
+---
+
+## 4. 已知限制 / 坑（按模块）
+
+### 聊天
+- 服务端错误无 `client_msg_id`：多 pending 时无法精确知道失败的是哪条，客户端会把全部 pending 标红；尽量串行发送。
+- 无幂等：失败重试可能让服务端落重复消息；UI 只按 `client_msg_id` 规避自己重复渲染。
+- 历史分页理论上同毫秒消息可能漏行（服务端按 `created_at` 过滤，已知限制）；客户端按 `before` 消息 id 续拉。
+- 只渲染首屏 50 条 + 上滚续拉；不做“新消息提示/跳到底部”。
+- `ROOM_CLOSED` 时本地可能仍有 pending，已统一标红并 1.2s 后回大厅。
+
+### 画板
+- **undo/redo 仅本地**，不影响服务端/队友；远端 op 到达会清空本地 undo/redo 历史（避免撤销误删队友笔画）。
+- 橡皮通过“背景色覆盖”渲染（op 里仍保存 tool=eraser），保存/回放一致。
+- 离开/关窗保存超时只提示状态栏，仍会离开（可能丢增量）；快照超 5000 笔/512KB 会弹「画布已满」询问是否继续离开。
+- 进程崩溃/强杀：未显式保存的增量丢失（服务端无自动快照）。
+- 进房时 `canvas_snapshot` 为空也会再发一次 HTTP canvas fallback（冗余请求，无害）。
+- 本地 30/s 节流队列在断线时会清空并提示“画板改动仅本地可见”；重连后以服务端快照为准（本地改动会丢）。
+- `UI` 画板面板固定宽 400px，小窗口下聊天区会被压缩；逻辑画布 16:9 letterbox。
+- 快照保存 ack 只有单条在途；`WsClient.save_canvas_snapshot` 用单 waiter 列表（并发保存请自行串行）。
+
+### 通用
+- `AsyncBridge` 是单 asyncio 线程 + Qt 30ms 轮询；网络回调一律经 `bridge.post` 回主线程。
+- 关闭窗口时用 `QEventLoop` 轮询等保存协程（最多 3s），期间窗口是卡住的，属预期。
+- Mock 后端是单客户端内存模型：聊天/画板广播不会真的发给“另一个 Mock 客户端”；画板 snapshot save 有 ack、聊天有回显。
+- Mock 不模拟限频/多客户端/持久化。
+- PySide6 版本差异：本地验证用 `PySide6-Essentials 6.12`；代码只用 QtWidgets/QtCore/QtGui 基础 API，`requirements.txt` 写 `PySide6>=6.5`。
+- 字体：离屏截图需 `QT_QPA_FONTDIR=C:\Windows\Fonts` 才有中文；正常桌面无需设置。
+- 测试不依赖 PySide6/aiohttp/websockets：core 层禁止 import GUI/网络库。
+
+---
+
+## 5. 后续 TODO / 可优化项
+
+1. **E 技能共享**（等拍板）：本地截屏+识别得到 `ready_at`，只上报结构化快照；绝不发送图像。
+2. 画板底图（运营预置 `background`）目前未渲染，只存了 `background_id`；D 协议里底图字段已预留。
+3. 画板“定期自动保存快照”可加（服务端当前无定时快照），但注意 LWW 覆盖。
+4. 画板 op 批量合并：目前一笔一 op；高速绘制可合并相邻点减少 op 数。
+5. 聊天：新消息未读提示、自动回到底部、历史加载 loading 态更明显；可做失败消息点击重试（现在是双击）。
+6. 分页 UI：房间列表只有首屏 `items`。
+7. 设置页可加 WS 连通性测试（现在只测 `/health` 与 rooms）。
+8. 服务端若提供幂等去重（client_msg_id 唯一）可去掉 UI 侧重复消息兜底。
+9. 增加 GUI 自动化测试（pytest-qt 等）——当前 171 个测试均为纯逻辑；GUI 用一次性冒烟脚本验证。
+
+---
+
+## 6. 复验命令（交接/回归）
+
+```powershell
+cd .tmp/client-work
+python -m unittest discover -s tests -v       # 171 tests, 离线
+python main.py --check                        # 依赖与配置
+python main.py --mock                         # 离线演示（demo/demo123）
+python main.py --server http://114.132.161.169:8000   # 线上（测试账号由 lead 提供）
+```
+
+真实联调脚本（不提交，路径 `.tmp/client-work-smoke/`）：
+- `live_chat.py`：双账号聊天收发/历史分页/限频/非法消息/成员校验；
+- `live_canvas.py`：双账号画板实时/无自回显/clear/save ack/后进房快照/错误码；
+- `smoke_canvas.py`、`smoke.py`、`smoke_conn_test.py`：离屏 GUI 冒烟。

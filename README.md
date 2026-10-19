@@ -243,4 +243,5 @@ python -m unittest discover -s tests -v
 
 - 纯逻辑（config/core/state）不得 import PySide6/aiohttp/websockets，保证离线单测；
 - aiohttp / websockets 采用函数内延迟导入，缺失依赖时给出明确安装提示；
-- 新增 UI 页面时沿用 `ui/` + 信号/槽，网络请求统一经 `AsyncBridge` 提交，不在 UI 线程直接 `asyncio.run`。
+- 新增 UI 页面时沿用 `ui/` + 信号/槽，网络请求统一经 `AsyncBridge` 提交，不在 UI 线程直接 `asyncio.run`；
+- **聊天/画板协议细节、已知限制与 TODO 见 [`CLIENT-NOTES.md`](CLIENT-NOTES.md)**（交接必读）。
