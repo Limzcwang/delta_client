@@ -8,8 +8,9 @@ from dataclasses import replace
 from typing import Any, Mapping
 
 from PySide6.QtCore import QEvent, QEventLoop, QTimer
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QInputDialog,
     QLabel,
@@ -53,6 +54,7 @@ from core.skills import (
     parse_room_joined_skill_states,
     parse_skill_state_list,
 )
+from core.skill_payload import build_payload_from_state, clean_captured_at, validate_payload
 from net.api_client import ApiClient, LoginResult
 from net.mock_backend import MockApiClient, MockWsClient
 from net.ws_client import WsClient
@@ -68,6 +70,8 @@ from ui.dialogs import (
 from ui.login_view import LoginView
 from ui.room_list_view import RoomListView
 from ui.room_view import RoomView
+from ui.auto_share import AutoShareController
+from ui.skill_overlay import OverlayController, SkillOverlay
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +178,24 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.login_view)
         self.stack.addWidget(self.room_list_view)
         self.stack.addWidget(self.room_view)
+
+        self.overlay = SkillOverlay()
+        self.overlay.set_server_now(self._server_clock.now_ms)
+        self.overlay_controller = OverlayController(
+            self.overlay, self._find_game_window, self._screen_size
+        )
+        self.overlay.position_changed.connect(self._on_overlay_moved)
+        self._toggle_shortcut = QShortcut(QKeySequence(self.config.shortcut_toggle), self)
+        self._toggle_shortcut.activated.connect(self._toggle_overlay)
+        self._edit_shortcut = QShortcut(QKeySequence(self.config.shortcut_edit), self)
+        self._edit_shortcut.activated.connect(self._toggle_overlay_edit)
+        self._apply_overlay_config()
+        self._auto_controller = AutoShareController(
+            self._open_capture_source, self._recognize_auto_frame
+        )
+        self._auto_controller.payload_ready.connect(self._on_auto_payload)
+        self._auto_controller.status_changed.connect(self._on_auto_status)
+        self._apply_auto_config()
 
         self._server_label = QLabel()
         self._server_label.setObjectName("Muted")
@@ -700,8 +722,11 @@ class MainWindow(QMainWindow):
         self._skills.clear()
         self._self_skill_state = None
         self._skill_share_enabled = False
+        if hasattr(self, "_auto_controller"):
+            self._auto_controller.stop()
         self.room_view.skill_panel.clear()
         self.room_view.skill_panel.set_sharing(False)
+        self._sync_overlay_states()
         self.room_view.skill_panel.set_clock_offset(0)
         self.room_view.set_room(room)
         self.room_view.set_user(self._username(), self._user_id())
@@ -718,6 +743,8 @@ class MainWindow(QMainWindow):
         self.room_view.focus_chat_input()
         self._system_message(f"已进入 {room.display_name}（{room.code}）")
         self._start_ws(room)
+        if hasattr(self, "_auto_controller"):
+            self._apply_auto_config()
         # HTTP 成员兜底：WS room_joined 丢失/重连失败时仍能展示成员
         self._refresh_members_http(room, fallback=False)
         # 进房先拉最近一页聊天历史；向上滚动用 next_before 续拉
@@ -950,6 +977,7 @@ class MainWindow(QMainWindow):
             if joined_skills:
                 self._skills.update_many(joined_skills)
                 self.room_view.skill_panel.set_states(self._skills.states())
+            self._sync_overlay_states()
             self._on_room_joined_canvas(message.get("canvas_snapshot"))
             self.room_view.set_status("")
         elif mtype == "skill_share_state":
@@ -1073,6 +1101,125 @@ class MainWindow(QMainWindow):
         self._set_status(text)
         self._show_rooms()
 
+    # ---------- E4：悬浮窗 / 自动循环 ----------
+    def _open_capture_source(self):
+        try:
+            from capture.sources import open_source
+
+            return open_source()
+        except Exception as exc:  # noqa: BLE001
+            return None, str(exc)
+
+    def _recognize_auto_frame(self, frame):
+        from core.hud_pipeline import recognize_frame
+        from core.hud_profile import HudProfile
+
+        profile = HudProfile.from_dict(self.config.hud_profile or {})
+        return recognize_frame(frame.image, profile, operator=self._selected_operator())
+
+    def _apply_auto_config(self) -> None:
+        enabled = bool(self.config.auto_capture_enabled and self.config.auto_loop_enabled)
+        self._auto_controller.interval_ms = int(self.config.auto_sample_ms)
+        self._auto_controller.configure(
+            enabled=enabled,
+            sharing=self._skill_share_enabled,
+            room_active=self._current_room is not None,
+            interval_ms=int(self.config.auto_sample_ms),
+        )
+        if enabled and self._skill_share_enabled and self._current_room is not None:
+            self._auto_controller.start()
+
+    def _on_auto_status(self, text: str) -> None:
+        if hasattr(self, "overlay"):
+            self.overlay.set_status(text)
+        if self.stack.currentWidget() is self.room_view:
+            self.room_view.set_status(text)
+
+    def _on_auto_payload(self, payload) -> None:
+        if self._current_room is None:
+            return
+        operator = self._selected_operator()
+        state = SkillState.from_ws(
+            {
+                "user_id": self._user_id(),
+                "nickname": self._username(),
+                "operator_id": operator.id if operator else "",
+                "operator_name": operator.display_name if operator else "",
+                "captured_at": self._server_now_ms(),
+                "skills": payload,
+            }
+        )
+        self._self_skill_state = state
+        self._skills.update(state)
+        self.room_view.skill_panel.upsert(state)
+        self._sync_overlay_states()
+        if self._skill_share_enabled:
+            self._send_skill_state(state)
+
+    def _find_game_window(self):
+        try:
+            from capture.window import find_window_by_process
+
+            return find_window_by_process()
+        except Exception:  # noqa: BLE001
+            return None
+
+    @staticmethod
+    def _screen_size() -> tuple[int, int]:
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            return (1920, 1080)
+        size = screen.size()
+        return (int(size.width()), int(size.height()))
+
+    def _apply_overlay_config(self) -> None:
+        self.overlay.set_opacity(self.config.overlay_opacity / 100.0)
+        self.overlay.set_scale(self.config.overlay_scale)
+        if self.config.shortcut_toggle:
+            self._toggle_shortcut.setKey(QKeySequence(self.config.shortcut_toggle))
+        if self.config.shortcut_edit:
+            self._edit_shortcut.setKey(QKeySequence(self.config.shortcut_edit))
+        if self.config.overlay_x is not None and self.config.overlay_y is not None:
+            self.overlay_controller.fixed_position = (
+                int(self.config.overlay_x),
+                int(self.config.overlay_y),
+            )
+        else:
+            self.overlay_controller.fixed_position = None
+        if self.config.overlay_enabled:
+            self.overlay_controller.set_opacity(self.config.overlay_opacity / 100.0)
+            self.overlay_controller.start()
+            self.overlay_controller.follow(force=True)
+        else:
+            self.overlay_controller.stop()
+
+    def _toggle_overlay(self) -> None:
+        if self.overlay_controller.enabled:
+            self.overlay_controller.stop()
+            self.room_view.set_status("悬浮窗已隐藏")
+        else:
+            self.overlay_controller.start()
+            self.room_view.set_status(f"悬浮窗：{self.overlay_controller.last_reason or '等待游戏窗口'}")
+
+    def _toggle_overlay_edit(self) -> None:
+        enabled = not self.overlay.edit_mode
+        self.overlay.set_edit_mode(enabled)
+        self.room_view.set_status("悬浮窗编辑模式：可拖动，退出后恢复鼠标穿透" if enabled else "悬浮窗已恢复鼠标穿透")
+
+    def _on_overlay_moved(self, x: int, y: int) -> None:
+        self.overlay_controller.fixed_position = (int(x), int(y))
+        self.config = replace(self.config, overlay_x=int(x), overlay_y=int(y))
+        try:
+            save_config(self.config)
+        except OSError:
+            pass
+
+    def _sync_overlay_states(self) -> None:
+        try:
+            self.overlay.set_states(self._skills.states(), self.operator_catalog)
+        except Exception:  # noqa: BLE001
+            pass
+
     # ---------- E2：技能 CD 共享 ----------
     def _set_skill_server_time(self, server_time: Any) -> None:
         try:
@@ -1109,6 +1256,7 @@ class MainWindow(QMainWindow):
             state = replace(state, captured_at=self._server_now_ms())
         self._skills.update(state)
         self.room_view.skill_panel.upsert(state)
+        self._sync_overlay_states()
 
     def _on_skill_share_removed(self, message: Mapping[str, Any]) -> None:
         user_id = str(message.get("user_id") or "")
@@ -1116,6 +1264,7 @@ class MainWindow(QMainWindow):
             return
         self._skills.remove(user_id)
         self.room_view.skill_panel.remove(user_id)
+        self._sync_overlay_states()
 
     def _on_simulate_skill(self) -> None:
         if self._current_room is None:
@@ -1124,6 +1273,7 @@ class MainWindow(QMainWindow):
         self._self_skill_state = state
         self._skills.update(state)
         self.room_view.skill_panel.upsert(state)
+        self._sync_overlay_states()
         if self._skill_share_enabled:
             self._send_skill_state(state)
         else:
@@ -1260,6 +1410,8 @@ class MainWindow(QMainWindow):
 
     def _on_skill_sharing_toggled(self, enabled: bool) -> None:
         self._skill_share_enabled = bool(enabled)
+        if hasattr(self, "_auto_controller"):
+            self._apply_auto_config()
         if not enabled:
             self._send_skill_off()
             self.room_view.set_status("技能共享已关闭")
@@ -1285,15 +1437,25 @@ class MainWindow(QMainWindow):
         if not self._skill_throttle.allow(now_ms()):
             self.room_view.set_status("技能上报过快（本地限频 2 次/秒）", error=True)
             return
-        state = replace(state, captured_at=self._server_now_ms())
+        captured_at = clean_captured_at(self._server_now_ms())
+        if captured_at is None:
+            self.room_view.set_status("技能上报失败：captured_at 非法", error=True)
+            return
+        state = replace(state, captured_at=captured_at)
         self._self_skill_state = state
         self._skills.update(state)
         self.room_view.skill_panel.upsert(state)
-        payload = self._skill_payload(state)
+        self._sync_overlay_states()
+        payload = build_payload_from_state(state)
+        valid, reason = validate_payload(payload)
+        if not valid:
+            logger.warning("技能 payload 自检失败，已取消发送：%s", reason)
+            self.room_view.set_status(f"技能上报已取消：{reason}", error=True)
+            return
         self._safe_submit(
             self._ws.send_skill_update(
                 room.id or room.code,
-                state.captured_at,
+                captured_at,
                 payload,
                 state.operator_id,
                 state.operator,
@@ -1305,22 +1467,6 @@ class MainWindow(QMainWindow):
         if room is None or self._ws is None or not getattr(self._ws, "connected", False):
             return
         self._safe_submit(self._ws.send_skill_off(room.id or room.code))
-
-    @staticmethod
-    def _skill_payload(state: SkillState) -> list[dict[str, Any]]:
-        payload: list[dict[str, Any]] = []
-        for index, kind in enumerate(SLOT_KINDS):
-            slot = state.slot(kind)
-            item: dict[str, Any] = {"slot": index, "state": slot.state}
-            if slot.remaining_ms:
-                item["remaining_ms"] = slot.remaining_ms
-            if kind == "ultimate" and slot.state != "unknown":
-                item["pct"] = slot.percent
-            if slot.max_charges:
-                item["charges"] = slot.charges
-                item["max_charges"] = slot.max_charges
-            payload.append(item)
-        return payload
 
     # ---------- 聊天 ----------
     def _system_message(self, text: str) -> None:
@@ -1706,8 +1852,11 @@ class MainWindow(QMainWindow):
         self._skills.clear()
         self._self_skill_state = None
         self._skill_share_enabled = False
+        if hasattr(self, "_auto_controller"):
+            self._auto_controller.stop()
         self.room_view.skill_panel.clear()
         self.room_view.skill_panel.set_sharing(False)
+        self._sync_overlay_states()
 
     def _on_leave_room(self) -> None:
         room = self._current_room
@@ -1747,6 +1896,7 @@ class MainWindow(QMainWindow):
         self._self_skill_state = state
         self._skills.update(state)
         self.room_view.skill_panel.upsert(state)
+        self._sync_overlay_states()
         if self._skill_share_enabled:
             self._send_skill_state(state)
         else:
@@ -1770,6 +1920,7 @@ class MainWindow(QMainWindow):
         )
         dialog.set_account(self._account())
         dialog.set_nickname(self.session.nickname or self.session.username)
+        dialog.set_overlay_status(self.overlay_controller.last_reason or "未附加")
         dialog.tabs.setCurrentIndex(0 if start_tab <= 0 else 1)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
@@ -1790,6 +1941,8 @@ class MainWindow(QMainWindow):
         self.config = new_config
         if operator_changed:
             self._on_operator_changed()
+        self._apply_overlay_config()
+        self._apply_auto_config()
         self._refresh_status_bar()
         self.login_view.set_server_text(new_config.server_url, new_config.mode_label)
         self.room_list_view.set_mode(new_config.use_mock, new_config.server_url)

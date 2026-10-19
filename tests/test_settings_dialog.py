@@ -46,7 +46,7 @@ class SettingsOperatorTests(unittest.TestCase):
 
     def test_dropdown_has_16_operators_and_selects_saved(self) -> None:
         dialog = self._dialog("weilong")
-        self.assertEqual(3, dialog.tabs.count())
+        self.assertEqual(4, dialog.tabs.count())
         self.assertEqual(17, dialog.operator_combo.count())
         self.assertEqual("weilong", dialog.operator_combo.currentData())
         self.assertIn("威龙", dialog.operator_combo.currentText())
@@ -67,6 +67,33 @@ class SettingsOperatorTests(unittest.TestCase):
         dialog.accept()
         self.assertEqual("muyangren", dialog.config_result().operator_id)
 
+    def test_overlay_settings_persist(self) -> None:
+        dialog = self._dialog("honglang")
+        self.assertFalse(dialog.overlay_enabled_check.isChecked())
+        dialog.overlay_enabled_check.setChecked(True)
+        dialog.overlay_opacity_spin.setValue(55)
+        dialog.overlay_scale_spin.setValue(1.2)
+        dialog.shortcut_toggle_edit.setKeySequence("Ctrl+Alt+D")
+        dialog.shortcut_edit_edit.setKeySequence("Ctrl+Alt+E")
+        dialog._overlay_position_reset = True
+        dialog.accept()
+        result = dialog.config_result()
+        self.assertTrue(result.overlay_enabled)
+        self.assertEqual(55, result.overlay_opacity)
+        self.assertAlmostEqual(1.2, result.overlay_scale)
+        self.assertEqual("Ctrl+Alt+D", result.shortcut_toggle)
+        self.assertEqual("Ctrl+Alt+E", result.shortcut_edit)
+        self.assertIsNone(result.overlay_x)
+        self.assertIsNone(result.overlay_y)
+
+    def test_overlay_shortcut_conflict_rejected(self) -> None:
+        dialog = self._dialog("honglang")
+        dialog.shortcut_toggle_edit.setKeySequence("Ctrl+Shift+X")
+        dialog.shortcut_edit_edit.setKeySequence("Ctrl+Shift+X")
+        dialog.accept()
+        self.assertFalse(dialog.error_label.isHidden())
+        self.assertIn("不能相同", dialog.error_label.text())
+
     def test_invalid_saved_falls_back_and_persists(self) -> None:
         dialog = self._dialog("no-such-operator")
         self.assertEqual("honglang", dialog.operator_combo.currentData())
@@ -82,4 +109,5 @@ class SettingsOperatorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 

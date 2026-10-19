@@ -128,6 +128,16 @@ class AppConfig:
     persist_token: bool = False
     operator_id: str = ""
     hud_profile: dict[str, Any] | None = None
+    overlay_enabled: bool = False
+    overlay_opacity: int = 30
+    overlay_scale: float = 1.0
+    overlay_x: int | None = None
+    overlay_y: int | None = None
+    shortcut_toggle: str = "Ctrl+Shift+D"
+    shortcut_edit: str = "Ctrl+Shift+E"
+    auto_capture_enabled: bool = False
+    auto_loop_enabled: bool = False
+    auto_sample_ms: int = 2000
     request_timeout: float = DEFAULT_TIMEOUT
     source: str = "default"
 
@@ -149,6 +159,16 @@ class AppConfig:
             "save_token": self.persist_token,
             "operator_id": self.operator_id,
             "hud_profile": self.hud_profile,
+            "overlay_enabled": self.overlay_enabled,
+            "overlay_opacity": self.overlay_opacity,
+            "overlay_scale": self.overlay_scale,
+            "overlay_x": self.overlay_x,
+            "overlay_y": self.overlay_y,
+            "shortcut_toggle": self.shortcut_toggle,
+            "shortcut_edit": self.shortcut_edit,
+            "auto_capture_enabled": self.auto_capture_enabled,
+            "auto_loop_enabled": self.auto_loop_enabled,
+            "auto_sample_ms": self.auto_sample_ms,
             "request_timeout": self.request_timeout,
         }
 
@@ -218,6 +238,29 @@ def load_config(
     hud_profile = file_data.get("hud_profile")
     if not isinstance(hud_profile, dict):
         hud_profile = None
+    overlay_enabled = parse_bool(file_data.get("overlay_enabled"), False)
+    try:
+        overlay_opacity = min(100, max(10, int(file_data.get("overlay_opacity", 30))))
+    except (TypeError, ValueError):
+        overlay_opacity = 30
+    try:
+        overlay_scale = min(2.0, max(0.6, float(file_data.get("overlay_scale", 1.0))))
+    except (TypeError, ValueError):
+        overlay_scale = 1.0
+    overlay_x = file_data.get("overlay_x")
+    overlay_y = file_data.get("overlay_y")
+    overlay_x = int(overlay_x) if isinstance(overlay_x, (int, float)) else None
+    overlay_y = int(overlay_y) if isinstance(overlay_y, (int, float)) else None
+    shortcut_toggle = str(file_data.get("shortcut_toggle") or "Ctrl+Shift+D")
+    shortcut_edit = str(file_data.get("shortcut_edit") or "Ctrl+Shift+E")
+    auto_capture_enabled = parse_bool(file_data.get("auto_capture_enabled"), False)
+    auto_loop_enabled = parse_bool(file_data.get("auto_loop_enabled"), False)
+    try:
+        auto_sample_ms = int(file_data.get("auto_sample_ms", 2000))
+    except (TypeError, ValueError):
+        auto_sample_ms = 2000
+    if auto_sample_ms not in (1000, 2000, 3000):
+        auto_sample_ms = 2000
 
     timeout = DEFAULT_TIMEOUT
     raw_timeout = file_data.get("request_timeout")
@@ -231,6 +274,16 @@ def load_config(
         persist_token=persist_token,
         operator_id=operator_id,
         hud_profile=hud_profile,
+        overlay_enabled=overlay_enabled,
+        overlay_opacity=overlay_opacity,
+        overlay_scale=overlay_scale,
+        overlay_x=overlay_x,
+        overlay_y=overlay_y,
+        shortcut_toggle=shortcut_toggle,
+        shortcut_edit=shortcut_edit,
+        auto_capture_enabled=auto_capture_enabled,
+        auto_loop_enabled=auto_loop_enabled,
+        auto_sample_ms=auto_sample_ms,
         request_timeout=timeout,
         source=source,
     )
