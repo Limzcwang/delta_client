@@ -64,6 +64,17 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("充能数", throwable.reason)
         self.assertIsInstance(throwable.roi, tuple)
 
+    def test_ultimate_expanded_roi_recovers_percent(self) -> None:
+        # 基础 3 槽无百分比；扩展 ROI 的后续 OCR 给出 50%
+        ocr = _FakeOcr([[], [], [], ["50%"]])
+        result = recognize_frame(
+            self._frame(), self._profile(), operator=self._operator(), ocr=ocr
+        )
+        ultimate = result.diagnostics[0]
+        self.assertEqual(50, ultimate.parsed["percent"])
+        self.assertEqual("charging", ultimate.state)
+        self.assertIsNotNone(ultimate.expanded_roi)
+
     def test_export_json_and_retention(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             exporter = HudDebugExporter(tmp, keep=10)

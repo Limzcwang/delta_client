@@ -768,6 +768,10 @@ class SettingsDialog(QDialog):
         layout.addWidget(QLabel("编辑模式快捷键（可拖动/缩放，退出后恢复鼠标穿透）"))
         self.shortcut_edit_edit = QKeySequenceEdit(str(self._config.shortcut_edit))
         layout.addWidget(self.shortcut_edit_edit)
+        self.hotkey_status_label = QLabel("全局热键：未注册")
+        self.hotkey_status_label.setObjectName("Hint")
+        self.hotkey_status_label.setWordWrap(True)
+        layout.addWidget(self.hotkey_status_label)
 
         reset_row = QHBoxLayout()
         self.overlay_reset_button = QPushButton("重置悬浮窗位置")
@@ -795,6 +799,9 @@ class SettingsDialog(QDialog):
 
     def set_overlay_status(self, text: str) -> None:
         self.overlay_status_label.setText(f"当前状态：{text}")
+
+    def set_hotkey_status(self, text: str) -> None:
+        self.hotkey_status_label.setText(f"全局热键：{text}" if text else "全局热键：未注册")
 
     def set_operator_recognition_status(self, text: str) -> None:
         self.operator_recognition_label.setText(text)

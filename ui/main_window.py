@@ -74,6 +74,7 @@ from ui.room_list_view import RoomListView
 from ui.room_view import RoomView
 from ui.auto_share import AutoShareController
 from ui.hud_async import HudRecognitionResult, HudRecognitionService
+from ui.global_hotkeys import GlobalHotkeyManager
 from ui.skill_overlay import OverlayController, SkillOverlay
 
 logger = logging.getLogger(__name__)
@@ -202,6 +203,9 @@ class MainWindow(QMainWindow):
         self._toggle_shortcut.activated.connect(self._toggle_overlay)
         self._edit_shortcut = QShortcut(QKeySequence(self.config.shortcut_edit), self)
         self._edit_shortcut.activated.connect(self._toggle_overlay_edit)
+        self._global_hotkeys = GlobalHotkeyManager(self)
+        self._global_hotkeys.triggered.connect(self._on_global_hotkey)
+        self._hotkey_failures: dict[str, str] = {}
         self._apply_overlay_config()
         self._hud_service = HudRecognitionService(self)
         self._hud_timeout = QTimer(self)
@@ -1403,6 +1407,26 @@ class MainWindow(QMainWindow):
             self.overlay_controller.follow(force=True)
         else:
             self.overlay_controller.stop()
+        self._apply_global_hotkeys()
+
+    def _apply_global_hotkeys(self) -> None:
+        self._hotkey_failures = self._global_hotkeys.register_all(
+            self.config.shortcut_toggle, self.config.shortcut_edit
+        )
+        registered = self._global_hotkeys.registered_actions
+        self._toggle_shortcut.setEnabled("toggle" not in registered)
+        self._edit_shortcut.setEnabled("edit" not in registered)
+        status = ""
+        if self._hotkey_failures:
+            status = "；".join(self._hotkey_failures.values()) + "；已回退应用内快捷键"
+        if self.settings_dialog is not None:
+            self.settings_dialog.set_hotkey_status(status or "全局热键已注册（游戏前台可用）")
+
+    def _on_global_hotkey(self, action: str) -> None:
+        if action == "toggle":
+            self._toggle_overlay()
+        elif action == "edit":
+            self._toggle_overlay_edit()
 
     def _toggle_overlay(self) -> None:
         if self.overlay_controller.enabled:
@@ -2298,6 +2322,11 @@ class MainWindow(QMainWindow):
         dialog.set_overlay_status(self.overlay_controller.last_reason or "未附加")
         dialog.set_server_migrated(self.config.server_migrated)
         dialog.set_operator_recognition_status(self._operator_recognition_text)
+        dialog.set_hotkey_status(
+            "；".join(self._hotkey_failures.values())
+            if self._hotkey_failures
+            else "全局热键已注册（游戏前台可用）"
+        )
         dialog.tabs.setCurrentIndex(max(0, min(int(start_tab), dialog.tabs.count() - 1)))
         accepted = dialog.exec() == QDialog.DialogCode.Accepted
         self.settings_dialog = None
@@ -2322,6 +2351,13 @@ class MainWindow(QMainWindow):
             self._on_operator_changed()
         self._apply_overlay_config()
         self._apply_auto_config()
+        if self._hotkey_failures:
+            QMessageBox.warning(
+                self,
+                "快捷键注册失败",
+                "；".join(self._hotkey_failures.values())
+                + "\n已回退到应用内快捷键（仅客户端有焦点时有效）。",
+            )
         self._refresh_status_bar()
         self.login_view.set_server_text(new_config.server_url, new_config.mode_label)
         self.room_list_view.set_mode(new_config.use_mock, new_config.server_url)
@@ -2497,6 +2533,7 @@ class MainWindow(QMainWindow):
         finally:
             self._hud_timeout.stop()
             self._hud_service.shutdown()
+            self._global_hotkeys.stop()
             self.bridge.stop()
             super().closeEvent(event)
 

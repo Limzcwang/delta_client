@@ -124,6 +124,8 @@ class SettingsOperatorTests(unittest.TestCase):
         dialog.overlay_scale_spin.setValue(1.2)
         dialog.shortcut_toggle_edit.setKeySequence("Ctrl+Alt+D")
         dialog.shortcut_edit_edit.setKeySequence("Ctrl+Alt+E")
+        dialog.set_hotkey_status("快捷键被其他程序占用，请换一个：F9")
+        self.assertIn("占用", dialog.hotkey_status_label.text())
         dialog._overlay_position_reset = True
         dialog.accept()
         result = dialog.config_result()
