@@ -1,87 +1,84 @@
-"""H4 底图 letterbox / 归一化坐标换算（纯逻辑）。"""
+"""H5 画板随底图比例 / 画布内 0–1 坐标换算（纯逻辑）。"""
 
 from __future__ import annotations
 
 import unittest
 
 from core.canvas_geometry import (
-    FitRect,
-    fit_rect,
-    normalized_to_widget,
-    widget_to_normalized,
+    AspectSize,
+    canvas_to_normalized,
+    fit_aspect_size,
+    normalized_to_canvas,
 )
 
 
-class FitRectTests(unittest.TestCase):
-    def test_vertical_map_letterbox(self) -> None:
-        # 1105×1260 竖图放进 400×300：以高为准，左右留黑边
-        rect = fit_rect(400, 300, 1105, 1260)
-        self.assertAlmostEqual(300.0, rect.height)
-        self.assertAlmostEqual(300 * 1105 / 1260, rect.width)
-        self.assertGreater(rect.left, 0)
-        self.assertAlmostEqual(0.0, rect.top)
-        self.assertAlmostEqual(rect.width / rect.height, 1105 / 1260, places=6)
+class AspectSizeTests(unittest.TestCase):
+    def test_landscape_and_portrait_views(self) -> None:
+        # 1105×1260 底图在 1000×1000 可用区：以高为准
+        size = fit_aspect_size(1000, 1000, 1105, 1260)
+        self.assertAlmostEqual(1000.0, size.height)
+        self.assertAlmostEqual(1000 * 1105 / 1260, size.width)
+        self.assertAlmostEqual(1105 / 1260, size.width / size.height, places=6)
 
-    def test_horizontal_image_letterbox(self) -> None:
-        rect = fit_rect(400, 300, 1920, 1080)
-        self.assertAlmostEqual(400.0, rect.width)
-        self.assertAlmostEqual(225.0, rect.height)
-        self.assertAlmostEqual(0.0, rect.left)
-        self.assertAlmostEqual(37.5, rect.top)
-        self.assertAlmostEqual(16 / 9, rect.width / rect.height, places=6)
+        # 宽屏：以高为准
+        wide = fit_aspect_size(2000, 500, 1105, 1260)
+        self.assertAlmostEqual(500.0, wide.height)
+        self.assertAlmostEqual(500 * 1105 / 1260, wide.width)
 
-    def test_square_image(self) -> None:
-        rect = fit_rect(300, 500, 100, 100)
-        self.assertAlmostEqual(300.0, rect.width)
-        self.assertAlmostEqual(300.0, rect.height)
-        self.assertAlmostEqual(100.0, rect.top)
-        self.assertAlmostEqual(0.0, rect.left)
+        # 竖屏：以宽为准
+        tall = fit_aspect_size(500, 2000, 1105, 1260)
+        self.assertAlmostEqual(500.0, tall.width)
+        self.assertAlmostEqual(500 * 1260 / 1105, tall.height)
 
-    def test_small_viewport(self) -> None:
-        rect = fit_rect(100, 100, 1105, 1260)
-        self.assertAlmostEqual(100.0, rect.height)
-        self.assertAlmostEqual(100 * 1105 / 1260, rect.width)
-        self.assertGreater(rect.left, 0)
+    def test_same_ratio_uses_exact_space(self) -> None:
+        size = fit_aspect_size(1105, 1260, 1105, 1260)
+        self.assertEqual(AspectSize(1105.0, 1260.0), size)
+        half = fit_aspect_size(552.5, 630, 1105, 1260)
+        self.assertEqual(AspectSize(552.5, 630.0), half)
 
-    def test_invalid_empty(self) -> None:
-        for args in ((0, 100, 10, 10), (100, 0, 10, 10), (100, 100, 0, 10), (100, 100, 10, 0)):
-            with self.subTest(args=args):
-                rect = fit_rect(*args)
-                self.assertEqual(FitRect(0, 0, 0, 0), rect)
-                self.assertIsNone(widget_to_normalized(0, 0, rect))
+    def test_never_exceeds_available_space(self) -> None:
+        for available in ((100, 1000), (1000, 100), (300, 300), (1920, 1080)):
+            with self.subTest(available=available):
+                size = fit_aspect_size(*available, 1105, 1260)
+                self.assertLessEqual(size.width, available[0] + 1e-9)
+                self.assertLessEqual(size.height, available[1] + 1e-9)
+                self.assertAlmostEqual(1105 / 1260, size.width / size.height, places=6)
+
+    def test_invalid_zero(self) -> None:
+        self.assertEqual(AspectSize(0, 0), fit_aspect_size(0, 100, 10, 10))
+        self.assertEqual(AspectSize(0, 0), fit_aspect_size(100, 0, 10, 10))
+        self.assertEqual(AspectSize(0, 0), fit_aspect_size(100, 100, 0, 10))
 
 
-class CoordinateRoundTripTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.rect = fit_rect(800, 600, 1105, 1260)  # 竖图 letterbox
-
-    def test_center_and_roundtrip(self) -> None:
-        center = widget_to_normalized(
-            self.rect.left + self.rect.width / 2, self.rect.top + self.rect.height / 2, self.rect
-        )
-        self.assertIsNotNone(center)
+class CanvasCoordinateTests(unittest.TestCase):
+    def test_center_corners_roundtrip(self) -> None:
+        width, height = 552.5, 630.0
+        self.assertEqual((0.0, 0.0), canvas_to_normalized(0, 0, width, height))
+        self.assertEqual((1.0, 1.0), canvas_to_normalized(width, height, width, height))
+        center = canvas_to_normalized(width / 2, height / 2, width, height)
         self.assertAlmostEqual(0.5, center[0])
         self.assertAlmostEqual(0.5, center[1])
-        px, py = normalized_to_widget(center[0], center[1], self.rect)
-        self.assertAlmostEqual(self.rect.left + self.rect.width / 2, px)
-        self.assertAlmostEqual(self.rect.top + self.rect.height / 2, py)
+        pixel = normalized_to_canvas(*center, width, height)
+        self.assertAlmostEqual(width / 2, pixel[0])
+        self.assertAlmostEqual(height / 2, pixel[1])
 
-    def test_corners_and_clamp(self) -> None:
-        self.assertEqual((0.0, 0.0), widget_to_normalized(self.rect.left, self.rect.top, self.rect))
-        corner = widget_to_normalized(self.rect.right, self.rect.bottom, self.rect)
-        self.assertAlmostEqual(1.0, corner[0])
-        self.assertAlmostEqual(1.0, corner[1])
-        # 归一化值越界时 clamp 到 0–1
-        x, y = normalized_to_widget(-1, 2, self.rect)
-        self.assertAlmostEqual(self.rect.left, x)
-        self.assertAlmostEqual(self.rect.bottom, y)
+    def test_resize_keeps_relative_position(self) -> None:
+        for width, height in ((300, 342), (600, 684), (900, 1026)):
+            point = normalized_to_canvas(0.25, 0.75, width, height)
+            back = canvas_to_normalized(point[0], point[1], width, height)
+            self.assertAlmostEqual(0.25, back[0])
+            self.assertAlmostEqual(0.75, back[1])
 
-    def test_letterbox_outside_returns_none(self) -> None:
-        # 竖图左右黑边内、图片区域外
-        self.assertIsNone(widget_to_normalized(self.rect.left / 2, 100, self.rect))
-        self.assertIsNone(widget_to_normalized(self.rect.right + 5, 100, self.rect))
-        self.assertIsNone(widget_to_normalized(100, self.rect.top - 1, self.rect))
-        self.assertIsNone(widget_to_normalized(100, self.rect.bottom + 1, self.rect))
+    def test_outside_canvas_returns_none(self) -> None:
+        self.assertIsNone(canvas_to_normalized(-1, 10, 500, 1000))
+        self.assertIsNone(canvas_to_normalized(501, 10, 500, 1000))
+        self.assertIsNone(canvas_to_normalized(10, -1, 500, 1000))
+        self.assertIsNone(canvas_to_normalized(10, 1001, 500, 1000))
+        self.assertIsNone(canvas_to_normalized(10, 10, 0, 100))
+
+    def test_normalized_to_canvas_clamps(self) -> None:
+        self.assertEqual((0.0, 0.0), normalized_to_canvas(-1, -2, 500, 1000))
+        self.assertEqual((500.0, 1000.0), normalized_to_canvas(2, 3, 500, 1000))
 
 
 if __name__ == "__main__":

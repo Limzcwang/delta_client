@@ -22,14 +22,18 @@ from core.canvas import (
     DEFAULT_WIDTH,
     CanvasDocument,
 )
-from core.canvas_geometry import FitRect, fit_rect, normalized_to_widget, widget_to_normalized
+from core.canvas_geometry import (
+    AspectSize,
+    canvas_to_normalized,
+    fit_aspect_size,
+    normalized_to_canvas,
+)
 from ui.canvas_icons import make_tool_icon
 
 #: 内置底图尺寸兜底（assets/canvas_map.png 实际 1105×1260）
 MAP_WIDTH = 1105
 MAP_HEIGHT = 1260
 CANVAS_BG = QColor("#10151c")
-CANVAS_BORDER = QColor("#364252")
 _MAP_RELATIVE = Path("assets") / "canvas_map.png"
 
 
@@ -75,18 +79,15 @@ class CanvasSurface(QWidget):
         return pixmap if not pixmap.isNull() else QPixmap()
 
     # ---------- 坐标换算 ----------
-    def fit(self) -> FitRect:
-        return fit_rect(self.width(), self.height(), self.map_size[0], self.map_size[1])
-
     def canvas_rect(self) -> QRectF:
-        rect = self.fit()
-        return QRectF(rect.left, rect.top, rect.width, rect.height)
+        """画布控件内部就是底图，无 letterbox/裁切；整块控件即图片区域。"""
+        return QRectF(0.0, 0.0, float(self.width()), float(self.height()))
 
     def _to_normalized(self, position: QPointF) -> tuple[float, float] | None:
-        return widget_to_normalized(position.x(), position.y(), self.fit())
+        return canvas_to_normalized(position.x(), position.y(), self.width(), self.height())
 
     def _to_widget(self, rect: QRectF, x: float, y: float) -> QPointF:
-        px, py = normalized_to_widget(x, y, FitRect(rect.left(), rect.top(), rect.width(), rect.height()))
+        px, py = normalized_to_canvas(x, y, rect.width(), rect.height())
         return QPointF(px, py)
 
     # ---------- 交互 ----------
@@ -103,7 +104,7 @@ class CanvasSurface(QWidget):
         if event.button() != Qt.MouseButton.LeftButton:
             return
         point = self._to_normalized(event.position())
-        if point is None:  # 图片区域外（letterbox 黑边）按下不产生绘制
+        if point is None:  # 指针不在图片显示区域（cover 下通常整个视口都可画）
             return
         self._drawing = True
         self._points = [QPointF(point[0], point[1])]
@@ -116,10 +117,10 @@ class CanvasSurface(QWidget):
         if point is None:
             return
         last = self._points[-1]
-        # 过滤过密采样点：按图片宽度换算 1px
+        # 过滤过密采样点：按画布宽度换算 1px
         if (
-            abs(last.x() - point[0]) * self.map_size[0] < 1.0
-            and abs(last.y() - point[1]) * self.map_size[1] < 1.0
+            abs(last.x() - point[0]) * self.width() < 1.0
+            and abs(last.y() - point[1]) * self.height() < 1.0
         ):
             return
         self._points.append(QPointF(point[0], point[1]))
@@ -207,9 +208,6 @@ class CanvasSurface(QWidget):
         painter.drawImage(0, 0, layer)
         painter.setClipping(False)
 
-        painter.setPen(QPen(CANVAS_BORDER, 1))
-        painter.drawRect(rect)
-
     # ---------- 对外操作 ----------
     def draw_stroke(
         self,
@@ -258,6 +256,27 @@ class CanvasSurface(QWidget):
         return self.document.snapshot_strokes()
 
 
+class CanvasHost(QWidget):
+    """宿主：按底图宽高比等比计算画布尺寸，居中放置；剩余区域由普通背景留白。"""
+
+    def __init__(self, surface: CanvasSurface, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.surface = surface
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(surface, alignment=Qt.AlignmentFlag.AlignCenter)
+        self.setMinimumHeight(220)
+
+    def size_for_space(self, width: int, height: int) -> AspectSize:
+        return fit_aspect_size(width, height, *self.surface.map_size)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt 覆盖
+        super().resizeEvent(event)
+        target = self.size_for_space(self.width(), self.height())
+        self.surface.setFixedSize(max(1, int(target.width)), max(1, int(target.height)))
+
+
 class CanvasView(QWidget):
     """画板面板：底部图标工具栏 + 带底图的绘制表面。"""
 
@@ -281,7 +300,8 @@ class CanvasView(QWidget):
         layout.addWidget(title)
 
         self.surface = CanvasSurface()
-        layout.addWidget(self.surface, stretch=1)
+        self.host = CanvasHost(self.surface)
+        layout.addWidget(self.host, stretch=1)
 
         toolbar = QHBoxLayout()
         toolbar.setContentsMargins(0, 0, 0, 0)
@@ -307,7 +327,7 @@ class CanvasView(QWidget):
             toolbar.addWidget(button, stretch=1)
         layout.addLayout(toolbar)
 
-        hint = QLabel("底图 1105×1260 等比完整显示 · 坐标以图片区域 0–1 · 撤销/重做仅本地")
+        hint = QLabel("画布随底图 1105×1260 等比缩放（外部留白）· 坐标以画布 0–1 · 撤销/重做仅本地")
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
         layout.addWidget(hint)

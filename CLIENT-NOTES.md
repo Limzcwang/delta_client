@@ -20,7 +20,7 @@
 
 - 本地工作副本：`.tmp/client-work`，当前分支 `feat/canvas-map`。
 - 远端集成分支：`feat/client-chat`（lead 用 patch 应用，不要直接改远端）。
-- 测试：`python -m unittest discover -s tests -v` → **262 用例**（含 14 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑。
+- 测试：`python -m unittest discover -s tests -v` → **264 用例**（含 16 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑。
 - GUI 冒烟脚本在 `.tmp/client-work-smoke/`（不在仓库内）：`smoke.py`（登录/房间/聊天/设置）、`smoke_canvas.py`（画板保存/恢复）、`smoke_canvas_map.py`（底图 letterbox/坐标/透明层/图标工具栏/截图）、`smoke_f.py`（昵称/注册规则/资料/房主管理）、`smoke_username_input.py`（输入过滤/粘贴/光标/IME/注册密码边界）、`smoke_my_rooms.py`（我的房间/退出/关闭/空态）、`smoke_create_room.py`（建房实时校验/失败保留表单/密码 4–32）、`smoke_saved_logins.py`（历史账号/重启带出/删除/失败清密码）、`smoke_kick.py`（右键移出/room_kicked 回大厅）、`smoke_member_menu.py`（多成员/长昵称/行高/右键菜单状态/截图）、`live_*.py`（真实后端联调）。
 - 本机沙箱曾把 PySide6 装到 `.tmp/pydeps` 并用 `PYTHONPATH` 跑 GUI；正常开发直接 `pip install -r requirements.txt`。
 
@@ -43,7 +43,7 @@
 
 ## 3. 协议注意事项（画板 D）
 
-1. **坐标**：一律 **0–1 归一化** `{x,y}`；H4 起归一化基准是**底图图片显示区域**（1105×1260 等比 letterbox 后），不是整个视口；坐标换算在 `core/canvas_geometry.py` / `ui/canvas_view.py`。
+1. **坐标**：一律 **0–1 归一化** `{x,y}`；H4/H5 起坐标基准是**画布控件本身**（控件宽高比=底图 1105:1260，控件随宿主等比缩放居中），`x=px/画布宽`、`y=py/画布高`；换算在 `core/canvas_geometry.py` / `ui/canvas_view.py`。
 2. **op**：`stroke{points≤512,color:#RRGGBB,width:1–32,tool:pen|eraser}` 或 `clear`；单笔 >512 点客户端自动分段（相邻段共享端点）。
 3. **rev**：**每连接、每房间**独立单调递增，重连/重进房从 0 重新计数；服务端丢弃 `rev<=上次` 并回 `CANVAS_OUT_OF_ORDER`。客户端对**别人**的 op 按 `(user_id,rev)` 去重；收到 `rev=0` 视为该用户新连接，`user_joined` 时清掉该用户旧水位。
 4. **不回显发送者**：`canvas_op` 广播**不含发送者**；本地绘制必须自己先渲染（`CanvasDocument`），不要等广播。
@@ -92,7 +92,7 @@
 - **H2 历史账号**：`state/saved_logins.py` 存 `%APPDATA%\DeltaClient\saved_logins.json`（`DELTA_SAVED_LOGINS_FILE` 可覆盖），结构 `{version, entries:[{username, secret, saved_at, expires_at, last_used_at}]}`；最多 5 条按 `last_used_at` 倒序。密码用 DPAPI `CryptProtectData`（`CRYPTPROTECT_UI_FORBIDDEN`）加密后 base64 存 `secret`；DPAPI 不可用/失败只存账号，**绝不明文回退**。密码有效期 30 天（`now >= expires_at` 视为过期，29 天可用/30 天过期/31 天过期）；登录成功 upsert 到首位，打开登录页带出最近账号+未过期密码，历史列表可选中/单删/清空；改密成功、登录 AUTH 失败清密码保留账号；退出登录不清历史。
 - **H3 房主移出成员**：成员行改为**右键菜单**（不再行内放按钮）：QListWidget 标准 item + 固定 40px 行高、右侧省略、tooltip 完整昵称、无横向滚动；右键任意位置弹 `QMenu`「移出房间」——房主对非房主启用，自己/非房主 disabled。触发后 MainWindow 二次确认「确定将《昵称》移出房间？」→ `POST /api/v1/rooms/{ref}/kick {"user_id"}`，成功刷新成员并提示、失败保留列表并提示错误。处理 `room_kicked`：当前房间匹配则提示「你已被房主《by.nickname》移出房间」→ 停 WS、清空状态回大厅；其它房间仅提示。他人被踢继续走 `user_left(reason=kicked)`。Mock 增加 `kick_member` 与 `MockWsClient.simulate_room_kicked()`；真实 `POST /kick` 已验证，`room_kicked` 待后台下发。
   - **成员行扁平根因**：上一版自定义行 widget 无 `minimumHeight`，`QListWidgetItem.setSizeHint(row.sizeHint())` 在布局 polish 前取到接近 0 的高度，叠加 `QListWidget::item` 的 QSS `padding:7px`，行高被压到 ~14px，长昵称/按钮又把行撑宽，文字被压扁不可见。现改用标准 item + `QSize(0,40)`，主题增加 `QListWidget#MemberList::item { padding:9px; min-height:40px; }`。
-- **H4 画板底图 + 图标工具栏**：底图 `assets/canvas_map.png`（原图 1105×1260，不重采样；`DELTA_CANVAS_MAP` 可覆盖）。`core/canvas_geometry.fit_rect` 做 letterbox（完整显示/居中/不裁切拉伸），坐标以图片显示区域归一化，图片外按下不绘制。渲染顺序：底图 → 透明笔画层（橡皮 `CompositionMode_Clear`，清空只清层）→ 边框。工具栏在画板底部，7 个 QPainter 矢量图标（画笔/橡皮/颜色/粗细/撤销/重做/清空），44px 等宽铺满，带 tooltip + 快捷键（P/E/C/W/Ctrl+Z/Ctrl+Shift+Z/Ctrl+Delete），画笔/橡皮 checkable 高亮。打包需把 assets 以 add-data 带上（代码兼容 `_MEIPASS/assets`）。
+- **H4 画板底图 + 图标工具栏**：底图 `assets/canvas_map.png`（原图 1105×1260，不重采样；`DELTA_CANVAS_MAP` 可覆盖）。`core/canvas_geometry.fit_aspect_size` 按 `min(可用宽/图宽, 可用高/图高)` 算出画布尺寸；`CanvasHost` 把画布居中，宿主剩余空间普通留白；画布控件宽高比=底图比例，内部底图铺满、无 letterbox/裁切。坐标 0–1 = 控件像素/控件宽高，图外不绘制。渲染顺序：底图 → 透明笔画层（橡皮 `CompositionMode_Clear`，清空只清层）。工具栏在画板底部，7 个 QPainter 矢量图标（画笔/橡皮/颜色/粗细/撤销/重做/清空），44px 等宽铺满，带 tooltip + 快捷键（P/E/C/W/Ctrl+Z/Ctrl+Shift+Z/Ctrl+Delete），画笔/橡皮 checkable 高亮。打包需把 assets 以 add-data 带上（代码兼容 `_MEIPASS/assets`）。
 - **历史窗口**：`ChatPage.window_days` / `truncated` 从历史接口（键名兼容 `window_days/history_window_days/days` 等）或 `room_joined.history_window_days` 读取，UI 提示「仅显示最近 N 天消息」；当前部署两者均未返回，所以默认不提示，后端补字段后自动生效。
 
 ### 通用
@@ -116,7 +116,7 @@
 6. 分页 UI：房间列表只有首屏 `items`。
 7. 设置页可加 WS 连通性测试（现在只测 `/health` 与 rooms）。
 8. 服务端若提供幂等去重（client_msg_id 唯一）可去掉 UI 侧重复消息兜底。
-9. 增加 GUI 自动化测试（pytest-qt 等）——当前 262 个测试中 14 个为 PySide6 组件测试，其余为纯逻辑；复杂交互仍用冒烟脚本验证。
+9. 增加 GUI 自动化测试（pytest-qt 等）——当前 264 个测试中 16 个为 PySide6 组件测试，其余为纯逻辑；复杂交互仍用冒烟脚本验证。
 
 ---
 
