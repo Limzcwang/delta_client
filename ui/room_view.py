@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QFrame,
     QHBoxLayout,
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -108,6 +110,14 @@ class RoomView(QWidget):
         layout.addWidget(self.members_title)
 
         self.member_list = QListWidget()
+        self.member_list.setObjectName("MemberList")
+        self.member_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.member_list.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.member_list.setWordWrap(False)
+        self.member_list.setSpacing(1)
+        self.member_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.member_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.member_list.customContextMenuRequested.connect(self._show_member_menu)
         layout.addWidget(self.member_list, stretch=1)
 
         hint = QLabel("成员优先来自 WS room_joined；WS 丢失时用 HTTP 房间详情兜底")
@@ -293,53 +303,72 @@ class RoomView(QWidget):
     def _render_members(self) -> None:
         self.member_list.clear()
         for member in self._members:
-            row = self._member_row(member)
-            item = QListWidgetItem()
-            item.setSizeHint(row.sizeHint())
+            marker = "●" if member.online else "○"
+            suffixes = []
+            is_owner_member = bool(
+                self._owner_id and str(member.id) == str(self._owner_id)
+            )
+            is_self = bool(self._user_id and str(member.id) == str(self._user_id))
+            if is_owner_member:
+                suffixes.append("房主")
+            if is_self:
+                suffixes.append("我")
+            suffix = f"  [{'/'.join(suffixes)}]" if suffixes else ""
+            text = f"{marker}  {member.display_name}{suffix}"
+            item = QListWidgetItem(text)
+            # 固定行高 + 右侧省略：长昵称不再撑宽/挤压；40px 保证文字可见
+            item.setSizeHint(QSize(0, 40))
+            item.setToolTip(f"{member.display_name}{suffix}")
+            if is_owner_member:
+                item.setForeground(QColor("#ffb61f"))
+            else:
+                item.setForeground(QColor("#6fdc8c" if member.online else "#778696"))
+            item.setData(
+                Qt.ItemDataRole.UserRole,
+                {"id": str(member.id), "nickname": member.display_name},
+            )
             self.member_list.addItem(item)
-            self.member_list.setItemWidget(item, row)
         self.members_title.setText(f"成员 ({len(self._members)})")
         self._refresh_owner_controls()
 
-    def _member_row(self, member: Member) -> QWidget:
-        row = QWidget()
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(4)
-
-        marker = "●" if member.online else "○"
-        suffixes = []
-        is_owner_member = bool(self._owner_id and str(member.id) == str(self._owner_id))
-        is_self = bool(self._user_id and str(member.id) == str(self._user_id))
-        if is_owner_member:
-            suffixes.append("房主")
-        if is_self:
-            suffixes.append("我")
-        suffix = f"  [{'/'.join(suffixes)}]" if suffixes else ""
-        label = QLabel(f"{marker}  {member.display_name}{suffix}")
-        if is_owner_member:
-            label.setStyleSheet("color: #ffb61f;")
-        else:
-            label.setStyleSheet(f"color: {'#6fdc8c' if member.online else '#778696'};")
-        layout.addWidget(label, stretch=1)
-
-        # H3：仅房主可见非房主成员的「移出」按钮（自己/房主本人没有）
-        is_current_owner = bool(
+    def _is_current_owner(self) -> bool:
+        return bool(
             self._user_id and self._owner_id and str(self._user_id) == str(self._owner_id)
         )
-        if is_current_owner and not is_owner_member and not is_self and member.id:
-            button = QPushButton("移出")
-            button.setObjectName("Link")
-            button.setProperty("user_id", str(member.id))
-            button.setProperty("nickname", member.display_name)
-            button.setToolTip(f"将 {member.display_name} 移出房间")
-            button.clicked.connect(
-                lambda _checked=False, uid=str(member.id), name=member.display_name: (
-                    self.kick_requested.emit(uid, name)
-                )
-            )
-            layout.addWidget(button)
-        return row
+
+    def _target_is_self(self, user_id: str) -> bool:
+        return bool(self._user_id and str(user_id) == str(self._user_id))
+
+    def build_member_menu(self, item: QListWidgetItem) -> QMenu:
+        """H3：成员行右键菜单；当前只有「移出房间」（无行内按钮）。"""
+        data = item.data(Qt.ItemDataRole.UserRole) or {}
+        user_id = str(data.get("id") or "")
+        nickname = str(data.get("nickname") or "")
+        menu = QMenu(self)
+        action = menu.addAction("移出房间")
+        enabled = bool(
+            self._is_current_owner()
+            and user_id
+            and not self._target_is_self(user_id)
+            and user_id != str(self._owner_id)
+        )
+        action.setEnabled(enabled)
+        action.setToolTip("仅房主可移出其他成员" if not enabled else "")
+        action.triggered.connect(
+            lambda _checked=False, uid=user_id, name=nickname: self.kick_requested.emit(uid, name)
+        )
+        return menu
+
+    def _show_member_menu(self, pos) -> None:  # noqa: ANN001 - Qt QPoint
+        item = self.member_list.itemAt(pos)
+        if item is None:
+            return
+        menu = self.build_member_menu(item)
+        menu.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        menu.exec(self.member_list.viewport().mapToGlobal(pos))
+        menu.deleteLater()
+        # 菜单关闭后不把焦点留在成员列表/菜单上
+        self.member_list.clearFocus()
 
     def _refresh_owner_controls(self) -> None:
         """F：房主标识 + 仅房主显示「房间设置」。"""

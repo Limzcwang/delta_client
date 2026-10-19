@@ -156,6 +156,7 @@ QListWidget {
     outline: none;
 }
 QListWidget::item { padding: 7px 9px; border-bottom: 1px solid #1a212b; }
+QListWidget#MemberList::item { padding: 9px; min-height: 40px; }
 QListWidget::item:selected { background-color: #3a2f18; color: #ffd071; }
 QScrollBar:vertical {
     background-color: #151a21;
