@@ -26,12 +26,13 @@
 | 房主管理（F） | 房主房间内「房间设置」：改房间名（1–30）、改私有房密码（4–32）、删除房间（输入房间名二次确认）；处理 `room_updated`/`room_deleted` 实时事件 |
 | 历史窗口（F） | 兼容历史接口 `window_days` / `truncated` 字段，提示「仅显示最近 N 天消息」 |
 | 房间内页 | 成员列表（WS `room_joined` + HTTP 房间详情兜底）、聊天、共享画板 |
+| 房主移出（H3） | 仅房主可见非房主成员的「移出」按钮；二次确认后 `POST /rooms/{ref}/kick`；成功刷新成员并提示，失败按错误码提示；处理 `room_kicked` 定向事件（自己被踢则提示并回大厅），他人被踢走 `user_left(reason=kicked)` |
 | 聊天（C） | 发送 `chat_send`（带 `room_id` / `client_msg_id`）、`chat_message` 广播认领（发送中→已发送、不重复插入）、失败标红双击重试（复用 `client_msg_id`）、进房拉最近 50 条、上滚 `next_before` 续拉 |
 | 画板（D） | 1920×1080 逻辑画布（0–1 归一化坐标）、画笔/橡皮/颜色/粗细、清空、本地撤销/重做；`canvas_op` 增量（≤512 点自动分段、30 条/秒本地节流）、`room_joined.canvas_snapshot` 初始化（缺失/空时 HTTP fallback）、`(user_id,rev)` 丢弃旧包、离开/关窗前 `canvas_snapshot_save` 等 ack、快照上限 5000 笔/512KB |
 | 连通性测试 | 设置页「测试连接」：探测 `/health` + `/api/v1/rooms?page=1`，分别报告可达/鉴权失效/超时/网络错误 |
 | 协议对齐 | PROTOCOL C/D 定稿：`data.error_code`、§7.2/§7.3 实名错误码、WS `room_id_or_code`、聊天字段、画板 `rev`/快照语义 |
 | Mock | `--mock` / `DELTA_MOCK=1`：内置内存后端（昵称/聊天历史/画板快照/房主管理/我的房间），可完整离线演示 |
-| 测试 | 240 个 stdlib unittest（含 4 个 PySide6 对话框测试），离线可跑 |
+| 测试 | 247 个 stdlib unittest（含 7 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑 |
 
 ---
 
@@ -196,6 +197,8 @@ python -m unittest discover -s tests -v
 | 修改房间（F） | `PATCH /api/v1/rooms/{room_id_or_code}` | 房主：`{name?}` / `{password?}`（公开房不允许设密码，服务端 `ROOM_PASSWORD_NOT_ALLOWED`）；响应 `data.room` |
 | 删除房间（F） | `DELETE /api/v1/rooms/{room_id_or_code}` | 房主：关闭房间并摘除成员会话；响应 `{closed:true}` |
 | 房间事件（F） | WS `room_updated` / `room_deleted` | 实时更新房名/密码状态；删除后提示并退回大厅 |
+| 移出成员（H3） | `POST /api/v1/rooms/{room_id_or_code}/kick` | body `{"user_id": <成员id>}`；房主专用，错误码 `NOT_ROOM_OWNER`/`MEMBER_NOT_FOUND`/`CANNOT_KICK_OWNER`；成功响应含最新 `members` |
+| 被踢事件（H3） | WS `room_kicked` | `{room_id, room_code, by:{id,nickname}, reason:"kicked"}`；当前房间被踢时提示、清空房间状态并回大厅 |
 | 修改昵称（F） | `PATCH /api/v1/users/me` | body `{"nickname": "新昵称"}`；响应 `{"user": {...}}`；成功后本地立即更新展示、保持登录 |
 | 修改密码（F） | `POST /api/v1/users/me/password` | body `{"old_password","new_password"}`；旧密码错 `WRONG_OLD_PASSWORD`、新密码不合规 `INVALID_NEW_PASSWORD`（8–32，前端先校验）；成功后 token 继续有效 |
 | 心跳 | WS `ping` / 服务端 `heartbeat` | 服务端每 30s 下发；客户端 25s ping，90s 无消息判定失联 |
@@ -254,6 +257,7 @@ python -m unittest discover -s tests -v
 - 修改密码走 `POST /users/me/password`（8–32 位且新旧不同，前端先校验，后端错误 `WRONG_OLD_PASSWORD`/`INVALID_NEW_PASSWORD` 直接展示）；修改昵称走 `PATCH /users/me`，成功后立即更新本地展示（含聊天历史中自己的名字），不退出登录；
 - 房主改房名 1–30、私有房密码 4–32；删除房间必须原样输入房间名确认；非房主看不到入口（服务端仍会校验）；
 - 我的房间（H1）接口未上线前 Mock 可完整演示；真实接口 `/api/v1/rooms/mine` 当前 404，上线后按 PROTOCOL 联调；退出/关闭后立即本地移除，失败保留行并提示；
+- 房主移出（H3）：真实 `POST /rooms/{ref}/kick` 已用 QA 双账号验证（成员被移除、返回最新 members）；`room_kicked` 定向事件当前未下发，待后端补；客户端已实现提示+回大厅，Mock 可演示；
 - 大厅自动刷新仅在大厅可见且窗口有焦点时运行；失败按 5→10→20s 退避；手动刷新会重置退避；
 - 历史窗口提示依赖后端返回 `window_days`/`truncated`（字段名兼容多种写法）；未返回时按普通历史展示；
 - 画板 undo/redo 为**纯本地**（服务端无 undo，队友不会看到撤销，保存快照后才持久化）；`clear` 为全房间生效；
@@ -264,7 +268,7 @@ python -m unittest discover -s tests -v
 - 断线重连后自动重新 `join_room`，画板以 `room_joined.canvas_snapshot` 为准（不保留旧增量）；
 - 离开房间/退出登录/关闭窗口会先保存画板快照、再发 WS `leave_room` 与 HTTP leave；
 - 设置页「测试连接」使用当前登录 token 探测 `/health` 与 `/api/v1/rooms?page=1`，未登录时会显示鉴权失效；
-- Mock 后端只用于演示，不模拟限频/多客户端/持久化（但包含昵称、聊天历史、画板快照、房主管理，可离线演示）；
+- Mock 后端只用于演示，不模拟限频/多客户端/持久化（但包含昵称、聊天历史、画板快照、房主管理、我的房间、踢人/room_kicked，可离线演示）；
 - 若后端返回的登录响应没有 token，界面会提示并进入“无 JWT 兼容模式”（聊天仅本地回显）。
 
 ---

@@ -523,6 +523,40 @@ class MockApiClient:
             payload["has_password"] = True
         return Room.from_api(_copy_room_payload(payload))
 
+    async def kick_member(self, room_id_or_code: str, user_id: str) -> dict[str, Any]:
+        """Mock H3：房主移出成员。"""
+        await self._tick()
+        payload = self._find_room(room_id_or_code)
+        if payload is None:
+            raise ApiError(ErrorKind.ROOM_NOT_FOUND, "房间不存在或已关闭", status=404, code=40402)
+        self._require_owner(payload)
+        code = str(payload["code"])
+        members = self._room_members.get(code, [])
+        target = next(
+            (item for item in members if str(item.get("id")) == str(user_id)), None
+        )
+        if target is None:
+            raise ApiError(
+                ErrorKind.NOT_FOUND, "目标成员不存在", status=404, code="MEMBER_NOT_FOUND"
+            )
+        if str(target.get("id")) == str(payload.get("owner_id")):
+            raise ApiError(
+                ErrorKind.FORBIDDEN, "不能移出房主", status=403, code="CANNOT_KICK_OWNER"
+            )
+        if str(target.get("id")) == str((self._current_user or {}).get("id")):
+            raise ApiError(
+                ErrorKind.VALIDATION, "不能移出自己", status=400, code="CANNOT_KICK_SELF"
+            )
+        self._room_members[code] = [
+            item for item in members if str(item.get("id")) != str(user_id)
+        ]
+        payload["member_count"] = len(self._room_members[code])
+        target_name = str(target.get("username") or "")
+        if target_name:
+            self._memberships.discard((target_name, code))
+            self._joined_at.pop((target_name, code), None)
+        return {"kicked": True, "user": dict(target)}
+
     async def delete_room(self, room_id_or_code: str) -> bool:
         """Mock 房主删除房间（F）。"""
         await self._tick()
@@ -826,6 +860,20 @@ class MockWsClient:
         }
         self._emit(ack)
         return ack
+
+    def simulate_room_kicked(
+        self, by: Mapping[str, Any] | None = None, reason: str = "kicked"
+    ) -> None:
+        """Mock H3：模拟服务端向本连接下发 ``room_kicked``（GUI 冒烟用）。"""
+        room = self.room
+        payload = {
+            "type": protocol.WS_ROOM_KICKED,
+            "room_id": str(room.id) if room is not None else "",
+            "room_code": str(room.code) if room is not None else "",
+            "by": dict(by) if isinstance(by, Mapping) else {"id": "", "nickname": "房主"},
+            "reason": reason,
+        }
+        self._emit(payload)
 
     async def leave_room(self, room_id_or_code: str) -> bool:
         return True

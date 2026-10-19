@@ -179,6 +179,7 @@ class MainWindow(QMainWindow):
         self.room_view.history_requested.connect(self._on_history_requested)
         self.room_view.retry_requested.connect(self._on_retry_chat)
         self.room_view.room_settings_requested.connect(self._on_room_settings)
+        self.room_view.kick_requested.connect(self._on_kick_requested)
         self.room_view.canvas.stroke_finished.connect(self._on_canvas_strokes)
         self.room_view.canvas.clear_requested.connect(self._on_canvas_clear_requested)
 
@@ -885,9 +886,15 @@ class MainWindow(QMainWindow):
                 self._refresh_members_http(self._current_room, fallback=True)
 
     def _on_ws_message(self, generation: int, message: Mapping[str, Any]) -> None:
-        if generation != self._ws_generation or self._current_room is None:
+        if generation != self._ws_generation:
             return
         mtype = message_type(message)
+        # H3：定向移出事件即使当前无房间也要提示；带房间匹配逻辑在 handler 内
+        if mtype == "room_kicked":
+            self._on_room_kicked(message)
+            return
+        if self._current_room is None:
+            return
         if mtype == "room_joined":
             payload = message.get("room")
             if isinstance(payload, Mapping):
@@ -946,6 +953,80 @@ class MainWindow(QMainWindow):
         elif mtype == "skill_state":
             return  # E 占位
         # 未知类型按协议要求直接忽略
+
+    # ---------- H3：房主移出成员 / room_kicked ----------
+    def _on_kick_requested(self, user_id: str, nickname: str) -> None:
+        room = self._current_room
+        if room is None:
+            return
+        if not (self._user_id() and str(room.owner_id) == self._user_id()):
+            self.room_view.set_status("只有房主可以移出成员", error=True)
+            return
+        answer = QMessageBox.question(
+            self,
+            "移出成员",
+            f"确定将《{nickname}》移出房间？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.room_view.set_status(f"正在移出《{nickname}》…")
+        self._safe_submit(
+            self.api.kick_member(room.code or room.id, user_id),
+            lambda _result: self._on_member_kicked(room, nickname),
+            lambda exc: self._on_kick_failed(exc, nickname),
+        )
+
+    def _on_member_kicked(self, room: Room, nickname: str) -> None:
+        current = self._current_room
+        if current is None or not self._room_matches_my_room(
+            current, MyRoom(id=room.id, code=room.code)
+        ):
+            return
+        self.room_view.set_status(f"已移出《{nickname}》")
+        self._refresh_members_http(room, fallback=False)
+
+    def _on_kick_failed(self, exc: BaseException, nickname: str) -> None:
+        if isinstance(exc, ApiError) and exc.is_auth_error:
+            self._handle_auth_expired(exc)
+            return
+        self.room_view.set_status(
+            f"移出《{nickname}》失败：{to_user_message(exc)}", error=True
+        )
+
+    def _on_room_kicked(self, message: Mapping[str, Any]) -> None:
+        by = message.get("by")
+        by_name = (
+            Member.from_api(by).display_name
+            if isinstance(by, Mapping)
+            else str(by or "房主")
+        )
+        text = f"你已被房主《{by_name}》移出房间"
+        room = self._current_room
+        if room is None:
+            self._set_status(text)
+            return
+        refs = {
+            str(value)
+            for value in (
+                message.get("room_id"),
+                message.get("room_code"),
+            )
+            if value
+        }
+        if not (
+            (room.id and room.id in refs) or (room.code and room.code in refs)
+        ):
+            self._set_status(text)
+            return
+        QMessageBox.warning(self, "已被移出房间", text)
+        self._stop_ws()
+        self._current_room = None
+        self._room_password = None
+        self._clear_room_state()
+        self._set_status(text)
+        self._show_rooms()
 
     # ---------- 聊天 ----------
     def _system_message(self, text: str) -> None:
