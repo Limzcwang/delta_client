@@ -115,6 +115,17 @@ QPushButton#Primary {
 QPushButton#Primary:hover { background-color: #ffb61f; }
 QPushButton#Primary:pressed { background-color: #d89300; }
 QPushButton#Primary:disabled { background-color: #5a5138; color: #9a9070; }
+QToolButton#CanvasTool {
+    background-color: #222b36;
+    border: 1px solid #2c3745;
+    border-radius: 8px;
+    padding: 4px;
+}
+QToolButton#CanvasTool:hover { background-color: #2f3c4e; border-color: #4a5c72; }
+QToolButton#CanvasTool:checked {
+    background-color: #3a2f18;
+    border: 2px solid #ffb61f;
+}
 QPushButton#Danger {
     background-color: #3a1f1d;
     border: 1px solid #6d2f2a;

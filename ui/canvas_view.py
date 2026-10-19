@@ -1,33 +1,55 @@
-"""共享画板控件（D）：1920×1080 逻辑画布、归一化坐标、画笔/橡皮/清空/撤销重做。"""
+"""共享画板控件（D/H4）：底图 letterbox、图片区域归一化、透明笔画层、图标工具栏。"""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent, QPen
+import sys
+from pathlib import Path
+
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QImage, QKeySequence, QMouseEvent, QPainter, QPaintEvent, QPen
 from PySide6.QtWidgets import (
     QColorDialog,
     QHBoxLayout,
     QLabel,
-    QPushButton,
-    QSpinBox,
+    QSizePolicy,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from core.canvas import (
-    CANVAS_HEIGHT,
-    CANVAS_WIDTH,
     DEFAULT_COLOR,
     DEFAULT_WIDTH,
     CanvasDocument,
 )
+from core.canvas_geometry import (
+    AspectSize,
+    canvas_to_normalized,
+    fit_aspect_size,
+    normalized_to_canvas,
+)
+from ui.canvas_icons import make_tool_icon
 
-CANVAS_BG = QColor("#f7f8fa")
-CANVAS_BORDER = QColor("#364252")
+#: 内置底图尺寸兜底（assets/canvas_map.png 实际 1105×1260）
+MAP_WIDTH = 1105
+MAP_HEIGHT = 1260
+CANVAS_BG = QColor("#10151c")
+_MAP_RELATIVE = Path("assets") / "canvas_map.png"
+
+
+def map_asset_path() -> Path:
+    """底图路径：环境变量优先；PyInstaller 下取 _MEIPASS/assets。"""
+    import os
+
+    override = str(os.environ.get("DELTA_CANVAS_MAP", "") or "").strip()
+    if override:
+        return Path(override).expanduser()
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
+    return base / _MAP_RELATIVE
 
 
 class CanvasSurface(QWidget):
-    """可绘制表面：把鼠标坐标换算为 0–1 归一化坐标，渲染笔画。"""
+    """底图 + 透明笔画层：坐标以图片显示区域为 0–1 基准。"""
 
     stroke_finished = Signal(list)  # list[dict]：已按 512 点分段后的 op
 
@@ -39,36 +61,34 @@ class CanvasSurface(QWidget):
         self.stroke_width = DEFAULT_WIDTH
         self._drawing = False
         self._points: list[QPointF] = []
+        self.map_pixmap = self._load_map()
+        if self.map_pixmap is not None and not self.map_pixmap.isNull():
+            self.map_size = (self.map_pixmap.width(), self.map_pixmap.height())
+        else:
+            self.map_size = (MAP_WIDTH, MAP_HEIGHT)
         self.setMinimumSize(280, 220)
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.CrossCursor)
 
+    @staticmethod
+    def _load_map():
+        from PySide6.QtGui import QPixmap
+
+        path = map_asset_path()
+        pixmap = QPixmap(str(path))
+        return pixmap if not pixmap.isNull() else QPixmap()
+
     # ---------- 坐标换算 ----------
     def canvas_rect(self) -> QRectF:
-        """在控件中心按 16:9 等比缩放画布区域。"""
-        width = float(self.width())
-        height = float(self.height())
-        target_ratio = CANVAS_WIDTH / CANVAS_HEIGHT
-        if width / height > target_ratio:
-            draw_height = height
-            draw_width = height * target_ratio
-        else:
-            draw_width = width
-            draw_height = width / target_ratio
-        left = (width - draw_width) / 2.0
-        top = (height - draw_height) / 2.0
-        return QRectF(left, top, draw_width, draw_height)
+        """画布控件内部就是底图，无 letterbox/裁切；整块控件即图片区域。"""
+        return QRectF(0.0, 0.0, float(self.width()), float(self.height()))
 
     def _to_normalized(self, position: QPointF) -> tuple[float, float] | None:
-        rect = self.canvas_rect()
-        if not rect.contains(position):
-            return None
-        x = (position.x() - rect.left()) / rect.width()
-        y = (position.y() - rect.top()) / rect.height()
-        return (min(max(x, 0.0), 1.0), min(max(y, 0.0), 1.0))
+        return canvas_to_normalized(position.x(), position.y(), self.width(), self.height())
 
     def _to_widget(self, rect: QRectF, x: float, y: float) -> QPointF:
-        return QPointF(rect.left() + x * rect.width(), rect.top() + y * rect.height())
+        px, py = normalized_to_canvas(x, y, rect.width(), rect.height())
+        return QPointF(px, py)
 
     # ---------- 交互 ----------
     def set_tool(self, tool: str) -> None:
@@ -84,7 +104,7 @@ class CanvasSurface(QWidget):
         if event.button() != Qt.MouseButton.LeftButton:
             return
         point = self._to_normalized(event.position())
-        if point is None:
+        if point is None:  # 指针不在图片显示区域（cover 下通常整个视口都可画）
             return
         self._drawing = True
         self._points = [QPointF(point[0], point[1])]
@@ -97,8 +117,11 @@ class CanvasSurface(QWidget):
         if point is None:
             return
         last = self._points[-1]
-        # 过滤过密采样点，减少 op 大小
-        if abs(last.x() - point[0]) * CANVAS_WIDTH < 1.0 and abs(last.y() - point[1]) * CANVAS_HEIGHT < 1.0:
+        # 过滤过密采样点：按画布宽度换算 1px
+        if (
+            abs(last.x() - point[0]) * self.width() < 1.0
+            and abs(last.y() - point[1]) * self.height() < 1.0
+        ):
             return
         self._points.append(QPointF(point[0], point[1]))
         self.update()
@@ -119,46 +142,71 @@ class CanvasSurface(QWidget):
             self.stroke_finished.emit(ops)
 
     # ---------- 渲染 ----------
+    def _paint_layer(self, layer: QImage, rect: QRectF) -> None:
+        painter = QPainter(layer)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setClipRect(rect)
+        scale = rect.width() / max(1, self.map_size[0])
+        for op in self.document.ops:
+            self._paint_stroke(painter, rect, op, scale)
+        if self._drawing and self._points:
+            self._paint_stroke(
+                painter,
+                rect,
+                {
+                    "tool": self.tool,
+                    "color": self.color,
+                    "width": self.stroke_width,
+                    "points": [{"x": p.x(), "y": p.y()} for p in self._points],
+                },
+                scale,
+            )
+        painter.end()
+
+    def _paint_stroke(self, painter: QPainter, rect: QRectF, op, scale: float) -> None:
+        if op.get("kind") not in (None, "stroke"):
+            return
+        points = op.get("points") or []
+        if not points:
+            return
+        eraser = op.get("tool") == "eraser"
+        # 关键：底图存在时橡皮不再涂背景色，而是在透明层上 Clear
+        painter.setCompositionMode(
+            QPainter.CompositionMode.CompositionMode_Clear
+            if eraser
+            else QPainter.CompositionMode.CompositionMode_SourceOver
+        )
+        color = QColor(0, 0, 0, 0) if eraser else QColor(op.get("color", DEFAULT_COLOR))
+        width = max(1.0, float(op.get("width", DEFAULT_WIDTH)) * scale)
+        pen = QPen(color, width)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        path = [self._to_widget(rect, float(p["x"]), float(p["y"])) for p in points]
+        if len(path) == 1:
+            painter.drawPoint(path[0])
+        else:
+            painter.drawPolyline(path)
+
     def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.fillRect(self.rect(), QColor("#151a21"))
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        painter.fillRect(self.rect(), CANVAS_BG)
 
         rect = self.canvas_rect()
-        painter.fillRect(rect, CANVAS_BG)
-        painter.setPen(QPen(CANVAS_BORDER, 1))
-        painter.drawRect(rect)
+        if not self.map_pixmap.isNull():
+            painter.drawPixmap(rect, self.map_pixmap, QRectF(self.map_pixmap.rect()))
+        else:
+            painter.fillRect(rect, QColor("#f7f8fa"))
 
-        scale = rect.width() / CANVAS_WIDTH
-        for op in self.document.ops:
-            if op.get("kind") != "stroke":
-                continue
-            points = op.get("points") or []
-            if not points:
-                continue
-            color = QColor(op.get("tool") == "eraser" and CANVAS_BG.name() or op.get("color", DEFAULT_COLOR))
-            width = max(1.0, float(op.get("width", DEFAULT_WIDTH)) * scale)
-            pen = QPen(color, width)
-            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-            painter.setPen(pen)
-            path = [self._to_widget(rect, float(p["x"]), float(p["y"])) for p in points]
-            if len(path) == 1:
-                painter.drawPoint(path[0])
-            else:
-                painter.drawPolyline(path)
-
-        # 正在绘制的临时笔画
-        if self._drawing and self._points:
-            pen = QPen(
-                QColor(CANVAS_BG.name() if self.tool == "eraser" else self.color),
-                max(1.0, float(self.stroke_width) * scale),
-            )
-            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-            painter.setPen(pen)
-            painter.drawPolyline(
-                [self._to_widget(rect, p.x(), p.y()) for p in self._points]
-            )
+        # 笔画画在透明层，橡皮 Clear 该层，最后叠加到底图上
+        layer = QImage(self.size(), QImage.Format.Format_ARGB32_Premultiplied)
+        layer.fill(Qt.GlobalColor.transparent)
+        self._paint_layer(layer, rect)
+        painter.setClipRect(rect)
+        painter.drawImage(0, 0, layer)
+        painter.setClipping(False)
 
     # ---------- 对外操作 ----------
     def draw_stroke(
@@ -208,11 +256,34 @@ class CanvasSurface(QWidget):
         return self.document.snapshot_strokes()
 
 
+class CanvasHost(QWidget):
+    """宿主：按底图宽高比等比计算画布尺寸，居中放置；剩余区域由普通背景留白。"""
+
+    def __init__(self, surface: CanvasSurface, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.surface = surface
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(surface, alignment=Qt.AlignmentFlag.AlignCenter)
+        self.setMinimumHeight(220)
+
+    def size_for_space(self, width: int, height: int) -> AspectSize:
+        return fit_aspect_size(width, height, *self.surface.map_size)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt 覆盖
+        super().resizeEvent(event)
+        target = self.size_for_space(self.width(), self.height())
+        self.surface.setFixedSize(max(1, int(target.width)), max(1, int(target.height)))
+
+
 class CanvasView(QWidget):
-    """画板面板：工具栏 + 绘制表面。"""
+    """画板面板：底部图标工具栏 + 带底图的绘制表面。"""
 
     stroke_finished = Signal(list)
     clear_requested = Signal()
+
+    _WIDTHS = (2, 4, 6, 8, 12)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -228,39 +299,35 @@ class CanvasView(QWidget):
         title.setObjectName("SectionTitle")
         layout.addWidget(title)
 
-        toolbar = QHBoxLayout()
-        toolbar.setSpacing(6)
-        self.pen_button = QPushButton("画笔")
-        self.pen_button.setCheckable(True)
-        self.pen_button.setChecked(True)
-        self.eraser_button = QPushButton("橡皮")
-        self.eraser_button.setCheckable(True)
-        self.color_button = QPushButton("颜色")
-        self.color_button.setStyleSheet(
-            f"QPushButton {{ border: 2px solid {DEFAULT_COLOR}; }}"
-        )
-        self.width_spin = QSpinBox()
-        self.width_spin.setRange(1, 32)
-        self.width_spin.setValue(DEFAULT_WIDTH)
-        self.width_spin.setPrefix("粗细 ")
-        self.undo_button = QPushButton("撤销")
-        self.redo_button = QPushButton("重做")
-        self.clear_button = QPushButton("清空")
-        self.clear_button.setObjectName("Danger")
+        self.surface = CanvasSurface()
+        self.host = CanvasHost(self.surface)
+        layout.addWidget(self.host, stretch=1)
 
-        toolbar.addWidget(self.pen_button)
-        toolbar.addWidget(self.eraser_button)
-        toolbar.addWidget(self.color_button)
-        toolbar.addWidget(self.width_spin)
-        toolbar.addWidget(self.undo_button)
-        toolbar.addWidget(self.redo_button)
-        toolbar.addWidget(self.clear_button)
+        toolbar = QHBoxLayout()
+        toolbar.setContentsMargins(0, 0, 0, 0)
+        toolbar.setSpacing(4)
+        self.pen_button = self._tool_button("pen", "画笔 (P)", "P", checkable=True)
+        self.eraser_button = self._tool_button("eraser", "橡皮 (E)", "E", checkable=True)
+        self.color_button = self._tool_button("palette", "颜色 (C)", "C")
+        self.width_button = self._tool_button("width", f"粗细 (W)：{self.surface.stroke_width}", "W")
+        self.undo_button = self._tool_button("undo", "撤销 (Ctrl+Z)", "Ctrl+Z")
+        self.redo_button = self._tool_button("redo", "重做 (Ctrl+Shift+Z)", "Ctrl+Shift+Z")
+        self.clear_button = self._tool_button("trash", "清空画板 (Ctrl+Delete)", "Ctrl+Delete")
+        self.pen_button.setChecked(True)
+        self.tool_buttons = [
+            self.pen_button,
+            self.eraser_button,
+            self.color_button,
+            self.width_button,
+            self.undo_button,
+            self.redo_button,
+            self.clear_button,
+        ]
+        for button in self.tool_buttons:
+            toolbar.addWidget(button, stretch=1)
         layout.addLayout(toolbar)
 
-        self.surface = CanvasSurface()
-        layout.addWidget(self.surface, stretch=1)
-
-        hint = QLabel("逻辑画布 1920×1080 · 协议坐标 0–1 · 撤销/重做仅本地 · 离开房间时自动保存快照")
+        hint = QLabel("画布随底图 1105×1260 等比缩放（外部留白）· 坐标以画布 0–1 · 撤销/重做仅本地")
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -268,10 +335,26 @@ class CanvasView(QWidget):
         self.pen_button.clicked.connect(lambda: self._select_tool("pen"))
         self.eraser_button.clicked.connect(lambda: self._select_tool("eraser"))
         self.color_button.clicked.connect(self._pick_color)
-        self.width_spin.valueChanged.connect(self.surface.set_width)
+        self.width_button.clicked.connect(self._cycle_width)
         self.undo_button.clicked.connect(self._undo)
         self.redo_button.clicked.connect(self._redo)
         self.clear_button.clicked.connect(self._clear)
+
+    def _tool_button(
+        self, kind: str, tooltip: str, shortcut: str, *, checkable: bool = False
+    ) -> QToolButton:
+        button = QToolButton()
+        button.setObjectName("CanvasTool")
+        button.setToolTip(tooltip)
+        button.setIcon(make_tool_icon(kind))
+        button.setIconSize(QSize(26, 26))
+        button.setFixedHeight(44)
+        button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        button.setCheckable(checkable)
+        if checkable:
+            button.setAutoExclusive(False)
+        button.setShortcut(QKeySequence(shortcut))
+        return button
 
     # ---------- 工具栏 ----------
     def _select_tool(self, tool: str) -> None:
@@ -283,9 +366,16 @@ class CanvasView(QWidget):
         color = QColorDialog.getColor(QColor(self.surface.color), self, "选择画笔颜色")
         if color.isValid():
             self.surface.set_color(color.name().upper())
-            self.color_button.setStyleSheet(
-                f"QPushButton {{ border: 2px solid {color.name().upper()}; }}"
-            )
+            self.color_button.setIcon(make_tool_icon("palette", color.name().upper()))
+
+    def _cycle_width(self) -> None:
+        widths = list(self._WIDTHS)
+        current = self.surface.stroke_width
+        index = widths.index(current) if current in widths else -1
+        next_width = widths[(index + 1) % len(widths)]
+        self.surface.set_width(next_width)
+        self.width_button.setIcon(make_tool_icon("width", width=next_width))
+        self.width_button.setToolTip(f"粗细 (W)：{next_width}")
 
     def _undo(self) -> None:
         self.surface.undo()

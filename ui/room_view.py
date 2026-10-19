@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMenu,
     QPushButton,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
 from core.chat import STATUS_FAILED, STATUS_PENDING, ChatEntry
 from core.models import Member, Room
 from ui.canvas_view import CanvasView
+from ui.skill_panel import SkillPanel
 
 
 class RoomView(QWidget):
@@ -90,7 +92,7 @@ class RoomView(QWidget):
         body.setSpacing(12)
         body.addWidget(self._build_members_panel(), stretch=0)
         body.addWidget(self._build_chat_panel(), stretch=1)
-        body.addWidget(self._build_canvas_panel(), stretch=0)
+        body.addWidget(self._build_side_panel(), stretch=0)
         root.addLayout(body, stretch=1)
 
         self.status_label = QLabel("")
@@ -160,10 +162,18 @@ class RoomView(QWidget):
         layout.addLayout(input_row)
         return panel
 
+    def _build_side_panel(self) -> QWidget:
+        self.side_tabs = QTabWidget()
+        self.side_tabs.setFixedWidth(400)
+        self.canvas_panel = self._build_canvas_panel()
+        self.skill_panel = SkillPanel()
+        self.side_tabs.addTab(self.canvas_panel, "画板")
+        self.side_tabs.addTab(self.skill_panel, "技能")
+        return self.side_tabs
+
     def _build_canvas_panel(self) -> QWidget:
         panel = QFrame()
         panel.setObjectName("Card")
-        panel.setFixedWidth(400)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(8)
@@ -171,7 +181,7 @@ class RoomView(QWidget):
         self.canvas = CanvasView()
         layout.addWidget(self.canvas, stretch=1)
 
-        note = QLabel("技能 CD 共享（E）仍为占位；截屏与识别只会在本机进行")
+        note = QLabel("截屏与识别只会在本机进行")
         note.setObjectName("Hint")
         note.setWordWrap(True)
         layout.addWidget(note)
