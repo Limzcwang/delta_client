@@ -62,7 +62,48 @@ class LoadConfigTests(unittest.TestCase):
         self.assertFalse(cfg.use_mock)
         self.assertFalse(cfg.persist_token)
         self.assertEqual(cfg.source, "default")
-        self.assertEqual(cfg.effective_ws_url, "ws://127.0.0.1:8000/ws")
+        self.assertEqual(cfg.effective_ws_url, "wss://deltachat.icu:8443/ws")
+
+    def test_legacy_http_default_migrates_to_https(self) -> None:
+        self._write(
+            {
+                "server_url": "http://114.132.161.169:8000",
+                "mock": True,
+                "operator_id": "honglang",
+                "request_timeout": 20,
+            }
+        )
+        cfg = load_config(path=self.config_path, env={})
+        self.assertTrue(cfg.server_migrated)
+        self.assertEqual(cfg.server_url, DEFAULT_SERVER_URL)
+        self.assertTrue(cfg.use_mock)
+        self.assertEqual(cfg.operator_id, "honglang")
+        self.assertEqual(cfg.request_timeout, 20.0)
+        self.assertEqual(cfg.effective_ws_url, "wss://deltachat.icu:8443/ws")
+        saved = json.loads(self.config_path.read_text(encoding="utf-8"))
+        self.assertEqual(DEFAULT_SERVER_URL, saved["server_url"])
+        self.assertTrue(saved["mock"])
+        self.assertEqual("honglang", saved["operator_id"])
+
+    def test_legacy_ws_url_removed(self) -> None:
+        self._write(
+            {
+                "server_url": "http://114.132.161.169:8000",
+                "ws_url": "ws://114.132.161.169:8000/ws",
+            }
+        )
+        cfg = load_config(path=self.config_path, env={})
+        self.assertIsNone(cfg.ws_url)
+        self.assertEqual(cfg.effective_ws_url, "wss://deltachat.icu:8443/ws")
+
+    def test_custom_server_not_migrated(self) -> None:
+        self._write({"server_url": "http://manual-host:8000", "operator_id": "weilong"})
+        before = self.config_path.read_text(encoding="utf-8")
+        cfg = load_config(path=self.config_path, env={})
+        self.assertFalse(cfg.server_migrated)
+        self.assertEqual("http://manual-host:8000", cfg.server_url)
+        self.assertEqual("weilong", cfg.operator_id)
+        self.assertEqual(before, self.config_path.read_text(encoding="utf-8"))
 
     def test_file_values_are_loaded(self) -> None:
         self._write(

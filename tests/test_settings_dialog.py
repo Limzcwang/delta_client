@@ -46,7 +46,7 @@ class SettingsOperatorTests(unittest.TestCase):
 
     def test_dropdown_has_16_operators_and_selects_saved(self) -> None:
         dialog = self._dialog("weilong")
-        self.assertEqual(3, dialog.tabs.count())
+        self.assertEqual(4, dialog.tabs.count())
         self.assertEqual(17, dialog.operator_combo.count())
         self.assertEqual("weilong", dialog.operator_combo.currentData())
         self.assertIn("威龙", dialog.operator_combo.currentText())
@@ -54,8 +54,36 @@ class SettingsOperatorTests(unittest.TestCase):
         from PySide6.QtWidgets import QLabel
 
         self.assertTrue(
-            any("版本 v0.1.0" in label.text() for label in dialog.findChildren(QLabel))
+            any("版本 v0.1.2" in label.text() for label in dialog.findChildren(QLabel))
         )
+
+    def test_config_center_labels_and_check_button(self) -> None:
+        from types import SimpleNamespace
+
+        manager = SimpleNamespace(
+            state=SimpleNamespace(version="v3", source_label="服务器", updated_at="2026-10-20")
+        )
+        dialog = SettingsDialog(
+            AppConfig(server_migrated=False),
+            catalog=self.catalog,
+            config_manager=manager,
+        )
+        self.dialogs.append(dialog)
+        self.assertIn("v3", dialog.config_version_label.text())
+        self.assertIn("服务器", dialog.config_source_label.text())
+        self.assertIn("2026-10-20", dialog.config_updated_label.text())
+        events: list[bool] = []
+        dialog.config_check_requested.connect(lambda: events.append(True))
+        dialog.check_config_button.click()
+        self.assertEqual([True], events)
+        dialog.set_config_check_result("已是最新", ok=True)
+        self.assertIn("已是最新", dialog.config_check_result.text())
+
+    def test_server_migration_hint(self) -> None:
+        dialog = self._dialog("honglang")
+        self.assertTrue(dialog.server_migrated_label.isHidden())
+        dialog.set_server_migrated(True)
+        self.assertFalse(dialog.server_migrated_label.isHidden())
 
     def test_switch_and_result_operator_id(self) -> None:
         dialog = self._dialog("honglang")
@@ -66,6 +94,33 @@ class SettingsOperatorTests(unittest.TestCase):
         self.assertIn("CD未知", dialog.operator_detail_label.text())
         dialog.accept()
         self.assertEqual("muyangren", dialog.config_result().operator_id)
+
+    def test_overlay_settings_persist(self) -> None:
+        dialog = self._dialog("honglang")
+        self.assertFalse(dialog.overlay_enabled_check.isChecked())
+        dialog.overlay_enabled_check.setChecked(True)
+        dialog.overlay_opacity_spin.setValue(55)
+        dialog.overlay_scale_spin.setValue(1.2)
+        dialog.shortcut_toggle_edit.setKeySequence("Ctrl+Alt+D")
+        dialog.shortcut_edit_edit.setKeySequence("Ctrl+Alt+E")
+        dialog._overlay_position_reset = True
+        dialog.accept()
+        result = dialog.config_result()
+        self.assertTrue(result.overlay_enabled)
+        self.assertEqual(55, result.overlay_opacity)
+        self.assertAlmostEqual(1.2, result.overlay_scale)
+        self.assertEqual("Ctrl+Alt+D", result.shortcut_toggle)
+        self.assertEqual("Ctrl+Alt+E", result.shortcut_edit)
+        self.assertIsNone(result.overlay_x)
+        self.assertIsNone(result.overlay_y)
+
+    def test_overlay_shortcut_conflict_rejected(self) -> None:
+        dialog = self._dialog("honglang")
+        dialog.shortcut_toggle_edit.setKeySequence("Ctrl+Shift+X")
+        dialog.shortcut_edit_edit.setKeySequence("Ctrl+Shift+X")
+        dialog.accept()
+        self.assertFalse(dialog.error_label.isHidden())
+        self.assertIn("不能相同", dialog.error_label.text())
 
     def test_invalid_saved_falls_back_and_persists(self) -> None:
         dialog = self._dialog("no-such-operator")
@@ -82,4 +137,6 @@ class SettingsOperatorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
 

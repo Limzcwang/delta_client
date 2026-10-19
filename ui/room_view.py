@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMenu,
     QPushButton,
+    QSizePolicy,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -87,12 +88,15 @@ class RoomView(QWidget):
         top.addWidget(self.connection_badge)
         root.addLayout(top)
 
-        # 主体：成员 | 聊天 | 画板占位
+        # 主体：成员 | 聊天 | 画板/技能（画板优先扩张）
         body = QHBoxLayout()
         body.setSpacing(12)
-        body.addWidget(self._build_members_panel(), stretch=0)
-        body.addWidget(self._build_chat_panel(), stretch=1)
-        body.addWidget(self._build_side_panel(), stretch=0)
+        self.members_panel = self._build_members_panel()
+        self.chat_panel = self._build_chat_panel()
+        self.side_tabs = self._build_side_panel()
+        body.addWidget(self.members_panel, stretch=0)
+        body.addWidget(self.chat_panel, stretch=0)
+        body.addWidget(self.side_tabs, stretch=1)
         root.addLayout(body, stretch=1)
 
         self.status_label = QLabel("")
@@ -102,7 +106,9 @@ class RoomView(QWidget):
     def _build_members_panel(self) -> QWidget:
         panel = QFrame()
         panel.setObjectName("Card")
-        panel.setFixedWidth(230)
+        panel.setMinimumWidth(190)
+        panel.setMaximumWidth(260)
+        panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
@@ -131,6 +137,9 @@ class RoomView(QWidget):
     def _build_chat_panel(self) -> QWidget:
         panel = QFrame()
         panel.setObjectName("Card")
+        panel.setMinimumWidth(300)
+        panel.setMaximumWidth(480)
+        panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
@@ -164,7 +173,8 @@ class RoomView(QWidget):
 
     def _build_side_panel(self) -> QWidget:
         self.side_tabs = QTabWidget()
-        self.side_tabs.setFixedWidth(400)
+        self.side_tabs.setMinimumWidth(400)
+        self.side_tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.canvas_panel = self._build_canvas_panel()
         self.skill_panel = SkillPanel()
         self.side_tabs.addTab(self.canvas_panel, "画板")

@@ -28,6 +28,7 @@ class WsUrlTests(unittest.TestCase):
 
     def test_ws_from_https_with_prefix(self) -> None:
         self.assertEqual(protocol.ws_url_for("https://game.example.com/delta"), "wss://game.example.com/delta/ws")
+        self.assertEqual(protocol.ws_url_for("https://deltachat.icu:8443"), "wss://deltachat.icu:8443/ws")
 
     def test_ws_invalid_scheme(self) -> None:
         with self.assertRaises(ValueError):

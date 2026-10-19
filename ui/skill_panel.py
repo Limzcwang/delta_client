@@ -287,6 +287,7 @@ class SkillPanel(QWidget):
         self._clock_offset_ms = 0
         self._pulse = False
         self._catalog = catalog if catalog is not None else OperatorCatalog()
+        self._server_now_provider = None
         # 可注入时钟（测试冻结时间）；默认使用本机时间
         self._clock = clock or (lambda: int(time.time() * 1000))
         self._build()
@@ -360,7 +361,16 @@ class SkillPanel(QWidget):
         self._clock_offset_ms = int(offset_ms)
         self._tick()
 
+    def set_server_now_provider(self, provider) -> None:
+        """注入服务器时间估计（ready_at 模式用单调时钟驱动）。"""
+        self._server_now_provider = provider
+
     def server_now_ms(self) -> int:
+        if self._server_now_provider is not None:
+            try:
+                return int(self._server_now_provider())
+            except Exception:  # noqa: BLE001
+                pass
         return int(self._clock()) + self._clock_offset_ms
 
     def states(self) -> list[SkillState]:

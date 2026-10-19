@@ -10,7 +10,9 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QDoubleSpinBox,
     QHBoxLayout,
+    QKeySequenceEdit,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -18,6 +20,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -304,18 +307,22 @@ class SettingsDialog(QDialog):
     test_requested = Signal(str, str)  # (server_url 文本, ws_url 文本)
     nickname_save_requested = Signal(str)
     password_change_requested = Signal(str, str)  # (旧密码, 新密码)
+    config_check_requested = Signal()
 
     def __init__(
         self,
         config: AppConfig,
         parent: QWidget | None = None,
         catalog: OperatorCatalog | None = None,
+        config_manager=None,
     ) -> None:
         super().__init__(parent)
         self._config = config
         self._result: AppConfig | None = None
         self._catalog = catalog if catalog is not None else load_operator_catalog()
+        self._config_manager = config_manager
         self._hud_profile: dict = dict(config.hud_profile or {})
+        self._overlay_position_reset = False
         self._build()
 
     def _build(self) -> None:
@@ -338,6 +345,7 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self._build_connection_tab(), "连接")
         self.tabs.addTab(self._build_profile_tab(), "个人资料")
         self.tabs.addTab(self._build_operator_tab(), "干员")
+        self.tabs.addTab(self._build_overlay_tab(), "悬浮窗")
         root.addWidget(self.tabs, stretch=1)
 
         self.error_label = _error_label(root)
@@ -349,9 +357,16 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(4, 10, 4, 4)
         layout.setSpacing(8)
 
-        layout.addWidget(QLabel("HTTP 服务器地址"))
+        self.server_migrated_label = QLabel("已切换到 HTTPS 服务器（旧 HTTP 默认地址已自动迁移）")
+        self.server_migrated_label.setObjectName("Hint")
+        self.server_migrated_label.setStyleSheet("color:#8be3a8;")
+        self.server_migrated_label.setWordWrap(True)
+        self.server_migrated_label.hide()
+        layout.addWidget(self.server_migrated_label)
+
+        layout.addWidget(QLabel("HTTP(S) 服务器地址"))
         self.server_edit = QLineEdit(self._config.server_url)
-        self.server_edit.setPlaceholderText("http://127.0.0.1:8000")
+        self.server_edit.setPlaceholderText("https://deltachat.icu:8443")
         layout.addWidget(self.server_edit)
 
         layout.addWidget(QLabel("WebSocket 地址（留空则自动推导为 ws(s)://host/ws）"))
@@ -414,6 +429,26 @@ class SettingsDialog(QDialog):
         self.operator_combo.currentIndexChanged.connect(self._refresh_operator_detail)
         self._refresh_operator_detail()
 
+        config_row = QHBoxLayout()
+        self.config_version_label = QLabel()
+        self.config_updated_label = QLabel()
+        self.config_source_label = QLabel()
+        for label in (self.config_version_label, self.config_updated_label, self.config_source_label):
+            label.setObjectName("Hint")
+        self.check_config_button = QPushButton("检查更新")
+        self.check_config_button.clicked.connect(self.config_check_requested.emit)
+        config_row.addWidget(self.config_version_label)
+        config_row.addWidget(self.config_source_label)
+        config_row.addWidget(self.config_updated_label)
+        config_row.addStretch(1)
+        config_row.addWidget(self.check_config_button)
+        layout.addLayout(config_row)
+        self.config_check_result = QLabel("")
+        self.config_check_result.setObjectName("Hint")
+        self.config_check_result.setWordWrap(True)
+        layout.addWidget(self.config_check_result)
+        self.refresh_operator_config_info(self._config_manager)
+
         calibration_row = QHBoxLayout()
         self.calibration_button = QPushButton("HUD 标定…")
         self.calibration_button.clicked.connect(self._open_calibration)
@@ -432,6 +467,45 @@ class SettingsDialog(QDialog):
         layout.addWidget(hint)
         layout.addStretch(1)
         return page
+
+    def refresh_operator_config_info(self, manager=None) -> None:
+        if manager is not None:
+            self._config_manager = manager
+        manager = self._config_manager
+        if manager is None:
+            self.config_version_label.setText("配置版本：内置")
+            self.config_source_label.setText("来源：内置")
+            self.config_updated_label.setText("更新时间：-")
+            return
+        state = manager.state
+        self.config_version_label.setText(f"配置版本：{state.version}")
+        self.config_source_label.setText(f"来源：{state.source_label}")
+        self.config_updated_label.setText(f"更新时间：{state.updated_at or '-'}")
+
+    def refresh_operator_catalog(self, catalog: OperatorCatalog) -> None:
+        current = str(self.operator_combo.currentData() or "")
+        self._catalog = catalog
+        self.operator_combo.blockSignals(True)
+        self.operator_combo.clear()
+        for operator in catalog:
+            self.operator_combo.addItem(operator.display_name, operator.id)
+        index = self.operator_combo.findData(current or self._config.operator_id)
+        if index < 0 and self.operator_combo.count():
+            index = 0
+        if index >= 0:
+            self.operator_combo.setCurrentIndex(index)
+        self.operator_combo.blockSignals(False)
+        self._refresh_operator_detail()
+
+    def set_config_check_result(self, text: str, ok: bool | None = None) -> None:
+        self.config_check_result.setText(text)
+        if ok is True:
+            self.config_check_result.setStyleSheet("color:#8be3a8;")
+        elif ok is False:
+            self.config_check_result.setStyleSheet("color:#ff9b8f;")
+        else:
+            self.config_check_result.setStyleSheet("")
+        self.config_check_result.show()
 
     def _refresh_operator_detail(self) -> None:
         operator = self._catalog.get(str(self.operator_combo.currentData() or ""))
@@ -477,6 +551,84 @@ class SettingsDialog(QDialog):
                 )
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "HUD 标定失败", str(exc))
+
+    def _build_overlay_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(4, 10, 4, 4)
+        layout.setSpacing(8)
+        self.overlay_enabled_check = QCheckBox("启用技能 CD 悬浮窗（默认关闭；仅无边框窗口模式）")
+        self.overlay_enabled_check.setChecked(self._config.overlay_enabled)
+        layout.addWidget(self.overlay_enabled_check)
+
+        self.auto_capture_check = QCheckBox("允许截图采集（E3b，仅内存，不落盘/不上传）")
+        self.auto_capture_check.setChecked(self._config.auto_capture_enabled)
+        layout.addWidget(self.auto_capture_check)
+        self.auto_loop_check = QCheckBox("自动识别并共享（每 2s 抓帧；变化才上报）")
+        self.auto_loop_check.setChecked(self._config.auto_loop_enabled)
+        layout.addWidget(self.auto_loop_check)
+        interval_row = QHBoxLayout()
+        interval_row.addWidget(QLabel("采样间隔"))
+        self.auto_interval_combo = QComboBox()
+        for value in (1000, 2000, 3000):
+            self.auto_interval_combo.addItem(f"{value} ms", value)
+        index = self.auto_interval_combo.findData(int(self._config.auto_sample_ms))
+        self.auto_interval_combo.setCurrentIndex(max(0, index))
+        interval_row.addWidget(self.auto_interval_combo)
+        interval_row.addStretch(1)
+        layout.addLayout(interval_row)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("透明度（%）"))
+        self.overlay_opacity_spin = QSpinBox()
+        self.overlay_opacity_spin.setRange(10, 100)
+        self.overlay_opacity_spin.setValue(int(self._config.overlay_opacity))
+        row.addWidget(self.overlay_opacity_spin)
+        row.addWidget(QLabel("缩放"))
+        self.overlay_scale_spin = QDoubleSpinBox()
+        self.overlay_scale_spin.setRange(0.6, 2.0)
+        self.overlay_scale_spin.setSingleStep(0.1)
+        self.overlay_scale_spin.setValue(float(self._config.overlay_scale))
+        row.addWidget(self.overlay_scale_spin)
+        row.addStretch(1)
+        layout.addLayout(row)
+
+        layout.addWidget(QLabel("显示/隐藏快捷键"))
+        self.shortcut_toggle_edit = QKeySequenceEdit(str(self._config.shortcut_toggle))
+        layout.addWidget(self.shortcut_toggle_edit)
+        layout.addWidget(QLabel("编辑模式快捷键（可拖动/缩放，退出后恢复鼠标穿透）"))
+        self.shortcut_edit_edit = QKeySequenceEdit(str(self._config.shortcut_edit))
+        layout.addWidget(self.shortcut_edit_edit)
+
+        reset_row = QHBoxLayout()
+        self.overlay_reset_button = QPushButton("重置悬浮窗位置")
+        self.overlay_reset_button.clicked.connect(self._reset_overlay_position)
+        reset_row.addWidget(self.overlay_reset_button)
+        reset_row.addStretch(1)
+        layout.addLayout(reset_row)
+        self.overlay_status_label = QLabel("当前状态：未启用")
+        self.overlay_status_label.setObjectName("Hint")
+        self.overlay_status_label.setWordWrap(True)
+        layout.addWidget(self.overlay_status_label)
+        hint = QLabel(
+            "悬浮窗保留房间内面板不变；仅覆盖无边框窗口模式。独占全屏/找不到游戏窗口时自动回落，"
+            "并提示使用房间内面板。数值持久化到本地配置。"
+        )
+        hint.setObjectName("Hint")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        layout.addStretch(1)
+        return page
+
+    def _reset_overlay_position(self) -> None:
+        self._overlay_position_reset = True
+        self.overlay_status_label.setText("当前状态：位置将在保存后重置")
+
+    def set_overlay_status(self, text: str) -> None:
+        self.overlay_status_label.setText(f"当前状态：{text}")
+
+    def set_server_migrated(self, migrated: bool) -> None:
+        self.server_migrated_label.setVisible(bool(migrated))
 
     def _build_profile_tab(self) -> QWidget:
         page = QWidget()
@@ -630,6 +782,12 @@ class SettingsDialog(QDialog):
             self.error_label.setText(str(exc))
             self.error_label.show()
             return
+        shortcut_toggle = self.shortcut_toggle_edit.keySequence().toString()
+        shortcut_edit = self.shortcut_edit_edit.keySequence().toString()
+        if shortcut_toggle and shortcut_toggle == shortcut_edit:
+            self.error_label.setText("显示/隐藏与编辑模式快捷键不能相同")
+            self.error_label.show()
+            return
         self._result = replace(
             self._config,
             server_url=server_url,
@@ -638,6 +796,16 @@ class SettingsDialog(QDialog):
             persist_token=self.save_token_check.isChecked(),
             operator_id=str(self.operator_combo.currentData() or ""),
             hud_profile=self._hud_profile or None,
+            overlay_enabled=self.overlay_enabled_check.isChecked(),
+            overlay_opacity=int(self.overlay_opacity_spin.value()),
+            overlay_scale=float(self.overlay_scale_spin.value()),
+            overlay_x=None if self._overlay_position_reset else self._config.overlay_x,
+            overlay_y=None if self._overlay_position_reset else self._config.overlay_y,
+            shortcut_toggle=shortcut_toggle or "Ctrl+Shift+D",
+            shortcut_edit=shortcut_edit or "Ctrl+Shift+E",
+            auto_capture_enabled=self.auto_capture_check.isChecked(),
+            auto_loop_enabled=self.auto_loop_check.isChecked(),
+            auto_sample_ms=int(self.auto_interval_combo.currentData() or 2000),
             source="file",
         )
         super().accept()

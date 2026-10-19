@@ -61,6 +61,8 @@ class WsClient:
         self._stopped = False
         self._state = "idle"
         self._last_rx = 0.0
+        self._last_ping_epoch = 0
+        self._last_ping_loop = 0.0
         self._stop_event = asyncio.Event()
         self._canvas_save_waiters: list[asyncio.Future] = []
         self.server_time: int | None = None
@@ -197,6 +199,16 @@ class WsClient:
                     raise WsAuthError(text)
                 elif mtype == protocol.WS_CANVAS_SNAPSHOT_SAVED:
                     self._resolve_save_waiters(message)
+                elif mtype == protocol.WS_PONG:
+                    try:
+                        now_epoch = int(time.time() * 1000)
+                        message["_client_sent_ms"] = int(self._last_ping_epoch or message.get("ts") or 0)
+                        if self._last_ping_loop:
+                            message["_rtt_ms"] = max(
+                                0.0, (asyncio.get_running_loop().time() - self._last_ping_loop) * 1000
+                            )
+                    except Exception:  # noqa: BLE001
+                        pass
                 self._emit(message)
         finally:
             for task in (heartbeat, watchdog):
@@ -208,7 +220,9 @@ class WsClient:
         while True:
             await asyncio.sleep(self.heartbeat_interval)
             try:
-                await ws.send(json.dumps(protocol.ping_message(now_ms())))
+                self._last_ping_epoch = now_ms()
+                self._last_ping_loop = asyncio.get_running_loop().time()
+                await ws.send(json.dumps(protocol.ping_message(self._last_ping_epoch)))
             except Exception:
                 return
 
