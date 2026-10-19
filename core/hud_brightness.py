@@ -87,6 +87,7 @@ def recognize_frame_brightness(
     ocr: Any = None,
     tracker: SkillTransitionTracker | None = None,
     server_now: int = 0,
+    templates: dict[int, Any] | None = None,
 ) -> Any:
     """按每槽 p90 亮度判 ready/charging，状态跳变生成 ready_at。"""
     from core.hud_ocr import read_skill_bar_texts, read_text_roi_texts
@@ -113,6 +114,12 @@ def recognize_frame_brightness(
         except Exception:  # noqa: BLE001
             text_texts = [[], [], []]
     threshold = int(profile.brightness_threshold)
+    from core.hud_band import charge_remaining_ms, measure_band_ratio
+    from core.skill_icons import load_skill_icon_templates
+
+    ready_templates = templates if templates is not None else (
+        load_skill_icon_templates(operator.id) if operator is not None else {}
+    )
     for index, slot in enumerate((SLOT_ULTIMATE, SLOT_ABILITY, SLOT_THROWABLE)):
         roi = rois[index]
         crop = frame[roi.y : roi.bottom, roi.x : roi.right] if hasattr(frame, "__getitem__") else None
@@ -124,45 +131,71 @@ def recognize_frame_brightness(
         max_charges = max(1, min(9, int(meta.max_charges if meta is not None else 1)))
         seconds = parse_duration_ms(row_texts)
         pct = parse_percent(row_texts) if index == 0 else None
+        charge = parse_charge(texts)
+        charges = 0
+        band_ratio_value = 0.0
         text_reason = ""
-        if seconds is not None:
-            state = "charging"
-            remaining = int(seconds)
-            ready_at = int(server_now) + remaining
-            transition = "text-seconds"
-            tracker.states[index] = "charging"
-            tracker.ready_at[index] = ready_at
-            text_reason = "文字秒数"
-        elif index == 0 and pct is not None:
-            if pct >= 100:
-                state = "ready"
-                remaining = 0
-                ready_at = 0
-                transition = "pct-ready"
-                tracker.states[0] = "ready"
-                tracker.ready_at[0] = 0
-            else:
+        if index == 0:
+            if seconds is not None:
                 state = "charging"
-                remaining = charged_remaining_ms(int(pct), total_cd, profile.ult_pct_meaning)
+                remaining = int(seconds)
                 ready_at = int(server_now) + remaining
-                transition = "pct"
+                transition = "text-seconds"
                 tracker.states[0] = "charging"
                 tracker.ready_at[0] = ready_at
-            text_reason = "百分比"
-        else:
-            state = "ready" if p90 >= threshold else "charging"
-            ready_at, remaining, transition = tracker.update(index, state, total_cd, server_now)
-            text_reason = "未读到文字，回退 p90"
-        charge = parse_charge(texts)
-        if index == 0:
+                text_reason = "文字秒数"
+            elif pct is not None:
+                if pct >= 100:
+                    state, remaining, ready_at, transition = "ready", 0, 0, "pct-ready"
+                    tracker.states[0] = "ready"
+                    tracker.ready_at[0] = 0
+                else:
+                    state = "charging"
+                    remaining = charged_remaining_ms(int(pct), total_cd, profile.ult_pct_meaning)
+                    ready_at = int(server_now) + remaining
+                    transition = "pct"
+                    tracker.states[0] = "charging"
+                    tracker.ready_at[0] = ready_at
+                text_reason = "百分比"
+            else:
+                state = "ready" if p90 >= threshold else "charging"
+                ready_at, remaining, transition = tracker.update(0, state, total_cd, server_now)
+                text_reason = "未读到文字，回退 p90"
             charges = 1 if state != "unknown" else 0
         else:
-            if charge is not None:
-                charges = max(0, min(max_charges, int(charge)))
-            elif state == "ready":
-                charges = max_charges
+            charges = max(0, min(max_charges, int(charge))) if charge is not None else tracker.charges.get(index, 0)
+            if seconds is not None:
+                state = "charging"
+                remaining = int(seconds)
+                ready_at = int(server_now) + remaining
+                transition = "text-seconds"
+                tracker.states[index] = "charging"
+                tracker.ready_at[index] = ready_at
+                text_reason = "文字秒数"
+            elif charge is not None and charges < max_charges:
+                band = measure_band_ratio(crop, ready_templates.get(index))
+                band_ratio_value = band.area_ratio if band is not None else 0.0
+                if band is not None:
+                    state = "charging"
+                    remaining = charge_remaining_ms(band, total_cd, max_charges)
+                    ready_at = int(server_now) + remaining
+                    transition = "charge-band"
+                    text_reason = f"灰带充能 f={band_ratio_value:.2f}"
+                    tracker.states[index] = "charging"
+                    tracker.ready_at[index] = ready_at
+                else:
+                    state = "ready" if p90 >= threshold else "charging"
+                    ready_at, remaining, transition = tracker.update(index, state, total_cd, server_now)
+                    text_reason = "无就绪模板，回退 p90"
+            elif charge is not None and charges >= max_charges:
+                state, remaining, ready_at, transition = "ready", 0, 0, "charge-full"
+                tracker.states[index] = "ready"
+                tracker.ready_at[index] = 0
+                text_reason = "充能已满"
             else:
-                charges = tracker.charges.get(index, 0)
+                state = "ready" if p90 >= threshold else "charging"
+                ready_at, remaining, transition = tracker.update(index, state, total_cd, server_now)
+                text_reason = "未读到文字，回退 p90"
             tracker.charges[index] = charges
         result.slots[slot] = SlotRecognition(
             slot,
@@ -184,6 +217,7 @@ def recognize_frame_brightness(
                 mask_ratio=0.0,
                 p90=round(p90, 2),
                 bright_ratio=round(bright_ratio, 4),
+                band_ratio=round(band_ratio_value, 4),
                 transition=transition,
                 text_texts=list(row_texts),
                 text_reason=text_reason,

@@ -36,6 +36,7 @@ class SlotDiagnostic:
     expanded_roi: tuple[int, int, int, int] | None = None
     p90: float = 0.0
     bright_ratio: float = 0.0
+    band_ratio: float = 0.0
     transition: str = ""
     text_texts: list[str] = field(default_factory=list)
     text_reason: str = ""
@@ -54,6 +55,7 @@ class SlotDiagnostic:
             "expanded_roi": list(self.expanded_roi) if self.expanded_roi else None,
             "p90": round(float(self.p90), 2),
             "bright_ratio": round(float(self.bright_ratio), 4),
+            "band_ratio": round(float(self.band_ratio), 4),
             "transition": self.transition,
             "text_texts": list(self.text_texts),
             "text_reason": self.text_reason,
