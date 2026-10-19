@@ -1,576 +1,498 @@
-import sys
-import threading
-import asyncio
-import aiohttp
-from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                               QHBoxLayout, QLabel, QLineEdit, QPushButton)
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont, QMouseEvent
+"""主窗口：QStackedWidget 切换 登录 -> 房间大厅 -> 房间内页，并负责网络编排。"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, Mapping
+
+from PySide6.QtGui import QCloseEvent
+from PySide6.QtWidgets import (
+    QDialog,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QStackedWidget,
+    QWidget,
+)
+
+from config import AppConfig, save_config
+from core.errors import ApiError, ErrorKind, to_user_message
+from core.models import ChatMessage, Member, Room, now_ms, parse_members
+from core.protocol import make_client_msg_id, message_type
+from net.api_client import ApiClient, LoginResult
+from net.mock_backend import MockApiClient, MockWsClient
+from net.ws_client import WsClient
+from state.session import Session, default_session_path
+from ui.async_bridge import AsyncBridge
+from ui.dialogs import CreateRoomDialog, JoinRoomDialog, SettingsDialog
+from ui.login_view import LoginView
+from ui.room_list_view import RoomListView
+from ui.room_view import RoomView
+
+logger = logging.getLogger(__name__)
 
 
-class LoginApp(QMainWindow):
-    """Delta Client 登录主窗口"""
-    
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Delta Client - 用户登录")
-        self.setFixedSize(800, 500)
-        
-        # 设置无边框窗口
-        self.setWindowFlags(Qt.FramelessWindowHint)
-        
-        # 鼠标拖动相关变量
-        self._drag_pos = None
-        
-        self.setup_ui()
-        self.center_window()
-        
-    def setup_ui(self):
-        """设置用户界面 - 左右分栏布局"""
-        # 创建中央部件
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        
-        # 主水平布局 - 左右分栏
-        main_layout = QHBoxLayout(central_widget)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
-        
-        # ========== 左侧：品牌展示区 ==========
-        left_panel = self._create_left_panel()
-        
-        # ========== 右侧：表单区域 ==========
-        right_panel = self._create_right_panel()
-        
-        # 添加到主布局
-        main_layout.addWidget(left_panel)
-        main_layout.addWidget(right_panel)
-        
-    def _create_left_panel(self):
-        """创建左侧品牌面板"""
-        left_panel = QWidget()
-        left_panel.setFixedWidth(380)
-        left_panel.setStyleSheet("""
-            QWidget {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
-                    stop:0 #667eea, stop:1 #764ba2);
-                border-top-left-radius: 8px;
-                border-bottom-left-radius: 8px;
-            }
-        """)
-        
-        left_layout = QVBoxLayout(left_panel)
-        left_layout.setAlignment(Qt.AlignCenter)
-        left_layout.setSpacing(30)
-        
-        # Logo 容器
-        logo_container = QWidget()
-        logo_container.setFixedSize(140, 140)
-        logo_container.setStyleSheet("""
-            QWidget {
-                background-color: rgba(255, 255, 255, 0.15);
-                border-radius: 70px;
-                border: 3px solid rgba(255, 255, 255, 0.4);
-            }
-        """)
-        logo_layout = QVBoxLayout(logo_container)
-        logo_layout.setAlignment(Qt.AlignCenter)
-        
-        logo_label = QLabel("◆")
-        logo_label.setAlignment(Qt.AlignCenter)
-        logo_label.setStyleSheet("""
-            QLabel {
-                color: white;
-                font-size: 64px;
-                font-weight: bold;
-                background: transparent;
-            }
-        """)
-        logo_layout.addWidget(logo_label)
-        
-        # 应用名称
-        app_name = QLabel("Delta")
-        app_name.setAlignment(Qt.AlignCenter)
-        app_name.setFont(QFont("微软雅黑", 24, QFont.Bold))
-        app_name.setStyleSheet("""
-            QLabel {
-                color: white;
-                font-size: 36px;
-                font-weight: bold;
-                background: transparent;
-                letter-spacing: 3px;
-            }
-        """)
-        
-        # 副标题
-        app_slogan = QLabel("Secure Connection Client")
-        app_slogan.setAlignment(Qt.AlignCenter)
-        app_slogan.setFont(QFont("微软雅黑", 10))
-        app_slogan.setStyleSheet("""
-            QLabel {
-                color: rgba(255, 255, 255, 0.7);
-                font-size: 14px;
-                background: transparent;
-                letter-spacing: 1px;
-            }
-        """)
-        
-        left_layout.addWidget(logo_container, alignment=Qt.AlignCenter)
-        left_layout.addWidget(app_name)
-        left_layout.addWidget(app_slogan)
-        
-        # 支持拖动
-        left_panel.mousePressEvent = self._on_drag_start
-        left_panel.mouseMoveEvent = self._on_drag_move
-        left_panel.mouseReleaseEvent = self._on_drag_end
-        
-        return left_panel
-        
-    def _create_right_panel(self):
-        """创建右侧表单面板"""
-        right_panel = QWidget()
-        right_panel.setStyleSheet("""
-            QWidget {
-                background-color: #ffffff;
-                border-top-right-radius: 8px;
-                border-bottom-right-radius: 8px;
-            }
-        """)
-        
-        layout = QVBoxLayout(right_panel)
-        layout.setContentsMargins(50, 20, 50, 50)
-        layout.setSpacing(16)
-        
-        # 关闭按钮
-        layout.addLayout(self._create_close_button_layout())
-        
-        # 欢迎文字
-        welcome_label = QLabel("欢迎回来")
-        welcome_label.setFont(QFont("微软雅黑", 22, QFont.Bold))
-        welcome_label.setStyleSheet("color: #2c3e50; background: transparent;")
-        layout.addWidget(welcome_label)
-        
-        # 副标题
-        sub_label = QLabel("请登录您的账户以继续")
-        sub_label.setFont(QFont("微软雅黑", 10))
-        sub_label.setStyleSheet("color: #7f8c8d; background: transparent;")
-        layout.addWidget(sub_label)
-        
-        layout.addSpacing(20)
-        
-        # 用户名输入框
-        self.username_entry = self._create_input_field("用户名")
-        layout.addWidget(self.username_entry)
-        
-        # 密码输入框
-        self.password_entry = self._create_input_field("密码", is_password=True)
-        layout.addWidget(self.password_entry)
-        
-        # 错误提示区域（现代化设计）
-        self.error_container = QWidget()
-        self.error_container.hide()
-        self.error_layout = QHBoxLayout(self.error_container)
-        self.error_layout.setContentsMargins(12, 10, 12, 10)
-        self.error_layout.setSpacing(8)
-        self.error_container.setStyleSheet("""
-            QWidget {
-                background-color: #fef2f2;
-                border: 1px solid #fecaca;
-                border-radius: 8px;
-            }
-        """)
-        
-        self.error_icon = QLabel("⚠")
-        self.error_icon.setStyleSheet("color: #dc2626; font-size: 14px; background: transparent;")
-        self.error_icon.setFixedWidth(18)
-        
-        self.error_label = QLabel()
-        self.error_label.setWordWrap(True)
-        self.error_label.setStyleSheet("color: #dc2626; font-size: 13px; background: transparent;")
-        self.error_label.setFont(QFont("微软雅黑", 10))
-        
-        self.error_layout.addWidget(self.error_icon)
-        self.error_layout.addWidget(self.error_label, stretch=1)
-        layout.addWidget(self.error_container)
-        
-        # 成功提示区域
-        self.success_container = QWidget()
-        self.success_container.hide()
-        success_layout = QHBoxLayout(self.success_container)
-        success_layout.setContentsMargins(12, 10, 12, 10)
-        success_layout.setSpacing(8)
-        self.success_container.setStyleSheet("""
-            QWidget {
-                background-color: #f0fdf4;
-                border: 1px solid #bbf7d0;
-                border-radius: 8px;
-            }
-        """)
-        
-        self.success_icon = QLabel("✓")
-        self.success_icon.setStyleSheet("color: #16a34a; font-size: 14px; font-weight: bold; background: transparent;")
-        self.success_icon.setFixedWidth(18)
-        
-        self.success_label = QLabel()
-        self.success_label.setWordWrap(True)
-        self.success_label.setStyleSheet("color: #16a34a; font-size: 13px; background: transparent;")
-        self.success_label.setFont(QFont("微软雅黑", 10))
-        
-        success_layout.addWidget(self.success_icon)
-        success_layout.addWidget(self.success_label, stretch=1)
-        layout.addWidget(self.success_container)
-        
-        # 按钮区域
-        layout.addSpacing(10)
-        layout.addWidget(self._create_login_button())
-        layout.addWidget(self._create_register_button())
-        
-        layout.addStretch()
-        
-        return right_panel
-        
-    def _create_close_button_layout(self):
-        """创建关闭按钮布局"""
-        layout = QHBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addStretch()
-        
-        close_button = QPushButton("×")
-        close_button.setFixedSize(24, 24)
-        close_button.setCursor(Qt.PointingHandCursor)
-        close_button.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                color: #95a5a6;
-                border: 1.5px solid #bdc3c7;
-                border-radius: 12px;
-                font-size: 14px;
-                font-weight: bold;
-                padding-bottom: 2px;
-            }
-            QPushButton:hover {
-                background-color: #e74c3c;
-                color: white;
-                border-color: #e74c3c;
-            }
-            QPushButton:pressed {
-                background-color: #c0392b;
-                border-color: #c0392b;
-            }
-        """)
-        close_button.clicked.connect(self.close)
-        layout.addWidget(close_button)
-        
-        return layout
-        
-    def _create_input_field(self, placeholder, is_password=False):
-        """创建输入框"""
-        entry = QLineEdit()
-        entry.setFont(QFont("微软雅黑", 11))
-        entry.setPlaceholderText(placeholder)
-        entry.setFixedHeight(48)
-        if is_password:
-            entry.setEchoMode(QLineEdit.Password)
-        
-        # 存储默认样式，用于恢复
-        entry.default_style = """
-            QLineEdit {
-                padding: 0 16px;
-                border: 2px solid #e0e6ed;
-                border-radius: 10px;
-                background-color: #f8fafc;
-                color: #2c3e50;
-                font-size: 14px;
-            }
-            QLineEdit:focus {
-                border: 2px solid #667eea;
-                background-color: #ffffff;
-            }
-            QLineEdit::placeholder {
-                color: #a0aec0;
-            }
-        """
-        entry.error_style = """
-            QLineEdit {
-                padding: 0 16px;
-                border: 2px solid #dc2626;
-                border-radius: 10px;
-                background-color: #fef2f2;
-                color: #2c3e50;
-                font-size: 14px;
-            }
-            QLineEdit:focus {
-                border: 2px solid #dc2626;
-                background-color: #ffffff;
-            }
-            QLineEdit::placeholder {
-                color: #a0aec0;
-            }
-        """
-        entry.setStyleSheet(entry.default_style)
-        
-        # 输入时清除错误状态
-        entry.textChanged.connect(lambda: self._clear_error_state(entry))
-        
-        return entry
-        
-    def _create_login_button(self):
-        """创建登录按钮"""
-        self.login_button = QPushButton("登 录")
-        self.login_button.setFont(QFont("微软雅黑", 12, QFont.Bold))
-        self.login_button.setFixedHeight(50)
-        self.login_button.setCursor(Qt.PointingHandCursor)
-        self.login_button.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
-                    stop:0 #667eea, stop:1 #764ba2);
-                color: white;
-                border: none;
-                border-radius: 10px;
-                font-size: 14px;
-                font-weight: bold;
-                letter-spacing: 2px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
-                    stop:0 #5a6fd6, stop:1 #6a4190);
-            }
-            QPushButton:pressed {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
-                    stop:0 #4e5fc4, stop:1 #5e3580);
-            }
-            QPushButton:disabled {
-                background: #cbd5e0;
-                color: #7f8c8d;
-            }
-        """)
-        self.login_button.clicked.connect(self.login)
-        return self.login_button
-        
-    def _create_register_button(self):
-        """创建注册按钮"""
-        self.register_button = QPushButton("创 建 账 户")
-        self.register_button.setFont(QFont("微软雅黑", 11))
-        self.register_button.setFixedHeight(48)
-        self.register_button.setCursor(Qt.PointingHandCursor)
-        self.register_button.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                color: #667eea;
-                border: 2px solid #667eea;
-                border-radius: 10px;
-                font-size: 13px;
-                font-weight: bold;
-                letter-spacing: 2px;
-            }
-            QPushButton:hover {
-                background-color: rgba(102, 126, 234, 0.1);
-            }
-            QPushButton:pressed {
-                background-color: rgba(102, 126, 234, 0.2);
-            }
-            QPushButton:disabled {
-                background-color: transparent;
-                color: #a0aec0;
-                border-color: #cbd5e0;
-            }
-        """)
-        self.register_button.clicked.connect(self.register)
-        return self.register_button
-        
-    def center_window(self):
-        """将窗口居中显示"""
-        screen = QApplication.primaryScreen()
-        screen_geometry = screen.availableGeometry()
-        x = (screen_geometry.width() - self.width()) // 2
-        y = (screen_geometry.height() - self.height()) // 2
-        self.move(x, y)
-        
-    # ========== 鼠标拖动窗口功能 ==========
-    def _on_drag_start(self, event):
-        """开始拖动"""
-        if event.button() == Qt.LeftButton:
-            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            event.accept()
-            
-    def _on_drag_move(self, event):
-        """拖动中"""
-        if event.buttons() == Qt.LeftButton and self._drag_pos is not None:
-            self.move(event.globalPosition().toPoint() - self._drag_pos)
-            event.accept()
-            
-    def _on_drag_end(self, event):
-        """结束拖动"""
-        self._drag_pos = None
-        event.accept()
-        
-    def mousePressEvent(self, event: QMouseEvent):
-        """鼠标按下事件"""
-        if event.button() == Qt.LeftButton and event.position().y() <= 60:
-            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-        super().mousePressEvent(event)
-        
-    def mouseMoveEvent(self, event: QMouseEvent):
-        """鼠标移动事件"""
-        if event.buttons() == Qt.LeftButton and self._drag_pos is not None:
-            self.move(event.globalPosition().toPoint() - self._drag_pos)
-        super().mouseMoveEvent(event)
-        
-    def mouseReleaseEvent(self, event: QMouseEvent):
-        """鼠标释放事件"""
-        self._drag_pos = None
-        super().mouseReleaseEvent(event)
-        
-    # ========== 错误处理 ==========
-    def _show_error(self, message):
-        """显示错误信息（现代化样式）"""
-        # 隐藏成功提示
-        self.success_container.hide()
-        
-        # 显示错误提示
-        self.error_label.setText(message)
-        self.error_container.show()
-        
-        # 高亮输入框
-        self.username_entry.setStyleSheet(self.username_entry.error_style)
-        self.password_entry.setStyleSheet(self.password_entry.error_style)
-        
-        # 重新启用按钮（错误时允许重试）
-        self._set_buttons_enabled(True)
-        
-    def _show_success(self, message):
-        """显示成功信息"""
-        # 隐藏错误提示
-        self.error_container.hide()
-        self.username_entry.setStyleSheet(self.username_entry.default_style)
-        self.password_entry.setStyleSheet(self.password_entry.default_style)
-        
-        # 显示成功提示
-        self.success_label.setText(message)
-        self.success_container.show()
-        
-    def _clear_error_state(self, entry):
-        """清除错误状态"""
-        entry.setStyleSheet(entry.default_style)
-        # 如果错误提示显示中，也清除它
-        if self.error_container.isVisible():
-            self.error_container.hide()
-            
-    def _set_buttons_enabled(self, enabled):
-        """设置按钮启用状态"""
-        self.login_button.setEnabled(enabled)
-        self.register_button.setEnabled(enabled)
-        
-    # ========== 业务逻辑 ==========
-    def login(self):
-        """登录操作"""
-        username = self.username_entry.text().strip()
-        password = self.password_entry.text().strip()
-        
-        # 禁用按钮
-        self._set_buttons_enabled(False)
-        
-        # 验证输入
-        if not username or not password:
-            self._show_error("请输入用户名和密码")
-            return
-            
-        # 在新线程中运行登录
-        thread = threading.Thread(target=self._run_login, args=(username, password))
-        thread.daemon = True
-        thread.start()
-        
-    def register(self):
-        """注册操作"""
-        username = self.username_entry.text().strip()
-        password = self.password_entry.text().strip()
-        
-        # 禁用按钮
-        self._set_buttons_enabled(False)
-        
-        # 验证输入
-        if not username or not password:
-            self._show_error("请输入用户名和密码")
-            return
-            
-        # 在新线程中运行注册
-        thread = threading.Thread(target=self._run_register, args=(username, password))
-        thread.daemon = True
-        thread.start()
-        
-    def _run_login(self, username, password):
-        """后台执行登录"""
-        def on_success(result):
-            self._show_success(f"登录成功！欢迎回来，{username}")
-            self._set_buttons_enabled(True)
-            
-        def on_error(error_msg):
-            self._show_error(f"登录失败：{error_msg}")
-            
-        self._run_async_task("/api/users/login", {"username": username, "password": password}, 
-                            on_success, on_error)
-        
-    def _run_register(self, username, password):
-        """后台执行注册"""
-        def on_success(result):
-            self._show_success(f"注册成功！请使用新账户登录")
-            self._set_buttons_enabled(True)
-            # 清空密码方便登录
-            self.password_entry.clear()
-            
-        def on_error(error_msg):
-            self._show_error(f"注册失败：{error_msg}")
-            
-        self._run_async_task("/api/users/create", {"username": username, "password": password}, 
-                            on_success, on_error)
-        
-    def _run_async_task(self, endpoint, data, on_success, on_error):
-        """运行异步任务并处理回调"""
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
+class MainWindow(QMainWindow):
+    """客户端主窗口。
+
+    - ``AsyncBridge`` 提供 asyncio 事件循环；
+    - ``ApiClient``（或 Mock）负责 HTTP；
+    - ``WsClient``（或 Mock）负责房间实时消息；
+    - 视图只发信号，网络与状态切换集中在 MainWindow。
+    """
+
+    def __init__(
+        self,
+        config: AppConfig,
+        session: Session | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.config = config
+        self.session = session or Session(
+            persist_token=config.persist_token,
+            persist_path=default_session_path(),
+        )
+        self.bridge = AsyncBridge(self)
+        self.bridge.start()
+        self.api: Any = self._build_api()
+        self._ws: Any = None
+        self._ws_generation = 0
+        self._current_room: Room | None = None
+        self._room_password: str | None = None
+        self._pending_chat_ids: set[str] = set()
+
+        self.setWindowTitle("Delta Client - 三角洲行动队友房间")
+        self.resize(1200, 780)
+        self.setMinimumSize(1020, 680)
+        self._build_ui()
+        self._wire_views()
+        self._refresh_status_bar()
+
+        if self.session.is_logged_in:
+            self._show_rooms()
+            self._set_status("已恢复上次登录状态")
+        else:
+            self._show_login()
+
+    # ---------- 构建 ----------
+    def _build_ui(self) -> None:
+        self.stack = QStackedWidget()
+        self.setCentralWidget(self.stack)
+
+        self.login_view = LoginView()
+        self.room_list_view = RoomListView()
+        self.room_view = RoomView()
+        self.stack.addWidget(self.login_view)
+        self.stack.addWidget(self.room_list_view)
+        self.stack.addWidget(self.room_view)
+
+        self._server_label = QLabel()
+        self._server_label.setObjectName("Muted")
+        self.statusBar().addPermanentWidget(self._server_label)
+
+    def _wire_views(self) -> None:
+        self.login_view.login_requested.connect(self._on_login)
+        self.login_view.register_requested.connect(self._on_register)
+        self.login_view.settings_requested.connect(self._on_settings)
+
+        self.room_list_view.refresh_requested.connect(self._refresh_rooms)
+        self.room_list_view.create_requested.connect(self._on_create_room)
+        self.room_list_view.join_requested.connect(self._on_join_room)
+        self.room_list_view.logout_requested.connect(self._on_logout)
+        self.room_list_view.settings_requested.connect(self._on_settings)
+
+        self.room_view.leave_requested.connect(self._on_leave_room)
+        self.room_view.chat_submitted.connect(self._on_chat_submitted)
+
+    def _build_api(self) -> Any:
+        if self.config.use_mock:
+            return MockApiClient()
+        return ApiClient(
+            self.config.server_url,
+            token_provider=lambda: self.session.token,
+            timeout=self.config.request_timeout,
+        )
+
+    # ---------- 通用 ----------
+    def _username(self) -> str:
+        return self.session.username or "未知用户"
+
+    def _set_status(self, message: str) -> None:
+        self.statusBar().showMessage(str(message), 8000)
+
+    def _refresh_status_bar(self) -> None:
+        self._server_label.setText(
+            f"服务器：{self.config.server_url}  ·  模式：{self.config.mode_label}"
+        )
+
+    def _safe_submit(self, coro: Any, on_success=None, on_error=None) -> None:
         try:
-            result = loop.run_until_complete(self._http_request(endpoint, data))
-            # 在UI线程中回调
-            QTimer.singleShot(0, lambda: on_success(result))
-        except Exception as e:
-            error_msg = str(e)
-            # 简化错误信息
-            if "Cannot connect" in error_msg or "Connection refused" in error_msg:
-                error_msg = "无法连接到服务器，请检查网络"
-            elif "Timeout" in error_msg:
-                error_msg = "连接超时，请稍后重试"
-            elif "401" in error_msg or "Unauthorized" in error_msg:
-                error_msg = "用户名或密码错误"
-            elif "409" in error_msg or "Conflict" in error_msg:
-                error_msg = "用户名已存在"
-            QTimer.singleShot(0, lambda: on_error(error_msg))
+            self.bridge.submit(coro, on_success, on_error)
+        except RuntimeError:  # 窗口关闭后不再提交
+            logger.debug("异步桥已停止，忽略任务提交")
+
+    def _show_login(self, message: str = "") -> None:
+        self.login_view.set_server_text(self.config.server_url, self.config.mode_label)
+        self.login_view.set_busy(False)
+        self.login_view.set_mode("login")
+        if message:
+            self.login_view.show_error(message)
+        self.stack.setCurrentWidget(self.login_view)
+        self.login_view.focus_first()
+
+    def _show_rooms(self) -> None:
+        self.room_list_view.set_user(self._username())
+        self.room_list_view.set_mode(self.config.use_mock, self.config.server_url)
+        self.stack.setCurrentWidget(self.room_list_view)
+        self._refresh_rooms()
+
+    # ---------- 认证 ----------
+    def _on_login(self, username: str, password: str) -> None:
+        self.login_view.set_busy(True)
+        self.login_view.hide_messages()
+        self._safe_submit(
+            self.api.login(username, password),
+            self._on_login_success,
+            self._on_login_failure,
+        )
+
+    def _on_login_success(self, result: LoginResult) -> None:
+        self.login_view.set_busy(False)
+        self.session.set_login(result.token, result.user)
+        if result.token:
+            self._set_status(f"登录成功：{self._username()}")
+        else:
+            # 后端 B 阶段前 /api/users/login 不返回 JWT，保留兼容分支
+            self._set_status("登录成功，但服务器未返回 JWT（PROTOCOL B 阶段才上线）")
+        self._show_rooms()
+
+    def _on_login_failure(self, exc: BaseException) -> None:
+        self.login_view.set_busy(False)
+        self.login_view.show_error(to_user_message(exc))
+
+    def _on_register(self, username: str, password: str) -> None:
+        self.login_view.set_busy(True)
+        self.login_view.hide_messages()
+        self._safe_submit(
+            self.api.register(username, password),
+            lambda data: self._on_register_success(data, username),
+            self._on_register_failure,
+        )
+
+    def _on_register_success(self, data: Any, username: str) -> None:
+        self.login_view.set_busy(False)
+        self.login_view.set_mode("login")
+        self.login_view.show_success("注册成功，请使用新账号登录")
+        self.login_view.prefill_username(username)
+        self._set_status("注册成功")
+
+    def _on_register_failure(self, exc: BaseException) -> None:
+        self.login_view.set_busy(False)
+        self.login_view.show_error(to_user_message(exc))
+
+    def _handle_auth_expired(self, exc: BaseException) -> None:
+        message = to_user_message(exc)
+        self._stop_ws()
+        self._current_room = None
+        self.session.clear()
+        self._show_login(f"{message}，请重新登录")
+
+    # ---------- 房间大厅 ----------
+    def _refresh_rooms(self) -> None:
+        self.room_list_view.set_loading(True)
+        self.room_list_view.set_status(f"正在连接 {self.config.server_url} …")
+        self._safe_submit(
+            self.api.list_rooms(),
+            self._on_rooms_loaded,
+            self._on_rooms_failed,
+        )
+
+    def _on_rooms_loaded(self, rooms: list[Room]) -> None:
+        self.room_list_view.set_loading(False)
+        self.room_list_view.set_rooms(rooms)
+        suffix = "（Mock 演示数据）" if self.config.use_mock else ""
+        if rooms:
+            self.room_list_view.set_status(f"共 {len(rooms)} 个公共房间{suffix}")
+        else:
+            self.room_list_view.set_status(f"暂无公开房间{suffix}，可以创建一个")
+
+    def _on_rooms_failed(self, exc: BaseException) -> None:
+        self.room_list_view.set_loading(False)
+        if isinstance(exc, ApiError) and exc.is_auth_error:
+            self._handle_auth_expired(exc)
+            return
+        self.room_list_view.set_status(to_user_message(exc), error=True)
+
+    def _on_create_room(self) -> None:
+        dialog = CreateRoomDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        name, visibility, password = dialog.values()
+        self.room_list_view.set_status("正在创建房间…")
+        self._safe_submit(
+            self.api.create_room(name, visibility, password),
+            lambda room: self._on_room_created(room, password),
+            self._on_room_action_failed,
+        )
+
+    def _on_room_created(self, room: Room, password: str | None) -> None:
+        self._set_status(f"房间已创建：{room.code}")
+        self._enter_room(room, password=password)
+
+    def _on_join_room(self, code: str) -> None:
+        self._prompt_join(code or "")
+
+    def _prompt_join(self, code: str, hint: str = "", attempt: int = 0, password_focus: bool = False) -> None:
+        dialog = JoinRoomDialog(self, code=code, hint=hint, password_focus=password_focus)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        code, password = dialog.values()
+        self.room_list_view.set_status(f"正在加入房间 {code} …")
+        self._safe_submit(
+            self.api.join_room(code, password),
+            lambda room: self._on_room_joined(room, password),
+            lambda exc: self._on_join_failed(exc, code, attempt),
+        )
+
+    def _on_room_joined(self, room: Room, password: str | None) -> None:
+        self._set_status(f"已加入房间 {room.code}")
+        self._enter_room(room, password=password)
+
+    def _on_join_failed(self, exc: BaseException, code: str, attempt: int) -> None:
+        if isinstance(exc, ApiError) and exc.needs_room_password and attempt < 2:
+            self.room_list_view.set_status(exc.user_message, error=True)
+            password_focus = exc.kind == ErrorKind.ROOM_PASSWORD_INVALID
+            self._prompt_join(code, hint=exc.user_message, attempt=attempt + 1, password_focus=password_focus)
+            return
+        if isinstance(exc, ApiError) and exc.is_auth_error:
+            self._handle_auth_expired(exc)
+            return
+        self.room_list_view.set_status(to_user_message(exc), error=True)
+
+    def _on_room_action_failed(self, exc: BaseException) -> None:
+        if isinstance(exc, ApiError) and exc.is_auth_error:
+            self._handle_auth_expired(exc)
+            return
+        self.room_list_view.set_status(to_user_message(exc), error=True)
+
+    def _on_logout(self) -> None:
+        self._stop_ws()
+        self._current_room = None
+        self.session.clear()
+        self._show_login()
+        self.login_view.show_success("已退出登录")
+        self._set_status("已退出登录")
+
+    # ---------- 房间内 ----------
+    def _enter_room(self, room: Room, password: str | None = None) -> None:
+        self._current_room = room
+        self._room_password = password
+        self.room_view.set_room(room)
+        self.room_view.set_user(self._username())
+        self.room_view.clear_chat()
+        self.room_view.set_members(list(room.members))
+        self.room_view.add_system_message(f"已进入 {room.display_name}（{room.code}）")
+        self.room_view.set_connection_state("connecting", "正在建立实时连接")
+        self.room_view.set_status("")
+        self._pending_chat_ids.clear()
+        self.stack.setCurrentWidget(self.room_view)
+        self.room_view.focus_chat_input()
+        self._start_ws(room)
+
+    def _start_ws(self, room: Room) -> None:
+        self._stop_ws()
+        generation = self._ws_generation
+
+        def on_message(message: dict[str, Any]) -> None:
+            self.bridge.post(lambda: self._on_ws_message(generation, message))
+
+        def on_state(state: str, info: dict[str, Any]) -> None:
+            self.bridge.post(lambda: self._on_ws_state(generation, state, info))
+
+        if self.config.use_mock:
+            ws: Any = MockWsClient(
+                on_message=on_message,
+                on_state=on_state,
+                user=self.session.user or {"id": "0", "username": self._username()},
+                room=room,
+            )
+        elif not self.session.token:
+            self.room_view.set_connection_state("offline", "未获取 JWT，聊天仅本地回显")
+            self.room_view.add_system_message(
+                "当前登录没有 JWT（PROTOCOL B 阶段才上线）：实时聊天不可用，仅本地回显。"
+            )
+            return
+        else:
+            ws = WsClient(
+                self.config.effective_ws_url,
+                self.session.token,
+                on_message=on_message,
+                on_state=on_state,
+            )
+        self._ws = ws
+        self._safe_submit(ws.run(), on_error=self._on_ws_run_failed)
+
+    def _stop_ws(self) -> None:
+        self._ws_generation += 1
+        ws, self._ws = self._ws, None
+        if ws is not None:
+            self._safe_submit(ws.close())
+
+    def _on_ws_run_failed(self, exc: BaseException) -> None:
+        self.room_view.set_connection_state("error", to_user_message(exc))
+        self.room_view.add_system_message(f"实时连接失败：{to_user_message(exc)}")
+
+    def _on_ws_state(self, generation: int, state: str, info: Mapping[str, Any]) -> None:
+        if generation != self._ws_generation or self._current_room is None:
+            return
+        detail = str(info.get("message") or info.get("error") or "")
+        if state == "connected":
+            self.room_view.set_connection_state("connected", "实时连接已建立")
+            self.room_view.add_system_message("实时连接已建立")
+            room = self._current_room
+            if self._ws is not None and room is not None:
+                self._safe_submit(self._ws.join_room(room.code, self._room_password))
+        elif state in ("connecting", "authenticating"):
+            self.room_view.set_connection_state(state, detail or "正在连接")
+        elif state == "waiting":
+            delay = float(info.get("delay") or 0.0)
+            self.room_view.set_connection_state("waiting", detail or f"{delay:.0f}s 后重连")
+            self.room_view.set_status(f"连接中断，{delay:.0f}s 后自动重连", error=True)
+        elif state == "reconnecting":
+            self.room_view.set_connection_state("reconnecting", detail)
+            if detail:
+                self.room_view.set_status(f"重连中：{detail}", error=True)
+        elif state == "auth_error":
+            self.room_view.set_connection_state("auth_error", detail)
+            self.room_view.add_system_message(f"认证失败：{detail or '登录状态无效'}")
+        else:
+            self.room_view.set_connection_state(state, detail)
+
+    def _on_ws_message(self, generation: int, message: Mapping[str, Any]) -> None:
+        if generation != self._ws_generation or self._current_room is None:
+            return
+        mtype = message_type(message)
+        if mtype == "room_joined":
+            payload = message.get("room")
+            if isinstance(payload, Mapping):
+                room = Room.from_api(payload)
+                self._current_room = room
+                self.room_view.set_room(room)
+            members = parse_members(message.get("members"))
+            if members:
+                self.room_view.set_members(members)
+            self.room_view.set_status("")
+        elif mtype == "user_joined":
+            user = message.get("user")
+            if isinstance(user, Mapping):
+                member = Member.from_api(user)
+                self.room_view.add_member(member)
+                self.room_view.add_system_message(f"{member.display_name} 加入了房间")
+        elif mtype == "user_left":
+            user = message.get("user")
+            if isinstance(user, Mapping):
+                member = Member.from_api(user)
+                self.room_view.remove_member(member)
+                self.room_view.add_system_message(f"{member.display_name} 离开了房间")
+        elif mtype == "chat_message":
+            chat = ChatMessage.from_ws(message)
+            if chat.client_msg_id and chat.client_msg_id in self._pending_chat_ids:
+                self._pending_chat_ids.discard(chat.client_msg_id)
+                return  # 本机消息已本地回显，跳过服务端回显
+            self.room_view.add_chat_message(chat)
+        elif mtype == "error":
+            text = str(message.get("message") or message.get("code") or "未知错误")
+            self.room_view.add_system_message(f"服务端错误：{text}")
+        elif mtype in ("heartbeat", "pong", "auth_ok"):
+            return
+        elif mtype in ("canvas_snapshot", "canvas_op", "skill_state"):
+            return  # C2/C3 占位：本轮不实现画板与技能共享
+        # 未知类型按协议要求直接忽略
+
+    def _on_chat_submitted(self, text: str) -> None:
+        text = str(text).strip()
+        if not text:
+            return
+        username = self._username()
+        if self._ws is None or not getattr(self._ws, "connected", False):
+            self.room_view.add_chat_message(
+                ChatMessage(sender_name=username, content=text, ts=now_ms())
+            )
+            self.room_view.set_status("未连接实时频道，消息仅本地回显", error=True)
+            return
+
+        # 先本地回显；client_msg_id 在发送前登记，服务端回显据此去重（PROTOCOL.md §6.5）
+        self.room_view.add_chat_message(ChatMessage(sender_name=username, content=text, ts=now_ms()))
+        client_msg_id = make_client_msg_id()
+        self._pending_chat_ids.add(client_msg_id)
+
+        def sent(sent_id: Any) -> None:
+            if not sent_id:
+                self._pending_chat_ids.discard(client_msg_id)
+                self.room_view.add_system_message("消息发送失败：实时连接尚未就绪")
+
+        def failed(exc: BaseException) -> None:
+            self._pending_chat_ids.discard(client_msg_id)
+            self.room_view.add_system_message(f"消息发送失败：{to_user_message(exc)}")
+
+        self._safe_submit(self._ws.send_chat(text, client_msg_id), sent, failed)
+
+    def _on_leave_room(self) -> None:
+        room = self._current_room
+        self._stop_ws()
+        self._current_room = None
+        self._room_password = None
+        if room is not None:
+            self._safe_submit(self.api.leave_room(room.code), on_error=lambda exc: None)
+        self._show_rooms()
+
+    # ---------- 设置 ----------
+    def _on_settings(self) -> None:
+        dialog = SettingsDialog(self.config, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        new_config = dialog.config_result()
+        try:
+            saved_path = save_config(new_config)
+        except OSError as exc:
+            QMessageBox.warning(self, "保存失败", f"无法写入配置文件：{exc}")
+            return
+
+        identity_changed = (
+            new_config.server_url != self.config.server_url
+            or new_config.ws_url != self.config.ws_url
+            or new_config.use_mock != self.config.use_mock
+        )
+        self.config = new_config
+        self._refresh_status_bar()
+        self.login_view.set_server_text(new_config.server_url, new_config.mode_label)
+        self.room_list_view.set_mode(new_config.use_mock, new_config.server_url)
+        self.session.set_persist_token(new_config.persist_token)
+
+        if identity_changed:
+            self._stop_ws()
+            self._current_room = None
+            self.session.clear()
+            self.api = self._build_api()
+            self._show_login()
+            self.login_view.show_success(f"配置已保存到 {saved_path}，请重新登录")
+            return
+
+        self.api = self._build_api()
+        if self.stack.currentWidget() is self.room_view:
+            self._on_leave_room()
+        elif self.session.is_logged_in:
+            self._show_rooms()
+        else:
+            self._show_login()
+        self._set_status(f"配置已保存：{saved_path}")
+
+    # ---------- 关闭 ----------
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt 覆盖
+        try:
+            self._safe_submit(self.api.close())
+            self._stop_ws()
         finally:
-            loop.close()
-            
-    async def _http_request(self, endpoint, data):
-        """发送HTTP请求"""
-        url = f"http://114.132.161.169:8000{endpoint}"
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=data, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                if response.status == 200:
-                    return await response.json()
-                else:
-                    text = await response.text()
-                    raise Exception(f"HTTP {response.status}: {text}")
-
-
-def main():
-    """启动GUI应用程序"""
-    app = QApplication(sys.argv)
-    app.setStyle("Fusion")
-    
-    window = LoginApp()
-    window.show()
-    
-    sys.exit(app.exec())
-
-
-if __name__ == "__main__":
-    main()
+            self.bridge.stop()
+            super().closeEvent(event)
