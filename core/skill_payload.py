@@ -57,15 +57,22 @@ def _clean_state(value: Any) -> str:
 
 
 def _unknown(index: int) -> dict[str, Any]:
-    return {"slot": index, "state": SKILL_UNKNOWN, "remaining_ms": 0}
+    # 后端对每个槽（含 unknown/大招）都要求 charges/max_charges 合法
+    return {
+        "slot": index,
+        "state": SKILL_UNKNOWN,
+        "remaining_ms": 0,
+        "charges": 0,
+        "max_charges": 1,
+    }
 
 
 def sanitize_slot(index: int, slot: Any) -> dict[str, Any]:
-    """单个槽 -> 后端可接受字段；任何非法值将该槽降级 unknown。"""
+    """单个槽 -> 后端可接受字段；所有槽都输出 charges/max_charges。"""
     kind = SLOT_KINDS[index]
     state = _clean_state(getattr(slot, "state", None))
     if state == SKILL_UNKNOWN:
-        return {"slot": index, "state": SKILL_UNKNOWN, "remaining_ms": 0}
+        return _unknown(index)
     if kind == SLOT_ULTIMATE:
         pct = clean_pct(getattr(slot, "percent", None))
         if state == SKILL_CHARGING and pct is None:
@@ -73,19 +80,24 @@ def sanitize_slot(index: int, slot: Any) -> dict[str, Any]:
         remaining = 0 if state == SKILL_READY else clean_remaining(getattr(slot, "remaining_ms", None))
         if state == SKILL_CHARGING and remaining is None:
             return _unknown(index)
-        item: dict[str, Any] = {"slot": index, "state": state}
+        item: dict[str, Any] = {
+            "slot": index,
+            "state": state,
+            "remaining_ms": remaining or 0,
+            "charges": 1,
+            "max_charges": 1,
+        }
         if pct is not None:
             item["pct"] = pct
-        item["remaining_ms"] = remaining or 0
         return item
     remaining = clean_remaining(getattr(slot, "remaining_ms", None))
     if state == SKILL_CHARGING and remaining is None:
         return _unknown(index)
     raw_max = _finite(getattr(slot, "max_charges", None))
     if raw_max is None or raw_max < MIN_CHARGES:
-        # 配置缺失/为 0/非法：该槽降级 unknown，绝不能上报 0 让后端拒绝整条 payload
-        return _unknown(index)
-    max_charges = int(round(min(float(MAX_CHARGES), raw_max)))
+        max_charges = 1
+    else:
+        max_charges = int(round(min(float(MAX_CHARGES), raw_max)))
     charges = clamp_int(getattr(slot, "charges", None), 0, max_charges)
     if charges is None:
         charges = 0
@@ -116,35 +128,29 @@ def _validate_slot(item: Any) -> tuple[bool, str]:
     state = item.get("state")
     if state not in SKILL_STATES:
         return False, "state 非法"
-    if state == SKILL_UNKNOWN:
-        remaining = item.get("remaining_ms", 0)
-        if not isinstance(remaining, int) or isinstance(remaining, bool) or not (0 <= remaining <= MAX_REMAINING_MS):
-            return False, "unknown 槽 remaining_ms 必须是 0-600000 整数"
-        return True, ""
     remaining = item.get("remaining_ms", 0)
     if not isinstance(remaining, int) or isinstance(remaining, bool) or not (0 <= remaining <= MAX_REMAINING_MS):
         return False, "remaining_ms 必须是 0-600000 整数"
-    if slot == 0:
+    if slot == 0 and state != SKILL_UNKNOWN:
         pct = item.get("pct")
         if pct is not None and (
             not isinstance(pct, int) or isinstance(pct, bool) or not (0 <= pct <= 100)
         ):
             return False, "pct 必须是 0-100 整数或空"
-    else:
-        max_charges = item.get("max_charges")
-        if (
-            not isinstance(max_charges, int)
-            or isinstance(max_charges, bool)
-            or not (MIN_CHARGES <= max_charges <= MAX_CHARGES)
-        ):
-            return False, "max_charges 必须是 1-9 整数"
-        charges = item.get("charges")
-        if (
-            not isinstance(charges, int)
-            or isinstance(charges, bool)
-            or not (0 <= charges <= max_charges)
-        ):
-            return False, "charges 必须是 0..max_charges 整数"
+    max_charges = item.get("max_charges")
+    if (
+        not isinstance(max_charges, int)
+        or isinstance(max_charges, bool)
+        or not (MIN_CHARGES <= max_charges <= MAX_CHARGES)
+    ):
+        return False, "max_charges 必须是 1-9 整数"
+    charges = item.get("charges")
+    if (
+        not isinstance(charges, int)
+        or isinstance(charges, bool)
+        or not (0 <= charges <= max_charges)
+    ):
+        return False, "charges 必须是 0..max_charges 整数"
     return True, ""
 
 
@@ -167,7 +173,7 @@ def validate_payload(payload: Any) -> tuple[bool, str]:
 def repair_payload(payload: Any) -> list[dict[str, Any]]:
     """单槽非法只降级该槽为 unknown，避免整条 payload 被后端拒绝。"""
     if not isinstance(payload, list):
-        return [{"slot": index, "state": SKILL_UNKNOWN, "remaining_ms": 0} for index in range(3)]
+        return [_unknown(index) for index in range(3)]
     by_slot: dict[int, Mapping[str, Any]] = {}
     for item in payload:
         if isinstance(item, Mapping):
@@ -181,7 +187,7 @@ def repair_payload(payload: Any) -> list[dict[str, Any]]:
         if ok and int(item["slot"]) == index:
             repaired.append(dict(item))
         else:
-            repaired.append({"slot": index, "state": SKILL_UNKNOWN, "remaining_ms": 0})
+            repaired.append(_unknown(index))
     return repaired
 
 

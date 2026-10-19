@@ -93,6 +93,21 @@ class HudAsyncTests(unittest.TestCase):
     def test_ocr_singleton(self) -> None:
         self.assertIs(get_hud_ocr(), get_hud_ocr())
 
+    def test_completion_text_names_unknown_slot(self) -> None:
+        from core.skills import SkillSlot, SkillState
+        from ui.main_window import MainWindow
+
+        state = SkillState(
+            slots={
+                "ultimate": SkillSlot("ultimate", "unknown", 0),
+                "ability": SkillSlot("ability", "ready", 0),
+                "throwable": SkillSlot("throwable", "ready", 0),
+            }
+        )
+        text = MainWindow._hud_completion_text(None, state)
+        self.assertIn("2/3", text)
+        self.assertIn("大招未识别", text)
+
 
 if __name__ == "__main__":
     unittest.main()

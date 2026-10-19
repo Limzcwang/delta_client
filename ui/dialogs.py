@@ -452,6 +452,10 @@ class SettingsDialog(QDialog):
         rec_row.addWidget(self.operator_recheck_button)
         layout.addLayout(rec_row)
 
+        self.hud_debug_check = QCheckBox("HUD 调试导出（三槽 ROI/整帧/result.json，保留最近 10 次）")
+        self.hud_debug_check.setChecked(bool(self._config.hud_debug_export))
+        layout.addWidget(self.hud_debug_check)
+
         layout.addWidget(QLabel("游戏窗口 / 采屏诊断"))
         row = QHBoxLayout()
         self.capture_window_button = QPushButton("选择游戏窗口")
@@ -484,6 +488,11 @@ class SettingsDialog(QDialog):
         calibration_row.addWidget(self.calibration_button)
         calibration_row.addWidget(self.hud_status_label, stretch=1)
         layout.addLayout(calibration_row)
+        self.hud_profile_label = QLabel()
+        self.hud_profile_label.setObjectName("Hint")
+        self.hud_profile_label.setWordWrap(True)
+        layout.addWidget(self.hud_profile_label)
+        self.refresh_hud_profile_label()
 
         hint = QLabel(
             "默认 HUD 配置为 2560×1440（技能栏 + 底部干员头像 ROI）；其他分辨率会按窗口客户区自动缩放。"
@@ -720,6 +729,7 @@ class SettingsDialog(QDialog):
                     self.hud_status_label.setText(
                         f"已标定：技能栏 {profile.skill_bar.width}×{profile.skill_bar.height}"
                     )
+                    self.refresh_hud_profile_label()
                     return
                 if not dialog.refresh_requested:
                     return
@@ -794,6 +804,18 @@ class SettingsDialog(QDialog):
 
     def current_auto_operator_enabled(self) -> bool:
         return bool(self.auto_operator_check.isChecked())
+
+    def refresh_hud_profile_label(self) -> None:
+        from core.hud_profile import HudProfile
+
+        profile = HudProfile.from_dict(self._hud_profile or {})
+        bar = profile.skill_bar
+        avatar = profile.avatar_roi
+        self.hud_profile_label.setText(
+            f"当前 profile：skill_bar=({bar.x},{bar.y}) {bar.width}×{bar.height}；"
+            f"avatar_roi=({avatar.x},{avatar.y}) {avatar.width}×{avatar.height}；"
+            f"OCR 阈值 {profile.ocr_threshold:.2f} / 头像阈值 {profile.template_threshold:.2f}"
+        )
 
     def set_server_migrated(self, migrated: bool) -> None:
         self.server_migrated_label.setVisible(bool(migrated))
@@ -978,6 +1000,7 @@ class SettingsDialog(QDialog):
             capture_window_title=self._capture_title,
             auto_operator_enabled=self.auto_operator_check.isChecked(),
             operator_recognition_threshold=float(self.operator_threshold_spin.value()),
+            hud_debug_export=self.hud_debug_check.isChecked(),
             source="file",
         )
         super().accept()

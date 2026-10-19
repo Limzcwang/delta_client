@@ -1253,6 +1253,7 @@ class MainWindow(QMainWindow):
             "catalog": self.operator_catalog,
             "threshold": float(self.config.operator_recognition_threshold),
             "detect_operator": bool(self.config.auto_operator_enabled),
+            "debug_export": bool(self.config.hud_debug_export),
         }
 
     def _on_auto_operator_detected(self, operator_id: str, score: float) -> None:
@@ -1506,6 +1507,7 @@ class MainWindow(QMainWindow):
                 self.operator_catalog,
                 float(self.config.operator_recognition_threshold),
                 detect_operator=True,
+                debug_export=bool(self.config.hud_debug_export),
                 callback=self._finish_manual_operator_result,
             )
             self._hud_timeout.start()
@@ -1670,6 +1672,7 @@ class MainWindow(QMainWindow):
             self.operator_catalog,
             float(self.config.operator_recognition_threshold),
             detect_operator=bool(self.config.auto_operator_enabled),
+            debug_export=bool(self.config.hud_debug_export),
             callback=callback,
         )
         if not accepted:
@@ -1717,8 +1720,19 @@ class MainWindow(QMainWindow):
         self.room_view.skill_panel.upsert(state)
         if self._skill_share_enabled:
             self._send_skill_state(state)
-        count = sum(1 for slot in state.slots.values() if slot.state != "unknown")
-        self.room_view.set_status(f"HUD 识别完成：{count}/3 槽有结果")
+        self.room_view.set_status(self._hud_completion_text(state))
+        if result.debug_path:
+            logger.info("HUD 调试导出：%s", result.debug_path)
+
+    def _hud_completion_text(self, state: SkillState) -> str:
+        labels = {"ultimate": "大招", "ability": "技能", "throwable": "投掷物"}
+        total = len(state.slots)
+        unknown = [labels.get(kind, kind) for kind, slot in state.slots.items() if slot.state == "unknown"]
+        count = total - len(unknown)
+        text = f"HUD 识别完成：{count}/{total}"
+        if unknown:
+            text += f"（{'、'.join(unknown)}未识别）"
+        return text
 
     def _finish_manual_operator_result(self, result: HudRecognitionResult) -> None:
         self._hud_timeout.stop()

@@ -76,6 +76,8 @@ def setup_logging(
     handler.addFilter(SensitiveFilter())
     setattr(handler, _HANDLER_FLAG, True)
     root.addHandler(handler)
+    # HUD 每槽诊断固定写 client.log（默认 INFO 不挡 DEBUG）
+    logging.getLogger("core.hud_pipeline").setLevel(logging.DEBUG)
     return target
 
 

@@ -33,6 +33,7 @@ class HudRecognitionResult:
     operator_score: float = 0.0
     duration_ms: int = 0
     error: str = ""
+    debug_path: str = ""
 
 
 class _TaskSignals(QObject):
@@ -52,6 +53,7 @@ class _HudTask(QRunnable):
         catalog: OperatorCatalog,
         threshold: float,
         detect_operator: bool,
+        debug_export: bool = False,
     ) -> None:
         super().__init__()
         self.token = token
@@ -63,6 +65,7 @@ class _HudTask(QRunnable):
         self.catalog = catalog
         self.threshold = threshold
         self.detect_operator = detect_operator
+        self.debug_export = debug_export
 
     def run(self) -> None:
         if self.token != self.service.token:
@@ -94,6 +97,18 @@ class _HudTask(QRunnable):
                 operator_score=score,
                 duration_ms=int((time.monotonic() - started) * 1000),
             )
+            if self.debug_export:
+                from core.hud_debug import HudDebugExporter
+
+                path = HudDebugExporter().export(
+                    self.frame,
+                    self.profile,
+                    recognized,
+                    operator_id=result.operator_id,
+                    operator_name=result.operator_name,
+                    extra={"threshold": self.threshold, "duration_ms": result.duration_ms},
+                )
+                result.debug_path = str(path) if path is not None else ""
             self.signals.done.emit(self.token, result)
         except Exception as exc:  # noqa: BLE001
             self.signals.failed.emit(self.token, str(exc))
@@ -126,6 +141,7 @@ class HudRecognitionService(QObject):
         threshold: float,
         *,
         detect_operator: bool = True,
+        debug_export: bool = False,
         callback: Callable[[HudRecognitionResult], None],
     ) -> bool:
         if self.busy:
@@ -144,6 +160,7 @@ class HudRecognitionService(QObject):
                 catalog,
                 threshold,
                 detect_operator,
+                debug_export,
             )
         )
         return True

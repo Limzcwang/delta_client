@@ -145,6 +145,7 @@ class AppConfig:
     capture_window_title: str = ""
     auto_operator_enabled: bool = True
     operator_recognition_threshold: float = 0.70
+    hud_debug_export: bool = False
     request_timeout: float = DEFAULT_TIMEOUT
     source: str = "default"
 
@@ -180,6 +181,7 @@ class AppConfig:
             "capture_window_title": self.capture_window_title,
             "auto_operator_enabled": self.auto_operator_enabled,
             "operator_recognition_threshold": self.operator_recognition_threshold,
+            "hud_debug_export": self.hud_debug_export,
             "request_timeout": self.request_timeout,
         }
 
@@ -318,6 +320,7 @@ def load_config(
     ).strip()
     capture_window_title = str(file_data.get("capture_window_title") or "").strip()
     auto_operator_enabled = parse_bool(file_data.get("auto_operator_enabled"), True)
+    hud_debug_export = parse_bool(file_data.get("hud_debug_export"), False)
     try:
         operator_recognition_threshold = min(
             0.95, max(0.5, float(file_data.get("operator_recognition_threshold", 0.70)))
@@ -352,6 +355,7 @@ def load_config(
         capture_window_title=capture_window_title,
         auto_operator_enabled=auto_operator_enabled,
         operator_recognition_threshold=operator_recognition_threshold,
+        hud_debug_export=hud_debug_export,
         request_timeout=timeout,
         source=source,
     )

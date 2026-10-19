@@ -140,6 +140,7 @@ class AutoShareController(QObject):
                 context["catalog"],
                 context["threshold"],
                 detect_operator=bool(context.get("detect_operator", True)),
+                debug_export=bool(context.get("debug_export", False)),
                 callback=self._on_async_result,
             )
             if not accepted:

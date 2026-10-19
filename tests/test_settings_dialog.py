@@ -66,11 +66,16 @@ class SettingsOperatorTests(unittest.TestCase):
         self.assertIsNotNone(dialog.detect_window_button)
         self.assertTrue(dialog.auto_operator_check.isChecked())
         self.assertAlmostEqual(0.70, dialog.operator_threshold_spin.value())
+        self.assertFalse(dialog.hud_debug_check.isChecked())
+        self.assertIn("skill_bar", dialog.hud_profile_label.text())
+        self.assertIn("avatar_roi", dialog.hud_profile_label.text())
+        dialog.hud_debug_check.setChecked(True)
         dialog.auto_operator_check.setChecked(False)
         dialog.operator_threshold_spin.setValue(0.83)
         dialog.accept()
         result = dialog.config_result()
         self.assertFalse(result.auto_operator_enabled)
+        self.assertTrue(result.hud_debug_export)
         self.assertAlmostEqual(0.83, result.operator_recognition_threshold)
 
     def test_config_center_labels_and_check_button(self) -> None:
