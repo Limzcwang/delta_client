@@ -45,6 +45,31 @@ def _first(mapping: Mapping[str, Any], *keys: str) -> Any:
     return None
 
 
+_SLOT_NAMES = {
+    "ultimate": SLOT_ULTIMATE,
+    "ult": SLOT_ULTIMATE,
+    "ability": SLOT_ABILITY,
+    "skill": SLOT_ABILITY,
+    "throwable": SLOT_THROWABLE,
+    "grenade": SLOT_THROWABLE,
+}
+
+
+def _slot_kind(value: Any) -> str | None:
+    """把 E1 的 slot（0/1/2，或名称）归一化为槽位 kind。"""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return SLOT_KINDS[value] if 0 <= value < len(SLOT_KINDS) else None
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    if text.isdigit():
+        index = int(text)
+        return SLOT_KINDS[index] if 0 <= index < len(SLOT_KINDS) else None
+    return _SLOT_NAMES.get(text)
+
+
 @dataclass(frozen=True)
 class SkillSlot:
     """单个技能槽：大招显示百分比，技能/投掷物显示充能与剩余 CD。"""
@@ -69,13 +94,8 @@ class SkillSlot:
                 state = SKILL_CHARGING
             else:
                 state = SKILL_UNKNOWN
-        if state in ("cooldown", "cooling", "charging", "recharging"):
-            state = SKILL_CHARGING
-        elif state in ("ready", "available"):
-            state = SKILL_READY
-        elif state in ("unknown", "unsupported", "?"):
-            state = SKILL_UNKNOWN
-        else:
+        # E1 契约：state 只接受 ready/charging/unknown，其它值一律按 unknown
+        if state not in SKILL_STATES:
             state = SKILL_UNKNOWN
         remaining = _as_int(
             _first(
@@ -90,7 +110,9 @@ class SkillSlot:
         )
         charges = _as_int(_first(payload, "charges", "current", "count"), 0)
         max_charges = _as_int(_first(payload, "max_charges", "max", "max_count"), 0)
-        percent = _as_float(_first(payload, "percent", "percentage", "charge_percent"), 0.0)
+        percent = _as_float(
+            _first(payload, "pct", "percent", "percentage", "charge_percent"), 0.0
+        )
         if percent and 0.0 <= percent <= 1.0 and _first(payload, "ratio") is not None:
             percent *= 100.0
         percent = min(max(percent, 0.0), 100.0)
@@ -135,8 +157,10 @@ class SkillState:
 
     user_id: str = ""
     nickname: str = ""
+    operator_id: str = ""
     operator: str = ""
     captured_at: int = 0
+    updated_at: int = 0
     slots: Mapping[str, SkillSlot] = field(default_factory=dict)
     raw: Mapping[str, Any] = field(default_factory=dict, compare=False, repr=False)
 
@@ -163,34 +187,56 @@ class SkillState:
             or ""
         )
         operator_raw = payload.get("operator")
-        if isinstance(operator_raw, Mapping):
-            operator = str(_first(operator_raw, "name", "label", "id") or "")
-        else:
-            operator = str(operator_raw or payload.get("operator_name") or "")
-        captured_at = _as_int(
-            _first(payload, "captured_at", "capturedAt", "server_time", "updated_at"), 0
+        operator_map = operator_raw if isinstance(operator_raw, Mapping) else {}
+        operator_id = str(
+            _first(payload, "operator_id", "operatorId")
+            or _first(operator_map, "id", "operator_id")
+            or ""
         )
+        operator = str(
+            _first(payload, "operator_name", "operatorName")
+            or _first(operator_map, "name", "label", "operator_name")
+            or ("" if isinstance(operator_raw, Mapping) else (operator_raw or ""))
+            or ""
+        )
+        captured_at = _as_int(
+            _first(payload, "captured_at", "capturedAt", "server_time"), 0
+        )
+        updated_at = _as_int(_first(payload, "updated_at", "updatedAt"), 0)
+        if not captured_at:
+            captured_at = updated_at
         slots_raw = payload.get("skills")
-        if not isinstance(slots_raw, Mapping):
+        if not isinstance(slots_raw, (Mapping, list)):
             slots_raw = payload.get("skill_state")
-        if not isinstance(slots_raw, Mapping):
+        if not isinstance(slots_raw, (Mapping, list)):
             slots_raw = payload.get("slots")
         slots: dict[str, SkillSlot] = {}
         if isinstance(slots_raw, Mapping):
-            for kind in SLOT_KINDS:
-                if kind in slots_raw:
-                    slots[kind] = SkillSlot.from_api(kind, slots_raw.get(kind))
+            for key, item in slots_raw.items():
+                kind = _slot_kind(key)
+                if kind is not None:
+                    slots[kind] = SkillSlot.from_api(kind, item)
         elif isinstance(slots_raw, list):
-            for index, item in enumerate(slots_raw[:3]):
-                kind = SLOT_KINDS[index]
-                slots[kind] = SkillSlot.from_api(kind, item)
+            # E1 真实载荷：skills 为数组，每项以 slot(0/1/2) 标识槽位
+            for index, item in enumerate(slots_raw):
+                if not isinstance(item, Mapping):
+                    continue
+                slot_value = item.get("slot", item.get("index"))
+                kind = _slot_kind(slot_value)
+                if kind is None and slot_value is None and index < len(SLOT_KINDS):
+                    kind = SLOT_KINDS[index]
+                if kind is not None:
+                    slots[kind] = SkillSlot.from_api(kind, item)
+        # 只有缺失槽位才补 unknown，不覆盖已解析的数据
         for kind in SLOT_KINDS:
             slots.setdefault(kind, SkillSlot(kind=kind))
         return cls(
             user_id=user_id,
             nickname=nickname,
+            operator_id=operator_id,
             operator=operator,
             captured_at=max(0, captured_at),
+            updated_at=max(0, updated_at),
             slots=slots,
             raw=dict(payload),
         )

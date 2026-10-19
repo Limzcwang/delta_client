@@ -65,6 +65,84 @@ class SkillParseTests(unittest.TestCase):
         slot = SkillSlot.from_api(SLOT_ULTIMATE, {"percent": 0.5, "ratio": True, "state": "ready"})
         self.assertEqual(50.0, slot.percent)
 
+    def test_e1_real_array_payload(self) -> None:
+        state = SkillState.from_ws(
+            {
+                "user_id": "42",
+                "nickname": "队友-E2E",
+                "operator_id": "op_redwolf",
+                "operator_name": "红狼",
+                "captured_at": 1_700_000_000_000,
+                "updated_at": 1_700_000_000_500,
+                "skills": [
+                    {
+                        "slot": 0,
+                        "state": "charging",
+                        "remaining_ms": 30_000,
+                        "charges": 0,
+                        "max_charges": 1,
+                        "pct": 16,
+                    },
+                    {
+                        "slot": 1,
+                        "state": "ready",
+                        "remaining_ms": 0,
+                        "charges": 2,
+                        "max_charges": 2,
+                        "pct": 100,
+                    },
+                    {
+                        "slot": 2,
+                        "state": "charging",
+                        "remaining_ms": 12_000,
+                        "charges": 0,
+                        "max_charges": 1,
+                        "pct": 40,
+                    },
+                ],
+            }
+        )
+        self.assertEqual("42", state.user_id)
+        self.assertEqual("op_redwolf", state.operator_id)
+        self.assertEqual("红狼", state.operator)
+        self.assertEqual(1_700_000_000_000, state.captured_at)
+        self.assertEqual(1_700_000_000_500, state.updated_at)
+        ultimate = state.slot(SLOT_ULTIMATE)
+        self.assertEqual(SKILL_CHARGING, ultimate.state)
+        self.assertEqual(16.0, ultimate.percent)
+        self.assertEqual(30_000, ultimate.remaining_ms)
+        ability = state.slot(SLOT_ABILITY)
+        self.assertEqual(SKILL_READY, ability.state)
+        self.assertEqual(2, ability.charges)
+        self.assertEqual(2, ability.max_charges)
+        throwable = state.slot(SLOT_THROWABLE)
+        self.assertEqual(12_000, throwable.remaining_ms)
+
+    def test_missing_slot_and_unknown_state(self) -> None:
+        state = SkillState.from_ws(
+            {
+                "user_id": "7",
+                "captured_at": 1,
+                "skills": [
+                    {"slot": 0, "state": "weird", "pct": 12},
+                ],
+            }
+        )
+        self.assertEqual(SKILL_UNKNOWN, state.slot(SLOT_ULTIMATE).state)
+        self.assertEqual(12.0, state.slot(SLOT_ULTIMATE).percent)
+        self.assertEqual(SKILL_UNKNOWN, state.slot(SLOT_ABILITY).state)
+        self.assertEqual(SKILL_UNKNOWN, state.slot(SLOT_THROWABLE).state)
+
+    def test_empty_or_non_array_skills(self) -> None:
+        for skills in ([], None, "not-array", {}):
+            with self.subTest(skills=skills):
+                state = SkillState.from_ws(
+                    {"user_id": "8", "captured_at": 1, "skills": skills}
+                )
+                self.assertEqual(SKILL_UNKNOWN, state.slot(SLOT_ULTIMATE).state)
+                self.assertEqual(SKILL_UNKNOWN, state.slot(SLOT_ABILITY).state)
+                self.assertEqual(SKILL_UNKNOWN, state.slot(SLOT_THROWABLE).state)
+
 
 class CountdownTests(unittest.TestCase):
     def test_countdown_with_server_offset(self) -> None:

@@ -865,12 +865,12 @@ class MockWsClient:
         self,
         user_id: str,
         nickname: str,
-        skills: Mapping[str, Any],
+        skills: Mapping[str, Any] | list[Mapping[str, Any]],
         *,
         operator: str = "",
         captured_at: int | None = None,
     ) -> None:
-        """Mock E2：主动下发一条队友技能状态。"""
+        """Mock E2：主动下发一条队友技能状态（skills 支持对象或 E1 数组）。"""
         self._emit(
             {
                 "type": protocol.WS_SKILL_SHARE_STATE,
@@ -878,7 +878,7 @@ class MockWsClient:
                 "nickname": nickname,
                 "operator": operator,
                 "captured_at": int(captured_at or now_ms()),
-                "skills": dict(skills),
+                "skills": (dict(skills) if isinstance(skills, Mapping) else list(skills)),
             }
         )
 
