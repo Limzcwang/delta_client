@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Mapping
 
 from core import protocol
 from core.backoff import ReconnectBackoff
@@ -63,6 +63,7 @@ class WsClient:
         self._last_rx = 0.0
         self._stop_event = asyncio.Event()
         self._canvas_save_waiters: list[asyncio.Future] = []
+        self.server_time: int | None = None
 
     # ---------- 状态 ----------
     @property
@@ -178,10 +179,17 @@ class WsClient:
                 mtype = protocol.message_type(message)
                 if mtype == protocol.WS_AUTH_OK:
                     self.backoff.reset()
+                    server_time = message.get("server_time")
+                    if server_time is not None:
+                        try:
+                            self.server_time = int(server_time)
+                        except (TypeError, ValueError):
+                            self.server_time = None
                     self._set_state(
                         "connected",
                         user=message.get("user"),
                         heartbeat_interval_ms=message.get("heartbeat_interval_ms"),
+                        server_time=self.server_time,
                     )
                 elif mtype == protocol.WS_AUTH_ERROR:
                     text = str(message.get("message") or "认证失败，请重新登录")
@@ -253,6 +261,18 @@ class WsClient:
     async def send_canvas_op(self, op: dict[str, Any], rev: int, room_id: str) -> bool:
         """发送一条画板增量；``rev`` 由调用方保证每连接单调递增。"""
         return await self._send(protocol.canvas_op_message(room_id, rev, op))
+
+    async def send_skill_update(
+        self, room_id: str, captured_at: int, skills: Mapping[str, Any]
+    ) -> bool:
+        """E2：上报本机技能状态（服务端时钟口径的 captured_at）。"""
+        return await self._send(
+            protocol.skill_share_update_message(room_id, captured_at, skills)
+        )
+
+    async def send_skill_off(self, room_id: str | None = None) -> bool:
+        """E2：关闭技能共享。"""
+        return await self._send(protocol.skill_share_off_message(room_id))
 
     async def save_canvas_snapshot(
         self,

@@ -134,6 +134,48 @@ def _copy_room_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     return copy
 
 
+def _mock_skill_states(now: int) -> list[dict[str, Any]]:
+    """Mock E2：两个队友的预置技能状态（ready/charging/unknown 混合）。"""
+    return [
+        {
+            "user_id": "2",
+            "nickname": "队友-Alpha",
+            "operator": "红狼",
+            "captured_at": now,
+            "skills": {
+                "ultimate": {"state": "ready", "percent": 100},
+                "ability": {"state": "ready", "charges": 2, "max_charges": 2},
+                "throwable": {
+                    "state": "charging",
+                    "charges": 0,
+                    "max_charges": 1,
+                    "remaining_ms": 45000,
+                },
+            },
+        },
+        {
+            "user_id": "3",
+            "nickname": "队友-Bravo",
+            "operator": "蜂医",
+            "captured_at": now,
+            "skills": {
+                "ultimate": {
+                    "state": "charging",
+                    "percent": 65,
+                    "remaining_ms": 20000,
+                },
+                "ability": {
+                    "state": "charging",
+                    "charges": 1,
+                    "max_charges": 2,
+                    "remaining_ms": 8000,
+                },
+                "throwable": {"state": "unknown"},
+            },
+        },
+    ]
+
+
 #: 演示房间成员（用于 Mock 的 HTTP 成员兜底，模拟 ``GET /rooms/{ref}`` 返回）
 _SEED_MEMBERS: dict[str, list[dict[str, Any]]] = {
     "AB12C": [
@@ -732,6 +774,8 @@ class MockWsClient:
         self.latency = max(0.0, float(latency))
         self.store = store
         self.connected = False
+        self.last_skill_update: dict[str, Any] | None = None
+        self.last_skill_off: str | None = None
         self._state = "idle"
         self._stop_event: asyncio.Event | None = None
 
@@ -788,17 +832,60 @@ class MockWsClient:
             if self.store is not None
             else {"strokes": [], "rev": 0}
         )
+        now = now_ms()
+        skill_states = _mock_skill_states(now)
         self._emit(
             {
                 "type": protocol.WS_ROOM_JOINED,
                 "room": raw,
                 "members": members,
                 "canvas_snapshot": canvas_snapshot,
-                "skill_state": {"items": []},
-                "server_time": now_ms(),
+                "skill_states": skill_states,
+                "skill_state": {"items": skill_states},
+                "server_time": now,
             }
         )
         return True
+
+    async def send_skill_update(
+        self, room_id: str, captured_at: int, skills: Mapping[str, Any]
+    ) -> bool:
+        self.last_skill_update = {
+            "room_id": str(room_id),
+            "captured_at": int(captured_at),
+            "skills": dict(skills),
+        }
+        return True
+
+    async def send_skill_off(self, room_id: str | None = None) -> bool:
+        self.last_skill_off = str(room_id or "")
+        return True
+
+    def simulate_skill_state(
+        self,
+        user_id: str,
+        nickname: str,
+        skills: Mapping[str, Any],
+        *,
+        operator: str = "",
+        captured_at: int | None = None,
+    ) -> None:
+        """Mock E2：主动下发一条队友技能状态。"""
+        self._emit(
+            {
+                "type": protocol.WS_SKILL_SHARE_STATE,
+                "user_id": str(user_id),
+                "nickname": nickname,
+                "operator": operator,
+                "captured_at": int(captured_at or now_ms()),
+                "skills": dict(skills),
+            }
+        )
+
+    def simulate_skill_removed(self, user_id: str) -> None:
+        self._emit(
+            {"type": protocol.WS_SKILL_SHARE_REMOVED, "user_id": str(user_id)}
+        )
 
     async def send_chat(
         self,
