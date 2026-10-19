@@ -13,6 +13,7 @@
       "ws_url": null,
       "mock": false,
       "save_token": false,
+      "operator_id": "honglang",
       "request_timeout": 15.0
     }
 
@@ -116,6 +117,7 @@ class AppConfig:
     ws_url: str | None = None
     use_mock: bool = False
     persist_token: bool = False
+    operator_id: str = ""
     request_timeout: float = DEFAULT_TIMEOUT
     source: str = "default"
 
@@ -135,6 +137,7 @@ class AppConfig:
             "ws_url": self.ws_url,
             "mock": self.use_mock,
             "save_token": self.persist_token,
+            "operator_id": self.operator_id,
             "request_timeout": self.request_timeout,
         }
 
@@ -200,6 +203,8 @@ def load_config(
     if "DELTA_SAVE_TOKEN" in env_map:
         persist_token = parse_bool(env_map.get("DELTA_SAVE_TOKEN"), persist_token)
 
+    operator_id = str(file_data.get("operator_id") or "").strip()
+
     timeout = DEFAULT_TIMEOUT
     raw_timeout = file_data.get("request_timeout")
     if isinstance(raw_timeout, (int, float)) and raw_timeout > 0:
@@ -210,6 +215,7 @@ def load_config(
         ws_url=ws_url,
         use_mock=use_mock,
         persist_token=persist_token,
+        operator_id=operator_id,
         request_timeout=timeout,
         source=source,
     )

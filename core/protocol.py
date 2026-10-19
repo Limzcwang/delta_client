@@ -220,15 +220,22 @@ def unwrap_payload(body: Any) -> Any:
 def skill_share_update_message(
     room_id: str,
     captured_at: int,
-    skills: Mapping[str, Any],
+    skills: Any,
+    operator_id: str = "",
+    operator_name: str = "",
 ) -> dict[str, Any]:
-    """E2：上报本机技能状态（``captured_at`` 为服务器时钟毫秒）。"""
-    return {
+    """E2/E3a：上报本机技能状态（``captured_at`` 为服务器时钟毫秒）。"""
+    message: dict[str, Any] = {
         "type": WS_SKILL_SHARE_UPDATE,
         "room_id": str(room_id),
         "captured_at": int(captured_at),
-        "skills": dict(skills),
+        "skills": skills,
     }
+    if operator_id:
+        message["operator_id"] = str(operator_id)
+    if operator_name:
+        message["operator_name"] = str(operator_name)
+    return message
 
 
 def skill_share_off_message(room_id: str | None = None) -> dict[str, Any]:
