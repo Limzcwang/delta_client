@@ -15,7 +15,7 @@
 | HTTP 客户端 | `net/api_client.py`：统一 Base URL、`X-Request-Id` / `X-Protocol-Version`、`Authorization: Bearer`、超时、错误映射 |
 | WS 客户端 | `net/ws_client.py`：`/ws` 首消息 `auth`、心跳（25s ping / 90s 失联）、指数退避重连（1s→30s）、消息分发、未知类型忽略 |
 | 会话 | `state/session.py`：token + 用户信息（内存；可选落盘，**不落盘密码**） |
-| 登录/注册 | `POST /api/v1/auth/login`、`POST /api/v1/auth/register`；注册账号 6–20 位字母/数字且至少含 1 个字母（实时提示 + `INVALID_USERNAME` 映射）；注册带 token 自动登录 |
+| 登录/注册 | `POST /api/v1/auth/login`、`POST /api/v1/auth/register`；注册账号 6–20 位字母/数字且至少含 1 个字母，注册密码 8–64 位（与后端一致；登录密码仍只校验非空以兼容历史短密码）；账号输入框即时过滤（注册/登录均仅字母数字，≤20；`dsh_test` 会被过滤为 `dshtest`），粘贴保留合法部分、IME 上屏后清洗；注册带 token 自动登录 |
 | 昵称展示（F） | 成员列表/聊天/房主标识/加入离开提示统一显示 **nickname**（缺失时回退 username 并标记旧协议）；账号只在个人资料页对自己可见 |
 | 个人资料（F） | 设置页新增「个人资料」：修改昵称（1–20，立即刷新所有展示，含历史聊天中自己的名字）、修改密码（旧密码 + 新密码 8–64 + 确认；成功后保持登录） |
 | 房间 | 公共房间列表、刷新、创建（公开/私有+密码）、按 5 位房间号加入（私有需密码）、离开 |
@@ -28,7 +28,7 @@
 | 连通性测试 | 设置页「测试连接」：探测 `/health` + `/api/v1/rooms?page=1`，分别报告可达/鉴权失效/超时/网络错误 |
 | 协议对齐 | PROTOCOL C/D 定稿：`data.error_code`、§7.2/§7.3 实名错误码、WS `room_id_or_code`、聊天字段、画板 `rev`/快照语义 |
 | Mock | `--mock` / `DELTA_MOCK=1`：内置内存后端（昵称/聊天历史/画板快照/房主管理），可完整离线演示 |
-| 测试 | 197 个纯逻辑 stdlib unittest，离线可跑 |
+| 测试 | 215 个纯逻辑 stdlib unittest，离线可跑 |
 
 ---
 
@@ -58,6 +58,7 @@ delta_client/
 ├── ui/                      # PySide6 界面
 │   ├── main_window.py       # QStackedWidget + 网络编排
 │   ├── login_view.py        # 登录/注册
+│   ├── username_edit.py     # 账号输入框即时过滤（IME/粘贴/光标）
 │   ├── room_list_view.py    # 房间大厅
 │   ├── room_view.py         # 房间内页（成员/聊天/画板）
 │   ├── canvas_view.py       # 画板控件（画笔/橡皮/颜色/粗细/清空/撤销重做）
@@ -188,9 +189,9 @@ python -m unittest discover -s tests -v
 | 画板快照保存（D） | WS `canvas_snapshot_save` | `{room_id,rev,strokes}`（≤5000 笔 / ≤512KB）；等 `canvas_snapshot_saved` ack 后断开；离开/关窗前必须发 |
 | 修改房间（F） | `PATCH /api/v1/rooms/{room_id_or_code}` | 房主：`{name?}` / `{password?}`（公开房不允许设密码，服务端 `ROOM_PASSWORD_NOT_ALLOWED`）；响应 `data.room` |
 | 删除房间（F） | `DELETE /api/v1/rooms/{room_id_or_code}` | 房主：关闭房间并摘除成员会话；响应 `{closed:true}` |
-| 房间事件（F） | WS `room_updated` / `room_deleted` | 实时更新房名/密码状态；删除后提示并退回大厅（待 feat/profile 后端部署） |
-| 修改昵称（F） | `PATCH /api/v1/users/me`（404/405 回退 `POST /api/v1/users/me/nickname`） | 待 feat/profile 定稿；成功后本地立即更新展示、保持登录 |
-| 修改密码（F） | `PATCH /api/v1/users/me`（回退 `POST /api/v1/users/me/password`） | 旧密码 + 新密码；422 兼容 `current_password`；成功后保持登录 |
+| 房间事件（F） | WS `room_updated` / `room_deleted` | 实时更新房名/密码状态；删除后提示并退回大厅 |
+| 修改昵称（F） | `PATCH /api/v1/users/me` | body `{"nickname": "新昵称"}`；响应 `{"user": {...}}`；成功后本地立即更新展示、保持登录 |
+| 修改密码（F） | `POST /api/v1/users/me/password` | body `{"old_password","new_password"}`；旧密码错 `WRONG_OLD_PASSWORD`、新密码不合规 `INVALID_NEW_PASSWORD`（8–64，前端先校验）；成功后 token 继续有效 |
 | 心跳 | WS `ping` / 服务端 `heartbeat` | 服务端每 30s 下发；客户端 25s ping，90s 无消息判定失联 |
 
 错误体统一读取 `data.error_code`（§1.4/§7.3），并已映射 §7.2 全部 WS 错误码（`NOT_AUTHENTICATED`/`AUTH_INVALID`/`AUTH_EXPIRED`/`NOT_ROOM_MEMBER`/`ROOM_CLOSED`/`INVALID_MESSAGE`/`INVALID_CANVAS_OP`/`CANVAS_OUT_OF_ORDER`/`RATE_LIMITED` 等）。
@@ -215,13 +216,14 @@ python -m unittest discover -s tests -v
 - 聊天（C，部署后实测）：双账号 `dsh_test`/`dsh_test2` 收发（A 发 A/B 都收到、B 发 A 收到）；`chat_message` 字段 `id/room_id/user/content/client_msg_id/created_at` 正确，`client_msg_id` 原样回传；历史分页 4 页 7 条无重复、顺序新→旧；5 条/秒限频第 6 条返回 `RATE_LIMITED`；2001 字返回 `INVALID_MESSAGE`；HTTP leave 后 WS 发送返回 `NOT_ROOM_MEMBER`。
 - 画板（D，部署后实测）：A 画 B 实时收到 `canvas_op`（含 `user_id/rev/op`），A 无自回显；B 画 A 收到；`clear` 生效；`canvas_snapshot_save` 收到 `canvas_snapshot_saved{rev,updated_at}`，HTTP canvas 与后进房 `room_joined.canvas_snapshot` 均能恢复已保存笔画；非法 op→`INVALID_CANVAS_OP`、rev 回退→`CANVAS_OUT_OF_ORDER`、超 30 条/秒→`RATE_LIMITED`、HTTP leave 后→`NOT_ROOM_MEMBER`。
 - 房间管理（F，当前 master 实测）：`PATCH /rooms/{ref}` 改名成功；私有房改密码后旧密码失效、新密码可加入；`DELETE /rooms/{ref}` 成功且删除后房间不可访问（返回 409 + `ROOM_NOT_FOUND`）；公开房设置密码返回 `ROOM_PASSWORD_NOT_ALLOWED`（UI 只对私有房展示密码修改）。
-- 个人资料/房间事件（F）：当前部署尚无 `PATCH /api/v1/users/me`（405）与 `/users/me/nickname`、`/users/me/password`（404），`room_updated` 事件未下发；这些等后端 `feat/profile` 合并部署后再联调（客户端 mock 已打通）。
+- 个人资料/房间事件（F，部署后实测）：`PATCH /users/me` 改昵称成功（响应 `{"user": {...}}`）；`POST /users/me/password` 成功且原 token 继续有效，旧密码错→`WRONG_OLD_PASSWORD`、短新密码→`INVALID_NEW_PASSWORD`；WS `room_updated`（字段 `room_id/name/visibility/has_password`）和 `room_deleted` 均已下发并被客户端处理；`room_joined`/历史接口当前暂未返回 `history_window_days`/`window_days`，客户端按缺省不提示，后端补字段后自动生效。
 - 房间对象比 PROTOCOL 多 `visibility/updated_at/closed_at/background` 等字段，客户端忽略未知字段。
+- 注册/改密密码规则：前端统一 8–64（与后端 F 一致），注册页 6–7 位提交前即被拦截并提示「密码至少 8 位」；登录密码只校验非空，历史短密码账号不受影响。
 
 ### 6.4 后续里程碑
 
 1. C 聊天、D 画板均已部署并通过真实双账号联调。
-2. F 客户端已完成并 mock 打通；待后端 `feat/profile` 部署后联调昵称/改密/`room_updated`/`room_deleted`/历史窗口字段。
+2. F 客户端已完成；昵称/改密/`room_updated`/`room_deleted` 已真实联调通过，历史窗口字段待后端补返回。
 3. 列表分页 UI：只渲染首屏 `items`，后续视需要加分页/滚动加载。
 4. 技能共享（E）`skill_report`/`skill_state` 仍为占位，等 E 协议/通知后实现。
 
@@ -240,8 +242,8 @@ python -m unittest discover -s tests -v
 ## 8. 已知限制 / TODO
 
 - 技能共享（E）未实现，房间内技能卡片仅为占位；截屏/识别尚未接入；
-- F 个人资料/房间事件接口等后端 `feat/profile`：当前部署的昵称修改、改密、`room_updated`/`room_deleted` 事件尚未联调，客户端已按约定实现并 mock 通过；
-- 修改密码要求 8–64 位且新旧不同（服务端规则以后端为准）；修改昵称 1–20 字符，成功后立即更新本地展示（含聊天历史中自己的名字），不退出登录；
+- F 个人资料/房间事件接口已真实联调通过；历史窗口字段后端暂未返回，客户端已兼容，后端返回 `window_days`/`truncated` 后自动提示；
+- 修改密码走 `POST /users/me/password`（8–64 位且新旧不同，前端先校验，后端错误 `WRONG_OLD_PASSWORD`/`INVALID_NEW_PASSWORD` 直接展示）；修改昵称走 `PATCH /users/me`，成功后立即更新本地展示（含聊天历史中自己的名字），不退出登录；
 - 房主改房名 1–30、私有房密码 4–64；删除房间必须原样输入房间名确认；非房主看不到入口（服务端仍会校验）；
 - 大厅自动刷新仅在大厅可见且窗口有焦点时运行；失败按 5→10→20s 退避；手动刷新会重置退避；
 - 历史窗口提示依赖后端返回 `window_days`/`truncated`（字段名兼容多种写法）；未返回时按普通历史展示；

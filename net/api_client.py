@@ -342,48 +342,32 @@ class ApiClient:
 
     # ---------- F：个人资料 / 房间管理 ----------
     async def update_nickname(self, nickname: str) -> dict[str, Any]:
-        """修改昵称。
+        """修改昵称：``PATCH /api/v1/users/me`` body ``{"nickname": ...}``（F 契约）。
 
-        TODO(F/feat-profile): 后端 ``feat/profile`` 分支尚未合并，当前按
-        ``PATCH /api/v1/users/me {nickname}`` 实现；404/405 时回退
-        ``POST /api/v1/users/me/nickname``。联调后按 PROTOCOL 收敛为单一路径。
+        后端响应形如 ``{"user": {...}}``；兼容直接返回 user 字段的实现。
         """
-        payload = {"nickname": nickname}
-        try:
-            body = await self.request_data("PATCH", protocol.API_V1_ME, json_body=payload)
-        except ApiError as exc:
-            if exc.status not in (404, 405):
-                raise
-            body = await self.request_data(
-                "POST", protocol.API_V1_ME_NICKNAME, json_body=payload
-            )
-        return dict(body) if isinstance(body, Mapping) else {"nickname": nickname}
+        body = await self.request_data(
+            "PATCH", protocol.API_V1_ME, json_body={"nickname": nickname}
+        )
+        if isinstance(body, Mapping):
+            user = body.get("user")
+            if isinstance(user, Mapping):
+                return dict(user)
+            return dict(body)
+        return {"nickname": nickname}
 
     async def change_password(self, old_password: str, new_password: str) -> None:
-        """修改密码（旧密码 + 新密码）；成功后 token 继续有效、不退出登录。
+        """修改密码：``POST /api/v1/users/me/password``（F 契约）。
 
-        TODO(F/feat-profile): 路径/字段待后端定稿，优先 ``PATCH /users/me``，
-        404/405 回退 ``POST /users/me/password``；422 时再尝试一次
-        ``current_password`` 字段名（常见后端命名）。
+        body ``{"old_password","new_password"}``；成功 200，token 继续有效。
+        错误由后端 ``data.error_code`` 提供：``WRONG_OLD_PASSWORD`` /
+        ``INVALID_NEW_PASSWORD``，客户端统一映射为用户文案。
         """
-        payload = {"old_password": old_password, "new_password": new_password}
-        try:
-            await self._request("PATCH", protocol.API_V1_ME, json_body=payload)
-            return
-        except ApiError as exc:
-            if exc.status not in (404, 405, 422):
-                raise
-            if exc.status == 422:
-                alt = {"current_password": old_password, "new_password": new_password}
-                try:
-                    await self._request("PATCH", protocol.API_V1_ME, json_body=alt)
-                    return
-                except ApiError as alt_exc:
-                    if alt_exc.status not in (404, 405):
-                        raise
-            else:
-                alt = payload
-            await self._request("POST", protocol.API_V1_ME_PASSWORD, json_body=alt)
+        await self._request(
+            "POST",
+            protocol.API_V1_ME_PASSWORD,
+            json_body={"old_password": old_password, "new_password": new_password},
+        )
 
     async def update_room(
         self,

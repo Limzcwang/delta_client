@@ -7,9 +7,14 @@ from typing import Any, Mapping
 
 from core.rooms import ValidationError
 
-MAX_USERNAME_LENGTH = 32
+MAX_USERNAME_LENGTH = 20
 MAX_PASSWORD_LENGTH = 128
-MIN_REGISTER_PASSWORD_LENGTH = 6
+
+#: 注册/改密统一密码规则（F 后端）：8–64 位；登录仍只校验非空
+NEW_PASSWORD_MIN = 8
+NEW_PASSWORD_MAX = 64
+#: 兼容旧常量名（注册密码下限，与 NEW_PASSWORD_MIN 共用同一规则，勿单独修改）
+MIN_REGISTER_PASSWORD_LENGTH = NEW_PASSWORD_MIN
 
 #: 注册账号规则（F）：6–20 位字母/数字，至少含 1 个字母
 REGISTER_USERNAME_MIN = 6
@@ -21,15 +26,22 @@ _HAS_LETTER_RE = re.compile(r"[A-Za-z]")
 NICKNAME_MIN = 1
 NICKNAME_MAX = 20
 
-#: 修改密码规则（F）：新密码 8–64 位
-NEW_PASSWORD_MIN = 8
-NEW_PASSWORD_MAX = 64
+#: 账号输入框过滤（G）：输入时只保留合法字符（不 trim、不做全角转半角）
+#: - register / login：均仅 ASCII 字母/数字，上限 20（不再兼容 _ - 老账号）
+_USERNAME_INPUT_PATTERNS: dict[str, re.Pattern[str]] = {
+    "register": re.compile(r"[^A-Za-z0-9]"),
+    "login": re.compile(r"[^A-Za-z0-9]"),
+}
+_USERNAME_INPUT_LIMITS: dict[str, int] = {
+    "register": REGISTER_USERNAME_MAX,
+    "login": MAX_USERNAME_LENGTH,
+}
 
 _SENSITIVE_KEY_PARTS = ("pass", "secret", "token", "credential")
 
 
 def validate_username(raw: Any) -> str:
-    """登录用用户名：去首尾空白、1-32 字符、不含控制字符（登录不套注册新规）。"""
+    """登录用用户名：去首尾空白、1-20 字符、不含控制字符（登录不套注册新规）。"""
     username = str(raw or "").strip()
     if not username:
         raise ValidationError("请输入用户名")
@@ -58,6 +70,43 @@ def validate_register_username(raw: Any) -> str:
     return username
 
 
+def _username_input_mode(mode: str) -> str:
+    normalized = str(mode or "").strip().lower()
+    if normalized not in _USERNAME_INPUT_PATTERNS:
+        raise ValueError(f"未知账号输入模式：{mode!r}")
+    return normalized
+
+
+def sanitize_username_input(text: Any, mode: str = "register") -> str:
+    """账号输入框即时过滤（纯函数，供 UI 在 textChanged/粘贴时调用）。
+
+    - ``mode="register"``：仅 ASCII 字母和数字（中文、emoji、空格、全角字符、
+      ``_ - .`` 等一律删除），长度截断到 20；
+    - ``mode="login"``：与注册一致，仅 ASCII 字母和数字，截断到 20
+      （不再兼容 ``dsh_test`` 等下划线老账号）；
+    - 不做全角转半角、不 strip（非法空白直接删除）；粘贴时返回过滤后的合法部分。
+    """
+    normalized = _username_input_mode(mode)
+    cleaned = _USERNAME_INPUT_PATTERNS[normalized].sub("", str(text or ""))
+    return cleaned[: _USERNAME_INPUT_LIMITS[normalized]]
+
+
+def sanitized_cursor_position(text: Any, cursor_position: Any, mode: str = "register") -> int:
+    """过滤后光标位置：按“光标前保留的合法字符数”回退，而不是跳到末尾。
+
+    ``cursor_position`` 超过文本长度时按文本末尾处理；非法字符被删除后，
+    光标向左移动相应数量，截断时不超过最大长度。
+    """
+    raw = str(text or "")
+    try:
+        cursor = int(cursor_position)
+    except (TypeError, ValueError):
+        cursor = len(raw)
+    cursor = max(0, min(cursor, len(raw)))
+    prefix = sanitize_username_input(raw[:cursor], mode)
+    return min(len(prefix), _USERNAME_INPUT_LIMITS[_username_input_mode(mode)])
+
+
 def validate_nickname(raw: Any) -> str:
     """昵称（F）：1–20 字符，去首尾空白、不含控制字符（允许中文/空格）。"""
     nickname = str(raw or "").strip()
@@ -80,21 +129,26 @@ def validate_password(raw: Any) -> str:
     return password
 
 
-def validate_register_password(raw: Any) -> str:
-    password = validate_password(raw)
-    if len(password) < MIN_REGISTER_PASSWORD_LENGTH:
-        raise ValidationError(f"密码至少 {MIN_REGISTER_PASSWORD_LENGTH} 位")
+def _validate_password_length(
+    raw: Any, minimum: int, maximum: int, label: str
+) -> str:
+    """注册/改密共用长度规则；密码不 strip（可能包含空格）。"""
+    password = "" if raw is None else str(raw)
+    if len(password) < minimum:
+        raise ValidationError(f"{label}至少 {minimum} 位")
+    if len(password) > maximum:
+        raise ValidationError(f"{label}最多 {maximum} 位")
     return password
+
+
+def validate_register_password(raw: Any) -> str:
+    """注册密码：与改密共用 8–64 规则（登录密码仍只校验非空）。"""
+    return _validate_password_length(raw, NEW_PASSWORD_MIN, NEW_PASSWORD_MAX, "密码")
 
 
 def validate_new_password(raw: Any) -> str:
     """修改密码（F）：新密码 8–64 位。"""
-    password = "" if raw is None else str(raw)
-    if len(password) < NEW_PASSWORD_MIN:
-        raise ValidationError(f"新密码至少 {NEW_PASSWORD_MIN} 位")
-    if len(password) > NEW_PASSWORD_MAX:
-        raise ValidationError(f"新密码最多 {NEW_PASSWORD_MAX} 位")
-    return password
+    return _validate_password_length(raw, NEW_PASSWORD_MIN, NEW_PASSWORD_MAX, "新密码")
 
 
 def validate_password_change(old: Any, new: Any, confirm: Any) -> tuple[str, str]:
