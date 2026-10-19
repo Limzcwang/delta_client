@@ -322,6 +322,8 @@ class SettingsDialog(QDialog):
         self._catalog = catalog if catalog is not None else load_operator_catalog()
         self._config_manager = config_manager
         self._hud_profile: dict = dict(config.hud_profile or {})
+        self._capture_process = str(config.capture_window_process or "DeltaForceClient-Win64-Shipping")
+        self._capture_title = str(config.capture_window_title or "")
         self._overlay_position_reset = False
         self._build()
 
@@ -450,6 +452,19 @@ class SettingsDialog(QDialog):
         self.refresh_operator_config_info(self._config_manager)
 
         calibration_row = QHBoxLayout()
+        self.capture_window_button = QPushButton("选择游戏窗口")
+        self.capture_window_button.clicked.connect(self._open_window_picker)
+        self.detect_window_button = QPushButton("检测窗口")
+        self.detect_window_button.clicked.connect(self._detect_game_window)
+        calibration_row.addWidget(self.capture_window_button)
+        calibration_row.addWidget(self.detect_window_button)
+        layout.addLayout(calibration_row)
+        self.capture_window_status = QLabel(self._capture_target_text())
+        self.capture_window_status.setObjectName("Hint")
+        self.capture_window_status.setWordWrap(True)
+        layout.addWidget(self.capture_window_status)
+
+        calibration_row = QHBoxLayout()
         self.calibration_button = QPushButton("HUD 标定…")
         self.calibration_button.clicked.connect(self._open_calibration)
         self.hud_status_label = QLabel("未标定：识别前请框选技能栏" if not self._hud_profile else "已保存 HUD 标定")
@@ -523,13 +538,56 @@ class SettingsDialog(QDialog):
                 lines.append(f"{skill.slot_name}：{skill.name or '-'}，CD未知")
         self.operator_detail_label.setText("\n".join(lines))
 
+    def _capture_target_text(self) -> str:
+        text = f"抓帧目标：{self._capture_process}"
+        if self._capture_title:
+            text += f" / 标题：{self._capture_title}"
+        return text
+
+    def _open_window_picker(self) -> None:
+        try:
+            from capture.window import list_visible_windows
+            from ui.window_picker import WindowPickerDialog
+
+            candidates = list_visible_windows()
+            dialog = WindowPickerDialog(candidates, self)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                selected = dialog.selected_candidate()
+                if selected is not None:
+                    self._capture_process = selected.process_name or selected.title
+                    self._capture_title = selected.title
+                    self.capture_window_status.setText(self._capture_target_text())
+        except Exception as exc:  # noqa: BLE001
+            self.capture_window_status.setText(f"枚举窗口失败：{exc}")
+
+    def _detect_game_window(self) -> None:
+        try:
+            from capture.window import find_game_window
+
+            keywords = (self._capture_title,) if self._capture_title else None
+            kwargs = {"title_keywords": keywords} if keywords else {}
+            result = find_game_window(self._capture_process, **kwargs)
+            if result.window is None:
+                self.capture_window_status.setText(f"未找到：{result.reason}")
+            else:
+                window = result.window
+                self.capture_window_status.setText(
+                    f"已找到（{result.reason}）：PID {window.pid} · {window.title} · "
+                    f"{window.client_width}×{window.client_height}"
+                )
+        except Exception as exc:  # noqa: BLE001
+            self.capture_window_status.setText(f"检测失败：{exc}")
+
     def _open_calibration(self) -> None:
         try:
             from capture.sources import open_source
             from core.hud_profile import HudProfile
             from ui.calibration_dialog import HudCalibrationDialog
 
-            source, message = open_source()
+            source, message = open_source(
+                process_name=self._capture_process,
+                title_keyword=self._capture_title,
+            )
             if source is None:
                 QMessageBox.warning(self, "HUD 标定", message)
                 return
@@ -806,6 +864,8 @@ class SettingsDialog(QDialog):
             auto_capture_enabled=self.auto_capture_check.isChecked(),
             auto_loop_enabled=self.auto_loop_check.isChecked(),
             auto_sample_ms=int(self.auto_interval_combo.currentData() or 2000),
+            capture_window_process=self._capture_process,
+            capture_window_title=self._capture_title,
             source="file",
         )
         super().accept()

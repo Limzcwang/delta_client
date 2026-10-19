@@ -436,6 +436,16 @@ class MainWindow(QMainWindow):
         self.login_view.set_busy(False)
         self.login_view.show_error(to_user_message(exc))
 
+    def _handle_ws_fatal(self, message: str) -> None:
+        """顶号/认证失效：停止重连、清会话并回登录页。"""
+        self._stop_ws()
+        self._stop_lobby_timer()
+        self._current_room = None
+        self._room_password = None
+        self._clear_room_state()
+        self.session.clear()
+        self._show_login(message)
+
     def _handle_auth_expired(self, exc: BaseException) -> None:
         message = to_user_message(exc)
         self._stop_ws()
@@ -945,7 +955,14 @@ class MainWindow(QMainWindow):
         elif state == "auth_error":
             self.room_view.set_connection_state("auth_error", detail)
             self._system_message(f"认证失败：{detail or '登录状态无效'}")
-            self._refresh_members_http(self._current_room, fallback=True)
+            self._handle_ws_fatal("登录状态无效，请重新登录")
+        elif state == "replaced":
+            self.room_view.set_connection_state("replaced", "账号已在其他设备登录")
+            self._system_message("账号已在其他设备登录，已停止自动重连")
+            self._handle_ws_fatal("账号已在其他设备登录，请重新登录")
+        elif state == "server_restarting":
+            self.room_view.set_connection_state("reconnecting", detail or "服务器更新中")
+            self.room_view.set_status("服务器更新中，正在重连", error=True)
         else:
             self.room_view.set_connection_state(state, detail)
             if state in ("error", "stopped"):
@@ -1121,7 +1138,7 @@ class MainWindow(QMainWindow):
                 if manager.apply_server_payload(response.payload, getattr(response, "etag", "")):
                     message = f"已更新到版本 {manager.state.version}"
                 else:
-                    message = "服务器配置结构非法，继续使用当前配置"
+                    message = "服务器配置异常，已保留本地配置"
             else:
                 message = f"服务器返回异常状态 {status}"
             self._apply_operator_catalog()
@@ -1159,7 +1176,10 @@ class MainWindow(QMainWindow):
         try:
             from capture.sources import open_source
 
-            return open_source()
+            return open_source(
+                process_name=self.config.capture_window_process,
+                title_keyword=self.config.capture_window_title,
+            )
         except Exception as exc:  # noqa: BLE001
             return None, str(exc)
 
@@ -1211,9 +1231,11 @@ class MainWindow(QMainWindow):
 
     def _find_game_window(self):
         try:
-            from capture.window import find_window_by_process
+            from capture.window import find_game_window
 
-            return find_window_by_process()
+            keywords = (self.config.capture_window_title,) if self.config.capture_window_title else None
+            kwargs = {"title_keywords": keywords} if keywords else {}
+            return find_game_window(self.config.capture_window_process, **kwargs).window
         except Exception:  # noqa: BLE001
             return None
 
@@ -1428,7 +1450,10 @@ class MainWindow(QMainWindow):
             from core.hud_pipeline import recognize_frame, to_skill_state
             from core.hud_profile import HudProfile
 
-            source, message = open_source()
+            source, message = open_source(
+                process_name=self.config.capture_window_process,
+                title_keyword=self.config.capture_window_title,
+            )
             if source is None:
                 self.room_view.set_status(f"HUD 识别不可用：{message}", error=True)
                 return

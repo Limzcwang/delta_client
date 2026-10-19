@@ -31,14 +31,16 @@
 | 画板（D/H4） | 内置三角洲地图底图（1105×1260）；画布控件锁定底图宽高比、随可用空间等比缩放并居中（宿主剩余空间留白），控件内底图铺满；坐标 0–1 = 画布像素/画布宽高（图外不绘制）；透明笔画层（橡皮 composition Clear，清空只清笔画）；画笔/橡皮/颜色/撤销/重做/清空 6 图标工具栏（QPainter 矢量图标、快捷键、当前工具高亮）；画笔圆点/橡皮方块尺寸浮层（3 档，角标提示）；`canvas_op` 增量（≤512 点自动分段、30 条/秒本地节流）、`room_joined.canvas_snapshot` 初始化（缺失/空时 HTTP fallback）、`(user_id,rev)` 丢弃旧包、离开/关窗前 `canvas_snapshot_save` 等 ack、快照上限 5000 笔/512KB |
 | 技能面板（E2） | 房间侧栏「技能」tab：按队友一行，头像首字母/昵称/干员名 + 大招（百分比环）/技能（n/max+CD）/投掷物（n/max+CD）；ready 高亮、charging 每秒倒计时、unknown「?」、30 分钟未更新「未共享」；缓存 `skill_share_state`/`room_joined.skill_states`，`skill_share_removed` 删除；本地时钟偏移用 `auth_ok.server_time` 估算；默认关闭共享，「模拟我的技能」循环状态，开启后 `skill_share_update`（2 次/秒限频），关闭发 `skill_share_off` |
 | 干员配置（E3a） | 读取 `assets/operators.json`（17 干员，slot 0/1/2 = 大招/战术技能/投掷物），面板显示干员名+技能名（hover）；设置页「干员」下拉手动选择并持久化 `operator_id`；`total_cd_ms` 缺失/0 的槽显示「CD未知」、不画环/不倒计时、上报 `state=unknown`；头像 `assets/operators/<id>.png` 存在则加载、缺失用首字母；上报带 `operator_id/operator_name` |
-| 打包（P1/P2） | 版本单一来源 `config.APP_VERSION=0.1.2`（`--version`/设置页显示）；数据目录 `%APPDATA%\DeltaClient\`（config/session/saved_logins/logs，旧 `~/.delta_client.json` 自动迁移并保留 `.bak`）；日志 2MB×3 轮转 + token/password 脱敏；多尺寸 `assets/app.ico`；`delta_client.spec` one-folder/无控制台/无 UPX；`scripts/build_win.ps1` 一键构建便携 ZIP + Inno Setup 安装包 + SHA256SUMS |
+| 打包（P1/P2） | 版本单一来源 `config.APP_VERSION=0.1.3`（`--version`/设置页显示）；数据目录 `%APPDATA%\DeltaClient\`（config/session/saved_logins/logs，旧 `~/.delta_client.json` 自动迁移并保留 `.bak`）；日志 2MB×3 轮转 + token/password 脱敏；多尺寸 `assets/app.ico`；`delta_client.spec` one-folder/无控制台/无 UPX；`scripts/build_win.ps1` 一键构建便携 ZIP + Inno Setup 安装包 + SHA256SUMS |
 | HUD 采集/识别（E3b） | 自动查找 DeltaForceClient-Win64-Shipping 窗口；WGC 优先、mss 回退；独立线程 2 FPS + 最小化暂停；HUD profile（2560×1440 默认/缩放/3 槽等分/JSON 导入导出）与「识别 HUD」按钮；RapidOCR 读百分比/秒数/充能，暗色遮罩比例算 CD，17 干员头像灰度多尺度模板匹配（遮左上编号，失败回退手动干员）；ult_pct_meaning=charged（16%=已充能16%）；识别失败槽 unknown；截图仅内存 |
 | 干员配置中心（E5） | 启动/登录后/进房前 `GET /api/v1/config/operators`（If-None-Match）：304 用缓存，200 校验后写 `%APPDATA%\DeltaClient\operators.json` 并热更新面板/识别/上报；损坏/缺失/非法回退内置 `assets/operators.json`；网络失败静默；设置页显示版本/来源/更新时间+手动检查 |
+| WS 重连保护 | 单实例文件锁（重复启动提示「Delta Client 已在运行」）；close 4001/replaced、认证失效停止自动重连并清会话回登录；1001/1012/网络错误继续指数退避 1→2→4→8→…→30s；server_restarting 提示服务器更新中 |
+| 窗口检测兜底 | 进程名忽略 `.exe`/大小写；标题「三角洲/Delta Force」+客户区 ≥800×600 兜底；设置页选择/检测窗口与匹配方式/失败原因；候选窗口日志 |
 | 悬浮窗/自动循环（E4） | 可选技能 CD 悬浮窗（默认关闭）：无边框/置顶/鼠标穿透/WS_EX_TOOLWINDOW；跟随游戏窗口 500ms，最小化隐藏、独占全屏回落提示；透明度默认 30%、缩放、位置重置、快捷键可自定义（录制+冲突）；自动识别 2s 采样+变化去抖+2 次/秒限频；房间面板原样保留 |
 | 连通性测试 | 设置页「测试连接」：探测 `/health` + `/api/v1/rooms?page=1`，分别报告可达/鉴权失效/超时/网络错误 |
 | 协议对齐 | PROTOCOL C/D 定稿：`data.error_code`、§7.2/§7.3 实名错误码、WS `room_id_or_code`、聊天字段、画板 `rev`/快照语义 |
 | Mock | `--mock` / `DELTA_MOCK=1`：内置内存后端（昵称/聊天历史/画板快照/房主管理/我的房间），可完整离线演示 |
-| 测试 | 381 个 stdlib unittest（含 40 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑；真实 HUD OCR 测试需 requirements-e3.txt 环境 |
+| 测试 | 395 个 stdlib unittest（含 40 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑；真实 HUD OCR 测试需 requirements-e3.txt 环境 |
 ---
 
 ## 2. 目录结构
@@ -199,7 +201,7 @@ python -m unittest discover -s tests -v
 
 覆盖：配置加载与优先级、URL 规范化、协议路径/WS 消息、HTTP 错误映射、WS 重连退避、房间号校验（5 位 `[A-Z0-9]`）、房间/成员/消息解析、登录注册校验、token 存取与“不落盘密码”、Mock 后端完整流程。
 
-当前结果：**381 个用例全部通过**（约 1.2s；无 GUI/OCR 依赖时跳过 40 个）。
+当前结果：**395 个用例全部通过**（约 1.2s；无 GUI/OCR 依赖时跳过 40 个）。
 
 ---
 
@@ -316,6 +318,7 @@ python -m unittest discover -s tests -v
 - aiohttp / websockets 采用函数内延迟导入，缺失依赖时给出明确安装提示；
 - 新增 UI 页面时沿用 `ui/` + 信号/槽，网络请求统一经 `AsyncBridge` 提交，不在 UI 线程直接 `asyncio.run`；
 - **聊天/画板协议细节、已知限制与 TODO 见 [`CLIENT-NOTES.md`](CLIENT-NOTES.md)**（交接必读）。
+
 
 
 

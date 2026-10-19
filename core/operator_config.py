@@ -44,13 +44,15 @@ def _unwrap(payload: Any) -> Any:
 
 
 def validate_payload(payload: Any) -> tuple[bool, str]:
-    """校验服务端/缓存结构；缺 version/operators 或 operator 缺 id 均拒绝。"""
+    """校验服务端/缓存结构；空数组或缺 version/meta/skills/id 均拒绝。"""
     payload = _unwrap(payload)
     if not isinstance(payload, Mapping):
         return False, "配置必须是 JSON 对象"
     version = payload.get("version")
     if version is None or str(version).strip() == "":
         return False, "缺少 version"
+    if not isinstance(payload.get("meta"), Mapping):
+        return False, "缺少 meta"
     operators = payload.get("operators")
     if not isinstance(operators, list) or not operators:
         return False, "operators 必须是非空数组"
@@ -61,6 +63,20 @@ def validate_payload(payload: Any) -> tuple[bool, str]:
             return False, f"operators[{index}] 缺少 id"
         if not str(item.get("name") or "").strip():
             return False, f"operators[{index}] 缺少 name"
+        skills = item.get("skills")
+        if not isinstance(skills, list) or not skills:
+            return False, f"operators[{index}] 缺少 skills"
+        for skill_index, skill in enumerate(skills):
+            if not isinstance(skill, Mapping):
+                return False, f"operators[{index}].skills[{skill_index}] 必须是对象"
+            try:
+                slot = int(skill.get("slot"))
+            except (TypeError, ValueError):
+                return False, f"operators[{index}].skills[{skill_index}] slot 非法"
+            if slot not in (0, 1, 2):
+                return False, f"operators[{index}].skills[{skill_index}] slot 越界"
+            if not str(skill.get("name") or "").strip():
+                return False, f"operators[{index}].skills[{skill_index}] 缺少 name"
     catalog = OperatorCatalog.from_payload(payload)
     if len(catalog) == 0:
         return False, "operators 结构无效"
@@ -160,7 +176,7 @@ class OperatorConfigManager:
         if response.status == 200:
             valid, reason = validate_payload(response.payload)
             if not valid:
-                return "error", f"服务器配置结构非法：{reason}"
+                return "error", "服务器配置异常，已保留本地配置"
             if self.apply_server_payload(response.payload, response.etag):
                 return "updated", f"已更新到版本 {self.state.version}"
             return "error", "缓存写入失败，仍使用内存配置"

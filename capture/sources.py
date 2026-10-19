@@ -7,7 +7,12 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
-from capture.window import WindowInfo, find_window_by_process
+from capture.window import (
+    DEFAULT_PROCESS_NAME,
+    DEFAULT_TITLE_KEYWORDS,
+    WindowInfo,
+    find_game_window,
+)
 
 DEFAULT_FPS = 2.0
 
@@ -138,17 +143,27 @@ class WgcSource:
             pass
 
 
-def open_source(window: WindowInfo | None = None, process_name: str = "") -> tuple[FrameSource | None, str]:
+def open_source(
+    window: WindowInfo | None = None,
+    process_name: str = "",
+    *,
+    title_keyword: str = "",
+) -> tuple[FrameSource | None, str]:
     """优先 WGC，失败回退 mss；返回 (source, error/status)。"""
-    target = window or find_window_by_process(process_name or "DeltaForceClient-Win64-Shipping")
-    if target is None:
-        return None, "未找到游戏窗口（DeltaForceClient-Win64-Shipping）"
+    if window is None:
+        keywords = (title_keyword,) if title_keyword else DEFAULT_TITLE_KEYWORDS
+        result = find_game_window(process_name or DEFAULT_PROCESS_NAME, title_keywords=keywords)
+        window = result.window
+        if window is None:
+            return None, result.reason
+    if window.is_minimized:
+        return None, "游戏窗口已最小化"
     try:
-        return WgcSource(target), "wgc"
+        return WgcSource(window), "wgc"
     except Exception as exc:  # noqa: BLE001 - WGC 不可用时回退
         wgc_error = str(exc)
     try:
-        return MssSource(target), f"mss (WGC 不可用: {wgc_error})"
+        return MssSource(window), f"mss (WGC 不可用: {wgc_error})"
     except Exception as exc:  # noqa: BLE001
         return None, f"WGC/mss 均不可用: {wgc_error}; {exc}"
 

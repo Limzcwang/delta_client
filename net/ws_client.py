@@ -19,6 +19,7 @@ from typing import Any, Awaitable, Callable, Mapping
 from core import protocol
 from core.backoff import ReconnectBackoff
 from core.models import now_ms
+from core.ws_close import AUTH_ERROR, REPLACED, RESTARTING, classify_close
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,8 @@ class WsClient:
         self._stop_event = asyncio.Event()
         self._canvas_save_waiters: list[asyncio.Future] = []
         self.server_time: int | None = None
+        self._close_code: int | None = None
+        self._close_reason: str = ""
 
     # ---------- 状态 ----------
     @property
@@ -147,10 +150,25 @@ class WsClient:
             finally:
                 if ws is not None:
                     try:
+                        self._close_code = getattr(ws, "close_code", None)
+                        self._close_reason = str(getattr(ws, "close_reason", "") or "")
+                    except Exception:
+                        self._close_code = None
+                        self._close_reason = ""
+                    try:
                         await ws.close()
                     except Exception:
                         pass
                 self._ws = None
+            action = classify_close(self._close_code, self._close_reason)
+            if action == REPLACED:
+                self._set_state("replaced", message="账号已在其他设备登录")
+                return
+            if action == AUTH_ERROR:
+                self._set_state("auth_error", message="认证失效")
+                return
+            if action == RESTARTING:
+                self._set_state("server_restarting", message="服务器更新中，正在重连")
             if self._stopped:
                 break
             delay = self.backoff.next_delay()
@@ -199,6 +217,11 @@ class WsClient:
                     raise WsAuthError(text)
                 elif mtype == protocol.WS_CANVAS_SNAPSHOT_SAVED:
                     self._resolve_save_waiters(message)
+                elif mtype == "server_restarting":
+                    self._set_state(
+                        "server_restarting",
+                        message=str(message.get("message") or "服务器更新中，正在重连"),
+                    )
                 elif mtype == protocol.WS_PONG:
                     try:
                         now_epoch = int(time.time() * 1000)

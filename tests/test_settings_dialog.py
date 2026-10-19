@@ -54,7 +54,7 @@ class SettingsOperatorTests(unittest.TestCase):
         from PySide6.QtWidgets import QLabel
 
         self.assertTrue(
-            any("版本 v0.1.2" in label.text() for label in dialog.findChildren(QLabel))
+            any("版本 v0.1.3" in label.text() for label in dialog.findChildren(QLabel))
         )
 
     def test_config_center_labels_and_check_button(self) -> None:
@@ -114,6 +114,15 @@ class SettingsOperatorTests(unittest.TestCase):
         self.assertIsNone(result.overlay_x)
         self.assertIsNone(result.overlay_y)
 
+    def test_capture_window_selection_persist(self) -> None:
+        dialog = self._dialog("honglang")
+        dialog._capture_process = "DeltaForceClient-Win64-Shipping.exe"
+        dialog._capture_title = "三角洲行动"
+        dialog.accept()
+        result = dialog.config_result()
+        self.assertEqual("DeltaForceClient-Win64-Shipping.exe", result.capture_window_process)
+        self.assertEqual("三角洲行动", result.capture_window_title)
+
     def test_overlay_shortcut_conflict_rejected(self) -> None:
         dialog = self._dialog("honglang")
         dialog.shortcut_toggle_edit.setKeySequence("Ctrl+Shift+X")
@@ -137,6 +146,7 @@ class SettingsOperatorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 
 
 
