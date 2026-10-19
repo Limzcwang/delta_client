@@ -31,10 +31,13 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from core.protocol import ws_url_for
+from state.paths import APP_NAME
 
 DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
 DEFAULT_TIMEOUT = 15.0
 CONFIG_FILENAME = ".delta_client.json"
+APP_VERSION = "0.1.0"
+__version__ = APP_VERSION
 CONFIG_ENV = "DELTA_CLIENT_CONFIG"
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on", "y", "t"})
@@ -101,12 +104,18 @@ def normalize_ws_url(raw: Any) -> str:
 
 
 def config_path_from_env(env: Mapping[str, str] | None = None) -> Path:
-    """配置文件路径：``DELTA_CLIENT_CONFIG`` 优先，否则 ``~/.delta_client.json``。"""
+    """配置文件路径：``DELTA_CLIENT_CONFIG`` 优先，否则 ``%APPDATA%\\DeltaClient\\config.json``。"""
     source = os.environ if env is None else env
     override = str(source.get(CONFIG_ENV, "") or "").strip()
     if override:
         return Path(override).expanduser()
-    return Path.home() / CONFIG_FILENAME
+    data_override = str(source.get("DELTA_DATA_DIR", "") or "").strip()
+    if data_override:
+        return Path(data_override).expanduser() / "config.json"
+    appdata = str(source.get("APPDATA", "") or "").strip()
+    if appdata:
+        return Path(appdata) / APP_NAME / "config.json"
+    return Path.home() / ".delta_client" / "config.json"
 
 
 @dataclass(frozen=True)

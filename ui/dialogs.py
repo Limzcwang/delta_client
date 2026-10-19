@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from config import AppConfig, ConfigError, normalize_server_url, normalize_ws_url
+from config import APP_VERSION, AppConfig, ConfigError, normalize_server_url, normalize_ws_url
 from core.models import Room
 from core.operators import OperatorCatalog, load_operator_catalog
 from state.saved_logins import SavedLoginInfo
@@ -322,11 +322,14 @@ class SettingsDialog(QDialog):
         root.setSpacing(10)
         heading = QLabel("设置")
         heading.setObjectName("PageTitle")
-        sub = QLabel("连接配置保存到 ~/.delta_client.json；个人资料修改成功后保持登录")
+        sub = QLabel("连接配置保存到 %APPDATA%\\DeltaClient\\config.json；个人资料修改成功后保持登录")
         sub.setObjectName("PageSubtitle")
         sub.setWordWrap(True)
         root.addWidget(heading)
         root.addWidget(sub)
+        version_label = QLabel(f"版本 v{APP_VERSION}")
+        version_label.setObjectName("Hint")
+        root.addWidget(version_label)
         root.addSpacing(6)
 
         self.tabs = QTabWidget()

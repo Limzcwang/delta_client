@@ -142,18 +142,32 @@ class SkillPanelTests(unittest.TestCase):
         panel.simulate_button.click()
         self.assertEqual([True], simulated)
 
-    def test_operator_config_names_and_missing_avatar_placeholder(self) -> None:
-        catalog = load_operator_catalog()
+    def test_operator_config_names_and_placeholder(self) -> None:
+        # 自定义一个没有头像文件的干员，验证首字母占位与配置技能名
+        catalog = OperatorCatalog.from_payload(
+            {
+                "operators": [
+                    {
+                        "id": "noavatar",
+                        "name": "无头像干员",
+                        "skills": [
+                            {"slot": 0, "name": "配置大招", "total_cd_ms": 1000},
+                            {"slot": 1, "name": "配置技能", "total_cd_ms": 1000},
+                        ],
+                    }
+                ]
+            }
+        )
         panel = self._panel(catalog=catalog)
-        panel.set_states([state(operator_id="honglang", operator="红狼")])
+        panel.set_states([state(operator_id="noavatar", operator="无头像干员")])
         row = panel._rows["2"]
-        self.assertEqual("红狼", row.operator_label.text())
+        self.assertEqual("无头像干员", row.operator_label.text())
         self.assertEqual("队", row.avatar.text())
         self.assertTrue(row.avatar.pixmap().isNull())
         ultimate = row.slot_widgets[SLOT_ULTIMATE]
         ability = row.slot_widgets[SLOT_ABILITY]
-        self.assertEqual("动力外骨骼", ultimate.text_lines()[0])
-        self.assertEqual("三联装手炮", ability.text_lines()[0])
+        self.assertEqual("配置大招", ultimate.text_lines()[0])
+        self.assertEqual("配置技能", ability.text_lines()[0])
 
     def test_unknown_cd_slot_has_no_ring_or_countdown(self) -> None:
         catalog = load_operator_catalog()
@@ -201,4 +215,5 @@ class SkillPanelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 
