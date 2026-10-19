@@ -7,10 +7,12 @@ from typing import Any, Mapping
 
 ROOM_CODE_LENGTH = 5
 ROOM_CODE_PATTERN = re.compile(r"^[A-Z0-9]{5}$")
-MAX_ROOM_NAME_LENGTH = 32
+MAX_ROOM_NAME_LENGTH = 30
 MAX_ROOM_NAME_UPDATE_LENGTH = 30   # F：房主修改房间名 1–30
-MAX_ROOM_PASSWORD_LENGTH = 64
-ROOM_PASSWORD_CHANGE_MIN = 4       # F：房主修改私有房密码 4–64
+ROOM_PASSWORD_MIN = 4              # A/B：私有房密码 4–32
+ROOM_PASSWORD_MAX = 32
+MAX_ROOM_PASSWORD_LENGTH = ROOM_PASSWORD_MAX
+ROOM_PASSWORD_CHANGE_MIN = ROOM_PASSWORD_MIN
 VISIBILITIES = ("public", "private")
 
 
@@ -49,7 +51,7 @@ def validate_room_code(raw: Any) -> str:
 
 
 def validate_room_name(raw: Any) -> str:
-    """房间名：1-32 字符，不允许换行/制表等控制字符。"""
+    """房间名：1-30 字符，不允许换行/制表等控制字符。"""
     name = str(raw or "").strip()
     if not name:
         raise ValidationError("请输入房间名称")
@@ -79,8 +81,10 @@ def validate_room_password(password: Any, visibility: str) -> str | None:
     if password is None or str(password) == "":
         raise ValidationError("私有房间必须设置密码")
     text = str(password)
-    if len(text) > MAX_ROOM_PASSWORD_LENGTH:
-        raise ValidationError(f"房间密码最多 {MAX_ROOM_PASSWORD_LENGTH} 个字符")
+    if len(text) < ROOM_PASSWORD_MIN:
+        raise ValidationError(f"房间密码至少 {ROOM_PASSWORD_MIN} 位")
+    if len(text) > ROOM_PASSWORD_MAX:
+        raise ValidationError(f"房间密码最多 {ROOM_PASSWORD_MAX} 位")
     return text
 
 
@@ -97,7 +101,7 @@ def validate_room_name_update(raw: Any) -> str:
 
 
 def validate_room_password_change(new_password: Any, confirm: Any) -> str:
-    """房主修改私有房密码（F）：4–64 位，两次输入一致。"""
+    """房主修改私有房密码（A/B）：4–32 位，两次输入一致。"""
     password = "" if new_password is None else str(new_password)
     confirmation = "" if confirm is None else str(confirm)
     if len(password) < ROOM_PASSWORD_CHANGE_MIN:

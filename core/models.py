@@ -169,6 +169,102 @@ class Room:
 
 
 @dataclass(frozen=True)
+class MyRoom:
+    """「我的房间」条目（H1）：``GET /api/v1/rooms/mine`` 的 items。"""
+
+    id: str = ""
+    code: str = ""
+    name: str = ""
+    visibility: str = "public"
+    member_count: int = 0
+    joined_at: int | None = None
+    role: str = "member"
+    raw: Mapping[str, Any] = field(default_factory=dict, compare=False, repr=False)
+
+    @classmethod
+    def from_api(cls, payload: Mapping[str, Any]) -> "MyRoom":
+        if not isinstance(payload, Mapping):
+            payload = {}
+        # 兼容 item 内再包一层 room 的后端实现
+        nested = payload.get("room")
+        if isinstance(nested, Mapping):
+            merged: dict[str, Any] = dict(nested)
+            merged.update({key: value for key, value in payload.items() if key != "room"})
+            payload = merged
+        visibility = _as_str(
+            _first(payload, "visibility", "type", "room_type"), ""
+        ).lower()
+        if not visibility:
+            visibility = "private" if room_has_password(payload) else "public"
+        return cls(
+            id=_as_str(_first(payload, "id", "room_id", "roomId")),
+            code=normalize_room_code(_first(payload, "code", "room_code", "roomCode")),
+            name=_as_str(_first(payload, "name", "room_name", "title")),
+            visibility=visibility,
+            member_count=_as_int(
+                _first(payload, "member_count", "memberCount", "members_count"), default=0
+            ),
+            joined_at=parse_ts(_first(payload, "joined_at", "joinedAt", "joined_time")),
+            role=_as_str(_first(payload, "role", "member_role"), "member").lower() or "member",
+            raw=dict(payload),
+        )
+
+    @property
+    def display_name(self) -> str:
+        return self.name or (f"房间 {self.code}" if self.code else "未命名房间")
+
+    @property
+    def reference(self) -> str:
+        return self.id or self.code
+
+    @property
+    def key(self) -> str:
+        return self.id or self.code
+
+    @property
+    def is_owner(self) -> bool:
+        return self.role == "owner"
+
+    @property
+    def is_private(self) -> bool:
+        return self.visibility == "private" or bool(self.raw.get("has_password"))
+
+
+@dataclass(frozen=True)
+class MyRoomsPage:
+    """「我的房间」分页结果（items 按加入时间倒序）。"""
+
+    items: tuple[MyRoom, ...] = ()
+    has_more: bool = False
+    next_before: str | None = None
+
+
+def parse_my_rooms_page(payload: Any) -> MyRoomsPage:
+    """解析「我的房间」：兼容 ``{items,has_more,next_before}``、``data:...`` 与裸数组。"""
+    data = unwrap_payload(payload)
+    if isinstance(data, list):
+        return MyRoomsPage(items=tuple(
+            MyRoom.from_api(item) for item in data if isinstance(item, Mapping)
+        ))
+    if not isinstance(data, Mapping):
+        return MyRoomsPage()
+    items = None
+    for key in ("items", "rooms", "list"):
+        value = data.get(key)
+        if isinstance(value, list):
+            items = value
+            break
+    if items is None:
+        return MyRoomsPage()
+    next_before = data.get("next_before")
+    return MyRoomsPage(
+        items=tuple(MyRoom.from_api(item) for item in items if isinstance(item, Mapping)),
+        has_more=bool(data.get("has_more", False)),
+        next_before=str(next_before) if next_before is not None else None,
+    )
+
+
+@dataclass(frozen=True)
 class ChatMessage:
     """聊天消息（PROTOCOL.md §6.4 / C 定稿字段）。
 

@@ -18,7 +18,16 @@ from core import protocol
 from core.canvas import CanvasSnapshot, parse_canvas_snapshot
 from core.connection import ConnectionCheck, probe_ok
 from core.errors import ApiError, ErrorKind
-from core.models import ChatMessage, ChatPage, Member, Room, RoomDetail, now_ms
+from core.models import (
+    ChatMessage,
+    ChatPage,
+    Member,
+    MyRoom,
+    MyRoomsPage,
+    Room,
+    RoomDetail,
+    now_ms,
+)
 from core.rooms import (
     ValidationError,
     normalize_room_code,
@@ -82,6 +91,41 @@ _SEED_ROOMS: tuple[dict[str, Any], ...] = (
         "created_at": now_ms() - 10_800_000,
         "background_id": "bg_default_01",
     },
+    # H1「我的房间」演示：demo 已加入 2 个、房主 1 个
+    {
+        "id": "mock-room-myr01",
+        "code": "MYR01",
+        "name": "演示·已加入房",
+        "owner_id": "2",
+        "member_count": 2,
+        "has_password": False,
+        "visibility": "public",
+        "created_at": now_ms() - 1_800_000,
+        "background_id": "bg_default_01",
+    },
+    {
+        "id": "mock-room-myr02",
+        "code": "MYR02",
+        "name": "演示·私密房",
+        "owner_id": "3",
+        "member_count": 2,
+        "has_password": True,
+        "password": "1234",
+        "visibility": "private",
+        "created_at": now_ms() - 2_700_000,
+        "background_id": "bg_default_01",
+    },
+    {
+        "id": "mock-room-myr03",
+        "code": "MYR03",
+        "name": "演示·房主房",
+        "owner_id": "1",
+        "member_count": 2,
+        "has_password": False,
+        "visibility": "public",
+        "created_at": now_ms() - 3_600_000,
+        "background_id": "bg_default_01",
+    },
 )
 
 
@@ -103,6 +147,25 @@ _SEED_MEMBERS: dict[str, list[dict[str, Any]]] = {
         {"id": "6", "username": "foxtrot", "nickname": "队友-Foxtrot", "online": True},
     ],
     "Q4W8E": [{"id": "2", "username": "player", "nickname": "队友玩家", "online": False}],
+    "MYR01": [
+        {"id": "1", "username": "demo", "nickname": "演示玩家", "online": True},
+        {"id": "2", "username": "player", "nickname": "队友玩家", "online": True},
+    ],
+    "MYR02": [
+        {"id": "1", "username": "demo", "nickname": "演示玩家", "online": True},
+        {"id": "3", "username": "charlie", "nickname": "队友-Charlie", "online": False},
+    ],
+    "MYR03": [
+        {"id": "1", "username": "demo", "nickname": "演示玩家", "online": True},
+        {"id": "2", "username": "player", "nickname": "队友玩家", "online": True},
+    ],
+}
+
+#: H1：demo 预置已加入房间（`(username, code) -> joined_at`）
+_SEED_MEMBERSHIPS: dict[tuple[str, str], int] = {
+    ("demo", "MYR01"): now_ms() - 1_800_000,
+    ("demo", "MYR02"): now_ms() - 2_700_000,
+    ("demo", "MYR03"): now_ms() - 3_600_000,
 }
 
 #: 演示聊天历史（按时间正序；接口返回时倒序分页）
@@ -150,7 +213,8 @@ class MockApiClient:
         self._room_members: dict[str, list[dict[str, Any]]] = {
             code: [dict(member) for member in members] for code, members in _SEED_MEMBERS.items()
         }
-        self._memberships: set[tuple[str, str]] = set()
+        self._memberships: set[tuple[str, str]] = set(_SEED_MEMBERSHIPS)
+        self._joined_at: dict[tuple[str, str], int] = dict(_SEED_MEMBERSHIPS)
         self._username: str | None = None
         self._current_user: dict[str, Any] | None = None
         self._messages: dict[str, list[dict[str, Any]]] = {
@@ -310,6 +374,37 @@ class MockApiClient:
         rooms.sort(key=lambda room: room.created_at or 0, reverse=True)
         return rooms
 
+    async def list_my_rooms(self, page: int = 1, page_size: int = 20) -> MyRoomsPage:
+        """H1：当前用户已加入的房间（按 joined_at 倒序，role=owner/member）。"""
+        await self._tick()
+        username = self._username or ""
+        user_id = str((self._current_user or {}).get("id", ""))
+        entries: list[tuple[int, MyRoom]] = []
+        if username:
+            for (member_name, code), joined_at in self._joined_at.items():
+                if member_name != username:
+                    continue
+                payload = self._rooms.get(code)
+                if payload is None:
+                    continue
+                item = dict(_copy_room_payload(payload))
+                item["joined_at"] = joined_at
+                item["role"] = (
+                    "owner" if user_id and str(payload.get("owner_id")) == user_id else "member"
+                )
+                entries.append((int(joined_at or 0), MyRoom.from_api(item)))
+        entries.sort(key=lambda pair: pair[0], reverse=True)
+        ordered = [item for _, item in entries]
+        size = max(1, int(page_size))
+        start = max(0, (max(1, int(page)) - 1) * size)
+        window = ordered[start : start + size]
+        has_more = start + len(window) < len(ordered)
+        return MyRoomsPage(
+            items=tuple(window),
+            has_more=has_more,
+            next_before=str(start + len(window)) if has_more else None,
+        )
+
     async def create_room(self, name: str, visibility: str, password: str | None = None) -> Room:
         await self._tick()
         try:
@@ -337,6 +432,7 @@ class MockApiClient:
         members = self._room_members.setdefault(code, [])
         if self._username:
             self._memberships.add((self._username, code))
+            self._joined_at[(self._username, code)] = now_ms()
             self_member = self._self_member()
             if not any(item.get("username") == self_member["username"] for item in members):
                 members.append(self_member)
@@ -365,6 +461,7 @@ class MockApiClient:
         self_member = self._self_member()
         if key not in self._memberships:
             self._memberships.add(key)
+            self._joined_at[key] = now_ms()
             if not any(
                 str(item.get("id")) == str(self_member["id"]) or item.get("username") == self_member["username"]
                 for item in members
@@ -379,6 +476,7 @@ class MockApiClient:
         key = (self._username or "", code)
         if key in self._memberships:
             self._memberships.discard(key)
+            self._joined_at.pop(key, None)
             payload = self._rooms.get(code)
             self_member = self._self_member()
             if payload is not None:
@@ -417,9 +515,9 @@ class MockApiClient:
             except ValidationError as exc:
                 raise ApiError(ErrorKind.VALIDATION, str(exc), status=400, code="ROOM_NAME_INVALID") from exc
         if password is not None:
-            if len(str(password)) < 4 or len(str(password)) > 64:
+            if len(str(password)) < 4 or len(str(password)) > 32:
                 raise ApiError(
-                    ErrorKind.VALIDATION, "房间密码需为 4–64 位", status=400, code="ROOM_PASSWORD_INVALID"
+                    ErrorKind.VALIDATION, "房间密码需为 4–32 位", status=400, code="ROOM_PASSWORD_INVALID"
                 )
             payload["password"] = str(password)
             payload["has_password"] = True
@@ -437,6 +535,14 @@ class MockApiClient:
         self._room_members.pop(code, None)
         self._messages.pop(code, None)
         self._room_canvas.pop(code, None)
+        self._memberships = {
+            pair for pair in self._memberships if pair[1] != code
+        }
+        self._joined_at = {
+            pair: joined_at
+            for pair, joined_at in self._joined_at.items()
+            if pair[1] != code
+        }
         return True
 
     async def get_room_detail(self, room_id_or_code: str) -> RoomDetail:

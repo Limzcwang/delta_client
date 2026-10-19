@@ -10,9 +10,9 @@ from core.rooms import ValidationError
 MAX_USERNAME_LENGTH = 20
 MAX_PASSWORD_LENGTH = 128
 
-#: 注册/改密统一密码规则（F 后端）：8–64 位；登录仍只校验非空
+#: 注册/改密统一密码规则（F/B 后端）：8–32 位；登录仍只校验非空
 NEW_PASSWORD_MIN = 8
-NEW_PASSWORD_MAX = 64
+NEW_PASSWORD_MAX = 32
 #: 兼容旧常量名（注册密码下限，与 NEW_PASSWORD_MIN 共用同一规则，勿单独修改）
 MIN_REGISTER_PASSWORD_LENGTH = NEW_PASSWORD_MIN
 

@@ -11,6 +11,7 @@ from PySide6.QtCore import QEvent, QEventLoop, QTimer
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QDialog,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -32,6 +33,7 @@ from core.errors import ApiError, ErrorKind, to_user_message
 from core.models import (
     ChatMessage,
     Member,
+    MyRoom,
     Room,
     RoomDetail,
     now_ms,
@@ -39,6 +41,7 @@ from core.models import (
     parse_members,
 )
 from core.protocol import extract_token, extract_user, make_client_msg_id, message_type
+from core.rooms import ValidationError, validate_room_delete_confirmation
 from net.api_client import ApiClient, LoginResult
 from net.mock_backend import MockApiClient, MockWsClient
 from net.ws_client import WsClient
@@ -118,6 +121,7 @@ class MainWindow(QMainWindow):
         self._lobby_timer.timeout.connect(self._auto_refresh_lobby)
         self._lobby_backoff = ReconnectBackoff(base=5.0, factor=2.0, max_delay=20.0)
         self._rooms_loading = False
+        self._my_rooms_loading = False
         # F-c5：历史窗口文案（room_joined / 历史接口可选字段）
         self._history_window_days: int | None = None
 
@@ -155,12 +159,14 @@ class MainWindow(QMainWindow):
         self.login_view.register_requested.connect(self._on_register)
         self.login_view.settings_requested.connect(self._on_settings)
 
-        self.room_list_view.refresh_requested.connect(self._refresh_rooms)
+        self.room_list_view.refresh_requested.connect(self._refresh_lobby)
         self.room_list_view.create_requested.connect(self._on_create_room)
         self.room_list_view.join_requested.connect(self._on_join_room)
         self.room_list_view.logout_requested.connect(self._on_logout)
         self.room_list_view.settings_requested.connect(self._on_settings)
         self.room_list_view.profile_requested.connect(self._on_profile)
+        self.room_list_view.my_rooms.leave_requested.connect(self._on_my_room_leave)
+        self.room_list_view.my_rooms.close_requested.connect(self._on_my_room_close)
 
         self.room_view.leave_requested.connect(self._on_leave_room)
         self.room_view.chat_submitted.connect(self._on_chat_submitted)
@@ -223,7 +229,7 @@ class MainWindow(QMainWindow):
         self._lobby_backoff.reset()
         self._lobby_timer.setInterval(5000)
         self._update_lobby_timer()
-        self._refresh_rooms(manual=True)
+        self._refresh_lobby(manual=True)
 
     # ---------- F-c3：大厅自动刷新 ----------
     def _update_lobby_timer(self) -> None:
@@ -244,9 +250,9 @@ class MainWindow(QMainWindow):
         if self.stack.currentWidget() is not self.room_list_view or not self.isActiveWindow():
             self._stop_lobby_timer()
             return
-        if self._rooms_loading:
+        if self._rooms_loading and self._my_rooms_loading:
             return
-        self._refresh_rooms(manual=False)
+        self._refresh_lobby(manual=False)
 
     def changeEvent(self, event: Any) -> None:  # noqa: N802 - Qt 覆盖
         if event.type() == QEvent.Type.ActivationChange:
@@ -315,6 +321,43 @@ class MainWindow(QMainWindow):
         self._show_login(f"{message}，请重新登录")
 
     # ---------- 房间大厅 ----------
+    def _refresh_lobby(self, manual: bool = True) -> None:
+        """H1：公共房间 + 我的房间共用同一个刷新节拍。"""
+        self._refresh_rooms(manual=manual)
+        self._refresh_my_rooms(manual=manual)
+
+    def _refresh_my_rooms(self, manual: bool = True) -> None:
+        if self._my_rooms_loading:
+            return
+        self._my_rooms_loading = True
+        self._safe_submit(
+            self.api.list_my_rooms(),
+            lambda page: self._on_my_rooms_loaded(page, manual),
+            lambda exc: self._on_my_rooms_failed(exc, manual),
+        )
+
+    def _on_my_rooms_loaded(self, page: Any, manual: bool = True) -> None:
+        self._my_rooms_loading = False
+        rooms = list(getattr(page, "items", ()) or ())
+        self.room_list_view.my_rooms.set_rooms(rooms)
+        self._update_my_rooms_tab(len(rooms))
+
+    def _on_my_rooms_failed(self, exc: BaseException, manual: bool = True) -> None:
+        self._my_rooms_loading = False
+        if isinstance(exc, ApiError) and exc.is_auth_error:
+            self._handle_auth_expired(exc)
+            return
+        if manual:
+            self.room_list_view.set_status(
+                f"我的房间加载失败：{to_user_message(exc)}", error=True
+            )
+
+    def _update_my_rooms_tab(self, count: int | None = None) -> None:
+        rooms = self.room_list_view.my_rooms.rooms
+        total = len(rooms) if count is None else int(count)
+        title = f"我的房间 ({total})" if total else "我的房间"
+        self.room_list_view.tabs.setTabText(1, title)
+
     def _refresh_rooms(self, manual: bool = True) -> None:
         if self._rooms_loading:
             return
@@ -360,17 +403,136 @@ class MainWindow(QMainWindow):
             f"自动刷新失败，{delay:.0f}s 后重试：{to_user_message(exc)}", error=True
         )
 
+    # ---------- H1：我的房间 ----------
+    def _on_my_room_leave(self, key: str) -> None:
+        mine = self.room_list_view.my_rooms.room(key)
+        if mine is None:
+            return
+        answer = QMessageBox.question(
+            self,
+            "退出房间",
+            f"确定退出《{mine.display_name}》？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.room_list_view.my_rooms.set_room_busy(mine.key, True)
+        self._safe_submit(
+            self.api.leave_room(mine.code or mine.reference),
+            lambda _result: self._on_my_room_left(mine),
+            lambda exc: self._on_my_room_action_failed(mine, "退出", exc),
+        )
+
+    def _on_my_room_left(self, mine: MyRoom) -> None:
+        self.room_list_view.my_rooms.remove_room(mine.key)
+        self._update_my_rooms_tab()
+        self.room_list_view.set_status(f"已退出「{mine.display_name}」")
+        current = self._current_room
+        if current is not None and self._room_matches_my_room(current, mine):
+            self._return_to_lobby_after_room_gone()
+            return
+        # 公共列表人数需要刷新（不阻塞）
+        self._refresh_rooms(manual=False)
+
+    def _on_my_room_close(self, key: str) -> None:
+        mine = self.room_list_view.my_rooms.room(key)
+        if mine is None:
+            return
+        text, accepted = QInputDialog.getText(
+            self,
+            "关闭房间",
+            f"输入房间名「{mine.display_name}」以确认关闭：",
+        )
+        if not accepted:
+            return
+        try:
+            validate_room_delete_confirmation(text, mine.display_name)
+        except ValidationError as exc:
+            QMessageBox.warning(self, "确认失败", str(exc))
+            return
+        self.room_list_view.my_rooms.set_room_busy(mine.key, True)
+        self._safe_submit(
+            self.api.delete_room(mine.reference),
+            lambda _result: self._on_my_room_closed(mine),
+            lambda exc: self._on_my_room_action_failed(mine, "关闭", exc),
+        )
+
+    def _on_my_room_closed(self, mine: MyRoom) -> None:
+        self.room_list_view.my_rooms.remove_room(mine.key)
+        self._update_my_rooms_tab()
+        self.room_list_view.set_status(f"已关闭「{mine.display_name}」")
+        current = self._current_room
+        if current is not None and self._room_matches_my_room(current, mine):
+            self._return_to_lobby_after_room_gone()
+            return
+        self._refresh_rooms(manual=False)
+
+    def _on_my_room_action_failed(
+        self, mine: MyRoom, action: str, exc: BaseException
+    ) -> None:
+        if isinstance(exc, ApiError) and exc.is_auth_error:
+            self._handle_auth_expired(exc)
+            return
+        self.room_list_view.my_rooms.set_room_busy(mine.key, False)
+        self.room_list_view.set_status(
+            f"{action}「{mine.display_name}」失败：{to_user_message(exc)}", error=True
+        )
+
+    @staticmethod
+    def _room_matches_my_room(room: Room, mine: MyRoom) -> bool:
+        return bool(
+            (room.id and mine.id and room.id == mine.id)
+            or (room.code and mine.code and room.code == mine.code)
+        )
+
+    def _return_to_lobby_after_room_gone(self) -> None:
+        self._stop_ws()
+        self._current_room = None
+        self._room_password = None
+        self._clear_room_state()
+        self._show_rooms()
+
     def _on_create_room(self) -> None:
         dialog = CreateRoomDialog(self)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        name, visibility, password = dialog.values()
+        dialog.create_requested.connect(
+            lambda name, visibility, password: self._submit_create_room(
+                dialog, name, visibility, password
+            )
+        )
+        dialog.exec()
+
+    def _submit_create_room(
+        self, dialog: CreateRoomDialog, name: str, visibility: str, password: str
+    ) -> None:
+        dialog.set_busy(True)
         self.room_list_view.set_status("正在创建房间…")
         self._safe_submit(
-            self.api.create_room(name, visibility, password),
-            lambda room: self._on_room_created(room, password),
-            self._on_room_action_failed,
+            self.api.create_room(name, visibility, password or None),
+            lambda room: self._on_create_room_succeeded(dialog, room, password or None),
+            lambda exc: self._on_create_room_failed(dialog, exc),
         )
+
+    def _on_create_room_succeeded(
+        self, dialog: CreateRoomDialog, room: Room, password: str | None
+    ) -> None:
+        dialog.accept()
+        self._on_room_created(room, password)
+
+    def _on_create_room_failed(self, dialog: CreateRoomDialog, exc: BaseException) -> None:
+        if isinstance(exc, ApiError) and exc.is_auth_error:
+            try:
+                dialog.reject()
+            except RuntimeError:
+                pass
+            self._handle_auth_expired(exc)
+            return
+        try:
+            dialog.set_busy(False)
+            dialog.set_error(to_user_message(exc))
+        except RuntimeError:  # 对话框已关闭
+            logger.debug("创建房间对话框已关闭，忽略迟到错误")
+        self.room_list_view.set_status(to_user_message(exc), error=True)
 
     def _on_room_created(self, room: Room, password: str | None) -> None:
         self._set_status(f"房间已创建：{room.code}")
@@ -740,6 +902,22 @@ class MainWindow(QMainWindow):
         self._set_status(f"房间「{updated.name}」已更新")
 
     def _on_room_deleted(self, message: Mapping[str, Any] | None = None) -> None:
+        room = self._current_room
+        refs = {
+            str(value)
+            for value in (
+                (message or {}).get("room_id"),
+                (message or {}).get("id"),
+                (message or {}).get("code"),
+                room.id if room is not None else "",
+                room.code if room is not None else "",
+            )
+            if value
+        }
+        for mine in list(self.room_list_view.my_rooms.rooms):
+            if mine.key in refs or mine.id in refs or mine.code in refs:
+                self.room_list_view.my_rooms.remove_room(mine.key)
+        self._update_my_rooms_tab()
         self._system_message("房间已被房主删除")
         self._stop_ws()
         self._current_room = None

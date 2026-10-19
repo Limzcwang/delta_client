@@ -13,6 +13,7 @@ from core.rooms import (
     validate_room_code,
     validate_room_name,
     validate_room_password,
+    validate_room_password_change,
     validate_visibility,
 )
 
@@ -62,7 +63,7 @@ class RoomNameTests(unittest.TestCase):
 
     def test_too_long_name(self) -> None:
         with self.assertRaises(ValidationError):
-            validate_room_name("x" * 33)
+            validate_room_name("x" * 31)
 
     def test_control_char_rejected(self) -> None:
         with self.assertRaises(ValidationError):
@@ -85,10 +86,16 @@ class VisibilityTests(unittest.TestCase):
 class RoomPasswordTests(unittest.TestCase):
     def test_private_requires_password(self) -> None:
         self.assertEqual(validate_room_password("1234", "private"), "1234")
+        self.assertEqual(validate_room_password("12345", "private"), "12345")
+        self.assertEqual(validate_room_password("x" * 32, "private"), "x" * 32)
         with self.assertRaises(ValidationError):
             validate_room_password("", "private")
         with self.assertRaises(ValidationError):
             validate_room_password(None, "private")
+        with self.assertRaises(ValidationError):  # B：最短 4 位
+            validate_room_password("123", "private")
+        with self.assertRaises(ValidationError):  # B：最长 32 位
+            validate_room_password("x" * 33, "private")
 
     def test_public_ignores_password(self) -> None:
         self.assertIsNone(validate_room_password("1234", "public"))
@@ -96,8 +103,22 @@ class RoomPasswordTests(unittest.TestCase):
 
     def test_password_not_stripped_and_length_limited(self) -> None:
         self.assertEqual(validate_room_password(" pass ", "private"), " pass ")
+        self.assertEqual(validate_room_password("x" * 5, "private"), "x" * 5)
         with self.assertRaises(ValidationError):
-            validate_room_password("x" * 65, "private")
+            validate_room_password("x" * 33, "private")
+
+    def test_room_name_boundaries(self) -> None:
+        self.assertEqual(validate_room_name("x" * 30), "x" * 30)
+
+    def test_room_password_change_boundaries(self) -> None:
+        self.assertEqual(validate_room_password_change("abcd", "abcd"), "abcd")
+        self.assertEqual(
+            validate_room_password_change("x" * 32, "x" * 32), "x" * 32
+        )
+        with self.assertRaises(ValidationError):
+            validate_room_password_change("abc", "abc")
+        with self.assertRaises(ValidationError):
+            validate_room_password_change("x" * 33, "x" * 33)
 
 
 class RoomLockedTests(unittest.TestCase):

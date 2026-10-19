@@ -8,6 +8,7 @@ from core.models import (
     ChatMessage,
     ChatPage,
     Member,
+    MyRoom,
     Room,
     format_timestamp,
     make_system_message,
@@ -15,6 +16,7 @@ from core.models import (
     parse_chat_page,
     parse_history_window_days,
     parse_members,
+    parse_my_rooms_page,
     parse_room_detail,
     parse_room_list,
     parse_ts,
@@ -316,6 +318,71 @@ class NicknameCompatTests(unittest.TestCase):
         self.assertEqual("bob", message.sender_name)
         self.assertTrue(message.legacy_protocol)
         self.assertEqual("bob", message.sender_username)
+
+
+class MyRoomTests(unittest.TestCase):
+    """H1：我的房间字段/角色/分页解析。"""
+
+    def test_from_api_fields(self) -> None:
+        room = MyRoom.from_api(
+            {
+                "id": "rid",
+                "code": "ab12c",
+                "name": "开黑房",
+                "visibility": "private",
+                "member_count": 3,
+                "joined_at": 1750000000000,
+                "role": "owner",
+            }
+        )
+        self.assertEqual("rid", room.id)
+        self.assertEqual("AB12C", room.code)
+        self.assertEqual("开黑房", room.name)
+        self.assertTrue(room.is_owner)
+        self.assertTrue(room.is_private)
+        self.assertEqual("rid", room.key)
+        self.assertEqual("rid", room.reference)
+        self.assertIsNotNone(room.joined_at)
+
+    def test_member_role_and_public(self) -> None:
+        room = MyRoom.from_api(
+            {"id": "r2", "code": "PUB01", "name": "", "visibility": "public", "role": "member"}
+        )
+        self.assertFalse(room.is_owner)
+        self.assertFalse(room.is_private)
+        self.assertEqual("房间 PUB01", room.display_name)
+
+    def test_nested_room_payload(self) -> None:
+        room = MyRoom.from_api(
+            {
+                "room": {"id": "r3", "code": "NEST1", "name": "嵌套房", "visibility": "public"},
+                "joined_at": 1,
+                "role": "member",
+            }
+        )
+        self.assertEqual("NEST1", room.code)
+        self.assertEqual("嵌套房", room.name)
+
+    def test_parse_page(self) -> None:
+        page = parse_my_rooms_page(
+            {
+                "data": {
+                    "items": [
+                        {"id": "a", "code": "AAAAA", "name": "A", "role": "owner"},
+                        {"id": "b", "code": "BBBBB", "name": "B", "role": "member"},
+                    ],
+                    "has_more": True,
+                    "next_before": "2",
+                }
+            }
+        )
+        self.assertEqual(2, len(page.items))
+        self.assertTrue(page.has_more)
+        self.assertEqual("2", page.next_before)
+        self.assertEqual([], list(parse_my_rooms_page(None).items))
+        self.assertEqual([], list(parse_my_rooms_page({}).items))
+        bare = parse_my_rooms_page([{"id": "c", "code": "CCCCC"}])
+        self.assertEqual(1, len(bare.items))
 
 
 if __name__ == "__main__":
