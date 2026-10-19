@@ -42,6 +42,15 @@ from core.models import (
 )
 from core.protocol import extract_token, extract_user, make_client_msg_id, message_type
 from core.rooms import ValidationError, validate_room_delete_confirmation
+from core.skills import (
+    SLOT_KINDS,
+    SkillBook,
+    SkillShareThrottle,
+    SkillSlot,
+    SkillState,
+    parse_room_joined_skill_states,
+    parse_skill_state_list,
+)
 from net.api_client import ApiClient, LoginResult
 from net.mock_backend import MockApiClient, MockWsClient
 from net.ws_client import WsClient
@@ -125,6 +134,13 @@ class MainWindow(QMainWindow):
         self._lobby_backoff = ReconnectBackoff(base=5.0, factor=2.0, max_delay=20.0)
         self._rooms_loading = False
         self._my_rooms_loading = False
+        # E2：技能 CD 共享（默认关闭，收到/模拟状态后本地缓存）
+        self._skills = SkillBook()
+        self._skill_offset_ms = 0
+        self._skill_throttle = SkillShareThrottle(max_events=2, window_ms=1000)
+        self._skill_share_enabled = False
+        self._skill_sim_index = 0
+        self._self_skill_state: SkillState | None = None
         # F-c5：历史窗口文案（room_joined / 历史接口可选字段）
         self._history_window_days: int | None = None
 
@@ -180,6 +196,8 @@ class MainWindow(QMainWindow):
         self.room_view.retry_requested.connect(self._on_retry_chat)
         self.room_view.room_settings_requested.connect(self._on_room_settings)
         self.room_view.kick_requested.connect(self._on_kick_requested)
+        self.room_view.skill_panel.sharing_toggled.connect(self._on_skill_sharing_toggled)
+        self.room_view.skill_panel.simulate_requested.connect(self._on_simulate_skill)
         self.room_view.canvas.stroke_finished.connect(self._on_canvas_strokes)
         self.room_view.canvas.clear_requested.connect(self._on_canvas_clear_requested)
 
@@ -672,6 +690,12 @@ class MainWindow(QMainWindow):
         self._chat_next_before = None
         self._chat_loading = False
         self._history_window_days = None
+        self._skills.clear()
+        self._self_skill_state = None
+        self._skill_share_enabled = False
+        self.room_view.skill_panel.clear()
+        self.room_view.skill_panel.set_sharing(False)
+        self.room_view.skill_panel.set_clock_offset(self._skill_offset_ms)
         self.room_view.set_room(room)
         self.room_view.set_user(self._username(), self._user_id())
         self.room_view.clear_chat()
@@ -861,6 +885,7 @@ class MainWindow(QMainWindow):
         if state == "connected":
             self.room_view.set_connection_state("connected", "实时连接已建立")
             self._system_message("实时连接已建立")
+            self._set_skill_server_time(info.get("server_time"))
             room = self._current_room
             if self._ws is not None and room is not None:
                 self._safe_submit(self._ws.join_room(room.code, self._room_password))
@@ -893,6 +918,9 @@ class MainWindow(QMainWindow):
         if mtype == "room_kicked":
             self._on_room_kicked(message)
             return
+        if mtype == "auth_ok":
+            self._set_skill_server_time(message.get("server_time"))
+            return
         if self._current_room is None:
             return
         if mtype == "room_joined":
@@ -902,13 +930,22 @@ class MainWindow(QMainWindow):
                 self._current_room = room
                 self.room_view.set_room(room)
             self._history_window_days = parse_history_window_days(message)
+            self._set_skill_server_time(message.get("server_time"))
             members = parse_members(message.get("members"))
             if members:
                 self._ws_members_loaded = True
                 self._last_members_refresh = time.monotonic()
                 self.room_view.set_members(members)
+            joined_skills = parse_room_joined_skill_states(message)
+            if joined_skills:
+                self._skills.update_many(joined_skills)
+                self.room_view.skill_panel.set_states(self._skills.states())
             self._on_room_joined_canvas(message.get("canvas_snapshot"))
             self.room_view.set_status("")
+        elif mtype == "skill_share_state":
+            self._on_skill_share_state(message)
+        elif mtype == "skill_share_removed":
+            self._on_skill_share_removed(message)
         elif mtype == "room_updated":
             self._on_room_updated(message)
         elif mtype == "room_deleted":
@@ -948,10 +985,8 @@ class MainWindow(QMainWindow):
             return  # WsClient 内部已处理 ack，UI 无需渲染
         elif mtype == "error":
             self._handle_ws_error(message)
-        elif mtype in ("heartbeat", "pong", "auth_ok", "canvas_snapshot"):
+        elif mtype in ("heartbeat", "pong", "canvas_snapshot"):
             return
-        elif mtype == "skill_state":
-            return  # E 占位
         # 未知类型按协议要求直接忽略
 
     # ---------- H3：房主移出成员 / room_kicked ----------
@@ -1027,6 +1062,161 @@ class MainWindow(QMainWindow):
         self._clear_room_state()
         self._set_status(text)
         self._show_rooms()
+
+    # ---------- E2：技能 CD 共享 ----------
+    def _set_skill_server_time(self, server_time: Any) -> None:
+        try:
+            server = int(server_time)
+        except (TypeError, ValueError):
+            return
+        if server <= 0:
+            return
+        self._skill_offset_ms = int(server - now_ms())
+        self.room_view.skill_panel.set_clock_offset(self._skill_offset_ms)
+
+    def _server_now_ms(self) -> int:
+        return int(now_ms() + self._skill_offset_ms)
+
+    def _on_skill_share_state(self, message: Mapping[str, Any]) -> None:
+        state = SkillState.from_ws(message)
+        if not state.user_id:
+            return
+        # captured_at 缺失时用本机估算的服务器时间兜底
+        if not state.captured_at:
+            state = replace(state, captured_at=self._server_now_ms())
+        self._skills.update(state)
+        self.room_view.skill_panel.upsert(state)
+
+    def _on_skill_share_removed(self, message: Mapping[str, Any]) -> None:
+        user_id = str(message.get("user_id") or "")
+        if not user_id:
+            return
+        self._skills.remove(user_id)
+        self.room_view.skill_panel.remove(user_id)
+
+    def _on_simulate_skill(self) -> None:
+        if self._current_room is None:
+            return
+        state = self._build_simulated_skill()
+        self._self_skill_state = state
+        self._skills.update(state)
+        self.room_view.skill_panel.upsert(state)
+        if self._skill_share_enabled:
+            self._send_skill_state(state)
+        else:
+            self.room_view.set_status("已模拟本地技能状态（技能共享未开启，未上报）")
+
+    def _build_simulated_skill(self) -> SkillState:
+        self._skill_sim_index = (self._skill_sim_index + 1) % 3
+        index = self._skill_sim_index
+        if index == 0:
+            skills = {
+                "ultimate": {"state": "ready", "percent": 100},
+                "ability": {"state": "ready", "charges": 2, "max_charges": 2},
+                "throwable": {"state": "ready", "charges": 1, "max_charges": 1},
+            }
+        elif index == 1:
+            skills = {
+                "ultimate": {
+                    "state": "charging",
+                    "percent": 60,
+                    "remaining_ms": 30000,
+                },
+                "ability": {
+                    "state": "charging",
+                    "charges": 1,
+                    "max_charges": 2,
+                    "remaining_ms": 12000,
+                },
+                "throwable": {
+                    "state": "charging",
+                    "charges": 0,
+                    "max_charges": 1,
+                    "remaining_ms": 25000,
+                },
+            }
+        else:
+            skills = {
+                "ultimate": {"state": "ready", "percent": 100},
+                "ability": {
+                    "state": "charging",
+                    "charges": 0,
+                    "max_charges": 1,
+                    "remaining_ms": 5000,
+                },
+                "throwable": {"state": "unknown"},
+            }
+        return SkillState.from_ws(
+            {
+                "user_id": self._user_id(),
+                "nickname": self._username(),
+                "operator": "模拟干员",
+                "captured_at": self._server_now_ms(),
+                "skills": skills,
+            }
+        )
+
+    def _on_skill_sharing_toggled(self, enabled: bool) -> None:
+        self._skill_share_enabled = bool(enabled)
+        if not enabled:
+            self._send_skill_off()
+            self.room_view.set_status("技能共享已关闭")
+            return
+        if self._current_room is None:
+            self.room_view.skill_panel.set_sharing(False)
+            self._skill_share_enabled = False
+            return
+        if self._self_skill_state is None:
+            self._self_skill_state = self._build_simulated_skill()
+            self._skills.update(self._self_skill_state)
+            self.room_view.skill_panel.upsert(self._self_skill_state)
+        self._send_skill_state(self._self_skill_state)
+        self.room_view.set_status("技能共享已开启（本地限频 2 次/秒）")
+
+    def _send_skill_state(self, state: SkillState) -> None:
+        room = self._current_room
+        if room is None:
+            return
+        if self._ws is None or not getattr(self._ws, "connected", False):
+            self.room_view.set_status("实时连接未建立，技能状态未上报", error=True)
+            return
+        if not self._skill_throttle.allow(now_ms()):
+            self.room_view.set_status("技能上报过快（本地限频 2 次/秒）", error=True)
+            return
+        state = replace(state, captured_at=self._server_now_ms())
+        self._self_skill_state = state
+        self._skills.update(state)
+        self.room_view.skill_panel.upsert(state)
+        payload = self._skill_payload(state)
+        self._safe_submit(
+            self._ws.send_skill_update(
+                room.id or room.code,
+                state.captured_at,
+                payload,
+            )
+        )
+
+    def _send_skill_off(self) -> None:
+        room = self._current_room
+        if room is None or self._ws is None or not getattr(self._ws, "connected", False):
+            return
+        self._safe_submit(self._ws.send_skill_off(room.id or room.code))
+
+    @staticmethod
+    def _skill_payload(state: SkillState) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        for kind in SLOT_KINDS:
+            slot = state.slot(kind)
+            item: dict[str, Any] = {"state": slot.state}
+            if slot.remaining_ms:
+                item["remaining_ms"] = slot.remaining_ms
+            if kind == "ultimate":
+                item["percent"] = slot.percent
+            if slot.max_charges:
+                item["charges"] = slot.charges
+                item["max_charges"] = slot.max_charges
+            payload[kind] = item
+        return payload
 
     # ---------- 聊天 ----------
     def _system_message(self, text: str) -> None:
@@ -1409,6 +1599,11 @@ class MainWindow(QMainWindow):
         self._canvas_last_rev.clear()
         self._canvas_loaded = False
         self._canvas_queue.clear()
+        self._skills.clear()
+        self._self_skill_state = None
+        self._skill_share_enabled = False
+        self.room_view.skill_panel.clear()
+        self.room_view.skill_panel.set_sharing(False)
 
     def _on_leave_room(self) -> None:
         room = self._current_room
@@ -1425,6 +1620,9 @@ class MainWindow(QMainWindow):
             if answer != QMessageBox.StandardButton.Yes:
                 return
             save_canvas = False
+        if self._skill_share_enabled:
+            self._send_skill_off()
+            self._skill_share_enabled = False
         self._stop_ws(
             room.code if room is not None else None,
             save_canvas=save_canvas,

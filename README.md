@@ -29,10 +29,11 @@
 | 房主移出（H3） | 成员行右键菜单「移出房间」：仅房主对非房主成员可用，自己/非房主 disabled；二次确认后 `POST /rooms/{ref}/kick`；成功刷新成员并提示，失败按错误码提示；处理 `room_kicked` 定向事件（自己被踢则提示并回大厅），他人被踢走 `user_left(reason=kicked)` |
 | 聊天（C） | 发送 `chat_send`（带 `room_id` / `client_msg_id`）、`chat_message` 广播认领（发送中→已发送、不重复插入）、失败标红双击重试（复用 `client_msg_id`）、进房拉最近 50 条、上滚 `next_before` 续拉 |
 | 画板（D/H4） | 内置三角洲地图底图（1105×1260）；画布控件锁定底图宽高比、随可用空间等比缩放并居中（宿主剩余空间留白），控件内底图铺满；坐标 0–1 = 画布像素/画布宽高（图外不绘制）；透明笔画层（橡皮 composition Clear，清空只清笔画）；画笔/橡皮/颜色/粗细/撤销/重做/清空图标工具栏（QPainter 矢量图标、快捷键、当前工具高亮）；`canvas_op` 增量（≤512 点自动分段、30 条/秒本地节流）、`room_joined.canvas_snapshot` 初始化（缺失/空时 HTTP fallback）、`(user_id,rev)` 丢弃旧包、离开/关窗前 `canvas_snapshot_save` 等 ack、快照上限 5000 笔/512KB |
+| 技能面板（E2） | 房间侧栏「技能」tab：按队友一行，头像首字母/昵称/干员名 + 大招（百分比环）/技能（n/max+CD）/投掷物（n/max+CD）；ready 高亮、charging 每秒倒计时、unknown「?」、30 分钟未更新「未共享」；缓存 `skill_share_state`/`room_joined.skill_states`，`skill_share_removed` 删除；本地时钟偏移用 `auth_ok.server_time` 估算；默认关闭共享，「模拟我的技能」循环状态，开启后 `skill_share_update`（2 次/秒限频），关闭发 `skill_share_off` |
 | 连通性测试 | 设置页「测试连接」：探测 `/health` + `/api/v1/rooms?page=1`，分别报告可达/鉴权失效/超时/网络错误 |
 | 协议对齐 | PROTOCOL C/D 定稿：`data.error_code`、§7.2/§7.3 实名错误码、WS `room_id_or_code`、聊天字段、画板 `rev`/快照语义 |
 | Mock | `--mock` / `DELTA_MOCK=1`：内置内存后端（昵称/聊天历史/画板快照/房主管理/我的房间），可完整离线演示 |
-| 测试 | 264 个 stdlib unittest（含 16 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑 |
+| 测试 | 280 个 stdlib unittest（含 20 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑 |
 
 ---
 
@@ -49,7 +50,8 @@ delta_client/
 │   ├── connection.py        # 连通性测试结果模型（/health + /api/v1/rooms）
 │   ├── chat.py              # 聊天时间线：乐观更新/广播认领/去重/失败重试/历史分页
 │   ├── canvas.py            # 画板逻辑：归一化/op 校验分段/快照上限/撤销重做/限频
-│   ├── canvas_geometry.py   # 底图 letterbox / 图片区域坐标换算（纯逻辑）
+│   ├── canvas_geometry.py   # 画板随底图比例/画布坐标换算（纯逻辑）
+│   ├── skills.py            # E2 技能状态/倒计时/缓存/上报限频（纯逻辑）
 │   ├── room_list.py         # 大厅列表 diff/room_key（自动刷新就地更新）
 │   ├── rooms.py             # 房间号/房间名/可见性/密码校验
 │   ├── models.py            # Room / Member / ChatMessage 与容错解析
@@ -70,6 +72,7 @@ delta_client/
 │   ├── room_view.py         # 房间内页（成员/聊天/画板）
 │   ├── canvas_view.py       # 画板控件（底图/透明层/图标工具栏）
 │   ├── canvas_icons.py      # 画板矢量图标（QPainter）
+│   ├── skill_panel.py       # E2 技能 CD 面板（三槽/倒计时/模拟共享）
 │   ├── dialogs.py           # 创建房间 / 加入房间 / 连接设置
 │   ├── async_bridge.py      # asyncio 线程 <-> Qt 主线程桥
 │   └── theme.py             # 深色 + 橙色 QSS 主题
@@ -174,7 +177,7 @@ python -m unittest discover -s tests -v
 
 覆盖：配置加载与优先级、URL 规范化、协议路径/WS 消息、HTTP 错误映射、WS 重连退避、房间号校验（5 位 `[A-Z0-9]`）、房间/成员/消息解析、登录注册校验、token 存取与“不落盘密码”、Mock 后端完整流程。
 
-当前结果：**171 个用例全部通过**（约 0.8s）。
+当前结果：**280 个用例全部通过**（约 0.9s）。
 
 ---
 
@@ -206,6 +209,9 @@ python -m unittest discover -s tests -v
 | 房间事件（F） | WS `room_updated` / `room_deleted` | 实时更新房名/密码状态；删除后提示并退回大厅 |
 | 移出成员（H3） | `POST /api/v1/rooms/{room_id_or_code}/kick` | body `{"user_id": <成员id>}`；房主专用，错误码 `NOT_ROOM_OWNER`/`MEMBER_NOT_FOUND`/`CANNOT_KICK_OWNER`；成功响应含最新 `members` |
 | 被踢事件（H3） | WS `room_kicked` | `{room_id, room_code, by:{id,nickname}, reason:"kicked"}`；当前房间被踢时提示、清空房间状态并回大厅 |
+| 技能状态（E2） | WS `skill_share_state` / `room_joined.skill_states` | 单条/列表 `{user_id,nickname,operator_id,operator_name,captured_at,updated_at,skills:[{slot,state,remaining_ms,charges,max_charges,pct}]}`；客户端按 slot 0/1/2 归位、按 user_id 缓存；空/缺失槽位仅该槽 unknown |
+| 技能移除（E2） | WS `skill_share_removed` | `{user_id}`；从面板移除该队友 |
+| 技能上报（E2） | WS `skill_share_update` / `skill_share_off` | `{room_id,captured_at,skills}` / `{room_id}`；默认关闭，开启后 2 次/秒本地节流，关闭时发 off |
 | 修改昵称（F） | `PATCH /api/v1/users/me` | body `{"nickname": "新昵称"}`；响应 `{"user": {...}}`；成功后本地立即更新展示、保持登录 |
 | 修改密码（F） | `POST /api/v1/users/me/password` | body `{"old_password","new_password"}`；旧密码错 `WRONG_OLD_PASSWORD`、新密码不合规 `INVALID_NEW_PASSWORD`（8–32，前端先校验）；成功后 token 继续有效 |
 | 心跳 | WS `ping` / 服务端 `heartbeat` | 服务端每 30s 下发；客户端 25s ping，90s 无消息判定失联 |
@@ -287,3 +293,6 @@ python -m unittest discover -s tests -v
 - aiohttp / websockets 采用函数内延迟导入，缺失依赖时给出明确安装提示；
 - 新增 UI 页面时沿用 `ui/` + 信号/槽，网络请求统一经 `AsyncBridge` 提交，不在 UI 线程直接 `asyncio.run`；
 - **聊天/画板协议细节、已知限制与 TODO 见 [`CLIENT-NOTES.md`](CLIENT-NOTES.md)**（交接必读）。
+
+
+

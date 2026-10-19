@@ -44,6 +44,10 @@ WS_CANVAS_SNAPSHOT = "canvas_snapshot"
 WS_CANVAS_SNAPSHOT_SAVE = "canvas_snapshot_save"
 WS_CANVAS_SNAPSHOT_SAVED = "canvas_snapshot_saved"
 WS_SKILL_REPORT = "skill_report"
+WS_SKILL_SHARE_STATE = "skill_share_state"
+WS_SKILL_SHARE_REMOVED = "skill_share_removed"
+WS_SKILL_SHARE_UPDATE = "skill_share_update"
+WS_SKILL_SHARE_OFF = "skill_share_off"
 WS_PING = "ping"
 WS_ROOM_JOINED = "room_joined"
 WS_USER_JOINED = "user_joined"
@@ -211,6 +215,28 @@ def unwrap_payload(body: Any) -> Any:
     if isinstance(body, Mapping) and "data" in body:
         return body["data"]
     return body
+
+
+def skill_share_update_message(
+    room_id: str,
+    captured_at: int,
+    skills: Mapping[str, Any],
+) -> dict[str, Any]:
+    """E2：上报本机技能状态（``captured_at`` 为服务器时钟毫秒）。"""
+    return {
+        "type": WS_SKILL_SHARE_UPDATE,
+        "room_id": str(room_id),
+        "captured_at": int(captured_at),
+        "skills": dict(skills),
+    }
+
+
+def skill_share_off_message(room_id: str | None = None) -> dict[str, Any]:
+    """E2：关闭技能共享。"""
+    message: dict[str, Any] = {"type": WS_SKILL_SHARE_OFF}
+    if room_id:
+        message["room_id"] = str(room_id)
+    return message
 
 
 def extract_token(payload: Any) -> str | None:
