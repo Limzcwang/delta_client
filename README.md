@@ -15,7 +15,7 @@
 | HTTP 客户端 | `net/api_client.py`：统一 Base URL、`X-Request-Id` / `X-Protocol-Version`、`Authorization: Bearer`、超时、错误映射 |
 | WS 客户端 | `net/ws_client.py`：`/ws` 首消息 `auth`、心跳（25s ping / 90s 失联）、指数退避重连（1s→30s）、消息分发、未知类型忽略 |
 | 会话 | `state/session.py`：token + 用户信息（内存；可选落盘，**不落盘密码**） |
-| 登录/注册 | `POST /api/v1/auth/login`、`POST /api/v1/auth/register`；注册账号 6–20 位字母/数字且至少含 1 个字母（实时提示 + `INVALID_USERNAME` 映射）；注册带 token 自动登录 |
+| 登录/注册 | `POST /api/v1/auth/login`、`POST /api/v1/auth/register`；注册账号 6–20 位字母/数字且至少含 1 个字母，注册密码 8–64 位（与后端一致；登录密码仍只校验非空以兼容历史短密码）；账号输入框即时过滤（注册仅字母数字，登录额外允许 `_ -`），粘贴保留合法部分、IME 上屏后清洗；注册带 token 自动登录 |
 | 昵称展示（F） | 成员列表/聊天/房主标识/加入离开提示统一显示 **nickname**（缺失时回退 username 并标记旧协议）；账号只在个人资料页对自己可见 |
 | 个人资料（F） | 设置页新增「个人资料」：修改昵称（1–20，立即刷新所有展示，含历史聊天中自己的名字）、修改密码（旧密码 + 新密码 8–64 + 确认；成功后保持登录） |
 | 房间 | 公共房间列表、刷新、创建（公开/私有+密码）、按 5 位房间号加入（私有需密码）、离开 |
@@ -28,7 +28,7 @@
 | 连通性测试 | 设置页「测试连接」：探测 `/health` + `/api/v1/rooms?page=1`，分别报告可达/鉴权失效/超时/网络错误 |
 | 协议对齐 | PROTOCOL C/D 定稿：`data.error_code`、§7.2/§7.3 实名错误码、WS `room_id_or_code`、聊天字段、画板 `rev`/快照语义 |
 | Mock | `--mock` / `DELTA_MOCK=1`：内置内存后端（昵称/聊天历史/画板快照/房主管理），可完整离线演示 |
-| 测试 | 202 个纯逻辑 stdlib unittest，离线可跑 |
+| 测试 | 214 个纯逻辑 stdlib unittest，离线可跑 |
 
 ---
 
@@ -58,6 +58,7 @@ delta_client/
 ├── ui/                      # PySide6 界面
 │   ├── main_window.py       # QStackedWidget + 网络编排
 │   ├── login_view.py        # 登录/注册
+│   ├── username_edit.py     # 账号输入框即时过滤（IME/粘贴/光标）
 │   ├── room_list_view.py    # 房间大厅
 │   ├── room_view.py         # 房间内页（成员/聊天/画板）
 │   ├── canvas_view.py       # 画板控件（画笔/橡皮/颜色/粗细/清空/撤销重做）
@@ -217,6 +218,7 @@ python -m unittest discover -s tests -v
 - 房间管理（F，当前 master 实测）：`PATCH /rooms/{ref}` 改名成功；私有房改密码后旧密码失效、新密码可加入；`DELETE /rooms/{ref}` 成功且删除后房间不可访问（返回 409 + `ROOM_NOT_FOUND`）；公开房设置密码返回 `ROOM_PASSWORD_NOT_ALLOWED`（UI 只对私有房展示密码修改）。
 - 个人资料/房间事件（F，部署后实测）：`PATCH /users/me` 改昵称成功（响应 `{"user": {...}}`）；`POST /users/me/password` 成功且原 token 继续有效，旧密码错→`WRONG_OLD_PASSWORD`、短新密码→`INVALID_NEW_PASSWORD`；WS `room_updated`（字段 `room_id/name/visibility/has_password`）和 `room_deleted` 均已下发并被客户端处理；`room_joined`/历史接口当前暂未返回 `history_window_days`/`window_days`，客户端按缺省不提示，后端补字段后自动生效。
 - 房间对象比 PROTOCOL 多 `visibility/updated_at/closed_at/background` 等字段，客户端忽略未知字段。
+- 注册/改密密码规则：前端统一 8–64（与后端 F 一致），注册页 6–7 位提交前即被拦截并提示「密码至少 8 位」；登录密码只校验非空，历史短密码账号不受影响。
 
 ### 6.4 后续里程碑
 

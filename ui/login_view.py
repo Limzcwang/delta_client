@@ -19,6 +19,7 @@ from core.validation import (
     validate_register_input,
     validate_register_username,
 )
+from ui.username_edit import UsernameLineEdit
 
 
 class LoginView(QWidget):
@@ -111,7 +112,7 @@ class LoginView(QWidget):
         card_layout.addWidget(self.form_subtitle)
         card_layout.addSpacing(10)
 
-        self.username_edit = QLineEdit()
+        self.username_edit = UsernameLineEdit("login")
         self.username_edit.setPlaceholderText("账号")
         self.username_edit.setClearButtonEnabled(True)
         self.username_edit.textChanged.connect(self._update_register_hint)
@@ -128,11 +129,17 @@ class LoginView(QWidget):
         self.password_edit.setPlaceholderText("密码")
         self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
 
+        # 注册密码下限与后端 F 对齐（8–64 位）
+        self.password_hint = QLabel("密码 8–64 位")
+        self.password_hint.setObjectName("Hint")
+        self.password_hint.hide()
+
         self.confirm_edit = QLineEdit()
         self.confirm_edit.setPlaceholderText("确认密码")
         self.confirm_edit.setEchoMode(QLineEdit.EchoMode.Password)
 
         card_layout.addWidget(self.password_edit)
+        card_layout.addWidget(self.password_hint)
         card_layout.addWidget(self.confirm_edit)
 
         self.error_banner = QLabel()
@@ -192,6 +199,12 @@ class LoginView(QWidget):
         self.form_subtitle.setText(
             "注册后即可登录并加入队友房间" if is_register else "使用账号登录，进入房间大厅"
         )
+        self.username_edit.set_mode(self._mode)
+        self.username_edit.setPlaceholderText(
+            "账号（字母/数字，6–20 位）" if is_register else "账号"
+        )
+        self.password_edit.setPlaceholderText("密码（8–64 位）" if is_register else "密码")
+        self.password_hint.setVisible(is_register)
         self.confirm_edit.setVisible(is_register)
         self.register_username_hint.setVisible(is_register)
         self.primary_button.setText("注 册" if is_register else "登 录")

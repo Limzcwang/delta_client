@@ -35,14 +35,14 @@ class MockApiTests(unittest.TestCase):
     def test_register(self) -> None:
         async def scenario() -> None:
             api = MockApiClient(latency=0)
-            created = await api.register("newbie", "abc123")
+            created = await api.register("newbie", "abc12345")
             self.assertEqual(created["username"], "newbie")
             # Mock 与 B2b v1 注册一致：返回 access_token + user，UI 可自动登录
             self.assertTrue(created.get("access_token"))
             self.assertEqual(created["user"]["username"], "newbie")
 
             with self.assertRaises(ApiError) as duplicate:
-                await api.register("newbie", "abc123")
+                await api.register("newbie", "abc12345")
             self.assertEqual(duplicate.exception.kind, ErrorKind.CONFLICT)
             self.assertEqual(duplicate.exception.user_message, "用户名已存在")
 
@@ -51,7 +51,7 @@ class MockApiTests(unittest.TestCase):
             self.assertEqual(short.exception.kind, ErrorKind.VALIDATION)
 
             # 新账号可以登录
-            result = await api.login("newbie", "abc123")
+            result = await api.login("newbie", "abc12345")
             self.assertTrue(result.has_token)
 
         asyncio.run(scenario())
@@ -231,17 +231,17 @@ class MockApiTests(unittest.TestCase):
         async def scenario() -> None:
             api = MockApiClient(latency=0)
             with self.assertRaises(ApiError) as invalid:
-                await api.register("abc", "123456")
+                await api.register("abc", "12345678")
             self.assertEqual(invalid.exception.kind, ErrorKind.VALIDATION)
             self.assertEqual("INVALID_USERNAME", invalid.exception.code)
 
-            created = await api.register("newbie1", "123456")
+            created = await api.register("newbie1", "12345678")
             self.assertEqual("newbie1", created["nickname"])
-            result = await api.login("newbie1", "123456")
+            result = await api.login("newbie1", "12345678")
             self.assertEqual("newbie1", result.user["nickname"])
 
             with self.assertRaises(ApiError) as duplicate:
-                await api.register("newbie1", "123456")
+                await api.register("newbie1", "12345678")
             self.assertEqual(duplicate.exception.kind, ErrorKind.CONFLICT)
 
         asyncio.run(scenario())
