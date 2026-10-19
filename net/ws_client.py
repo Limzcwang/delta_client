@@ -230,14 +230,20 @@ class WsClient:
     async def leave_room(self, room_id_or_code: str) -> bool:
         return await self._send(protocol.leave_room_message(room_id_or_code))
 
-    async def send_chat(self, content: str, client_msg_id: str | None = None) -> str | None:
+    async def send_chat(
+        self,
+        content: str,
+        client_msg_id: str | None = None,
+        room_id: str | None = None,
+    ) -> str | None:
         """发送聊天消息，返回 ``client_msg_id``（发送失败返回 None）。
 
-        允许调用方预先提供 id，以便在发送前登记到去重集合，避免服务端回显先于
-        本地登记造成重复展示。
+        - ``client_msg_id`` 由调用方预先提供并登记，服务端广播会原样回传，
+          客户端据此把「发送中」更新为「已发送」，不重复插入；
+        - ``room_id`` 服务端不读取（用会话房间），仅用于联调日志/扩展。
         """
         client_msg_id = client_msg_id or protocol.make_client_msg_id()
-        sent = await self._send(protocol.chat_send_message(content, client_msg_id))
+        sent = await self._send(protocol.chat_send_message(content, client_msg_id, room_id))
         return client_msg_id if sent else None
 
     async def close(self) -> None:

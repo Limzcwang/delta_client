@@ -17,7 +17,7 @@ from typing import Any, Mapping
 from core import protocol
 from core.connection import ConnectionCheck, probe_ok
 from core.errors import ApiError, ErrorKind
-from core.models import Member, Room, RoomDetail, now_ms
+from core.models import ChatMessage, ChatPage, Member, Room, RoomDetail, now_ms
 from core.rooms import (
     ValidationError,
     normalize_room_code,
@@ -97,6 +97,36 @@ _SEED_MEMBERS: dict[str, list[dict[str, Any]]] = {
     "Q4W8E": [{"id": "2", "username": "player", "online": False}],
 }
 
+#: 演示聊天历史（按时间正序；接口返回时倒序分页）
+_SEED_MESSAGES: dict[str, list[dict[str, Any]]] = {
+    "AB12C": [
+        {
+            "id": "mock-msg-0001",
+            "room_id": "mock-room-ab12c",
+            "user": {"id": "2", "username": "player"},
+            "content": "欢迎来到新手训练房",
+            "client_msg_id": None,
+            "created_at": now_ms() - 300_000,
+        },
+        {
+            "id": "mock-msg-0002",
+            "room_id": "mock-room-ab12c",
+            "user": {"id": "3", "username": "队友-Bravo"},
+            "content": "今晚一起上分吗？",
+            "client_msg_id": None,
+            "created_at": now_ms() - 180_000,
+        },
+        {
+            "id": "mock-msg-0003",
+            "room_id": "mock-room-ab12c",
+            "user": {"id": "2", "username": "player"},
+            "content": "先热身两把",
+            "client_msg_id": None,
+            "created_at": now_ms() - 60_000,
+        },
+    ],
+}
+
 
 class MockApiClient:
     """内存版 API 客户端（用于 ``--mock`` / ``DELTA_MOCK=1``）。"""
@@ -115,6 +145,9 @@ class MockApiClient:
         self._memberships: set[tuple[str, str]] = set()
         self._username: str | None = None
         self._current_user: dict[str, Any] | None = None
+        self._messages: dict[str, list[dict[str, Any]]] = {
+            code: [dict(message) for message in messages] for code, messages in _SEED_MESSAGES.items()
+        }
 
     # ---------- 基础 ----------
     async def _tick(self) -> None:
@@ -307,6 +340,63 @@ class MockApiClient:
             rooms_count=len(rooms),
         )
 
+    # ---------- 聊天 ----------
+    def append_message(
+        self,
+        room_ref: str,
+        user: Mapping[str, Any],
+        content: str,
+        client_msg_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Mock WS 发送后落一份消息（供回显与历史查询）。"""
+        code = room_reference(str(room_ref))
+        payload = self._find_room(code)
+        room_id = str(payload["id"]) if payload is not None else str(room_ref)
+        message = {
+            "id": f"mock-msg-{uuid.uuid4().hex[:12]}",
+            "room_id": room_id,
+            "room_code": str(payload["code"]) if payload is not None else code,
+            "user": {
+                "id": str(user.get("id", "0")),
+                "username": str(user.get("username", "")),
+            },
+            "content": str(content),
+            "client_msg_id": client_msg_id or None,
+            "created_at": now_ms(),
+        }
+        key = str(payload["code"]) if payload is not None else code
+        self._messages.setdefault(key, []).append(message)
+        return message
+
+    async def get_messages(
+        self,
+        room_id_or_code: str,
+        *,
+        before: str | None = None,
+        limit: int = 50,
+    ) -> ChatPage:
+        """Mock 版聊天历史：最新一页在前（新→旧），``before`` 为消息 id。"""
+        await self._tick()
+        payload = self._find_room(room_id_or_code)
+        if payload is None:
+            raise ApiError(ErrorKind.ROOM_NOT_FOUND, "房间不存在或已关闭", status=404, code=40402)
+        code = str(payload["code"])
+        messages = self._messages.setdefault(code, [])
+        if before:
+            index = next((i for i, item in enumerate(messages) if item.get("id") == before), None)
+            if index is not None:
+                messages = messages[:index]
+        page_size = max(1, min(100, int(limit)))
+        window = messages[-page_size:]
+        has_more = len(messages) > len(window)
+        page_items = list(reversed(window))
+        next_before = page_items[-1]["id"] if has_more and page_items else None
+        return ChatPage(
+            messages=tuple(ChatMessage.from_ws(item) for item in page_items),
+            has_more=has_more,
+            next_before=next_before,
+        )
+
     def _generate_room_code(self) -> str:
         while True:
             code = "".join(secrets.choice(_ROOM_CODE_ALPHABET) for _ in range(5))
@@ -329,6 +419,7 @@ class MockWsClient:
         user: Mapping[str, Any] | None = None,
         room: Room | None = None,
         latency: float = _MOCK_LATENCY,
+        store: MockApiClient | None = None,
     ) -> None:
         self.url = url
         self.token = token
@@ -337,6 +428,7 @@ class MockWsClient:
         self.user: dict[str, Any] = dict(user or {"id": "1", "username": "demo"})
         self.room = room
         self.latency = max(0.0, float(latency))
+        self.store = store
         self.connected = False
         self._state = "idle"
         self._stop_event: asyncio.Event | None = None
@@ -401,23 +493,35 @@ class MockWsClient:
         )
         return True
 
-    async def send_chat(self, content: str, client_msg_id: str | None = None) -> str | None:
+    async def send_chat(
+        self,
+        content: str,
+        client_msg_id: str | None = None,
+        room_id: str | None = None,
+    ) -> str | None:
         client_msg_id = client_msg_id or protocol.make_client_msg_id()
+        room_ref = self.room.code if self.room is not None else (room_id or "")
 
         async def _echo() -> None:
             await asyncio.sleep(self.latency + 0.2)
-            self._emit(
-                {
-                    "type": protocol.WS_CHAT_MESSAGE,
+            if self.store is not None:
+                message = self.store.append_message(room_ref, self.user, content, client_msg_id)
+            else:
+                message = {
+                    "id": f"mock-msg-{uuid.uuid4().hex[:12]}",
                     "room_id": str(self.room.id) if self.room is not None else "",
-                    "message_id": f"mock-msg-{uuid.uuid4().hex[:8]}",
-                    "client_msg_id": client_msg_id,
-                    "sender": {"id": str(self.user.get("id", "1")), "username": str(self.user.get("username", "demo"))},
+                    "room_code": room_ref,
+                    "user": {
+                        "id": str(self.user.get("id", "1")),
+                        "username": str(self.user.get("username", "demo")),
+                    },
                     "content": content,
-                    "content_type": "text",
-                    "ts": now_ms(),
+                    "client_msg_id": client_msg_id,
+                    "created_at": now_ms(),
                 }
-            )
+            payload = {"type": protocol.WS_CHAT_MESSAGE}
+            payload.update(message)
+            self._emit(payload)
 
         asyncio.get_running_loop().create_task(_echo())
         return client_msg_id

@@ -6,6 +6,7 @@ import logging
 import time
 from typing import Any, Mapping
 
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QDialog,
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from config import AppConfig, ConfigError, normalize_server_url, normalize_ws_url, save_config
+from core.chat import ChatTimeline
 from core.errors import ApiError, ErrorKind, to_user_message
 from core.models import ChatMessage, Member, Room, RoomDetail, now_ms, parse_members
 from core.protocol import extract_token, extract_user, make_client_msg_id, message_type
@@ -31,6 +33,14 @@ from ui.room_list_view import RoomListView
 from ui.room_view import RoomView
 
 logger = logging.getLogger(__name__)
+
+#: 聊天相关 WS 错误 -> 面向用户的失败原因（这些错误需要把 pending 消息标红）
+_CHAT_ERROR_REASONS: dict[str, str] = {
+    "RATE_LIMITED": "发送过快，请稍后再试",
+    "INVALID_MESSAGE": "消息内容不合法（1-2000 字）",
+    "NOT_ROOM_MEMBER": "你不在该房间中，请重新加入",
+    "ROOM_CLOSED": "房间已关闭",
+}
 
 
 class MainWindow(QMainWindow):
@@ -61,7 +71,10 @@ class MainWindow(QMainWindow):
         self._ws_generation = 0
         self._current_room: Room | None = None
         self._room_password: str | None = None
-        self._pending_chat_ids: set[str] = set()
+        self._timeline = ChatTimeline()
+        self._chat_has_more = False
+        self._chat_next_before: str | None = None
+        self._chat_loading = False
         self._last_members_refresh = 0.0
         self._ws_members_loaded = False
 
@@ -107,6 +120,8 @@ class MainWindow(QMainWindow):
 
         self.room_view.leave_requested.connect(self._on_leave_room)
         self.room_view.chat_submitted.connect(self._on_chat_submitted)
+        self.room_view.history_requested.connect(self._on_history_requested)
+        self.room_view.retry_requested.connect(self._on_retry_chat)
 
     def _build_api(self) -> Any:
         if self.config.use_mock:
@@ -302,19 +317,24 @@ class MainWindow(QMainWindow):
         self._room_password = password
         self._ws_members_loaded = False
         self._last_members_refresh = 0.0
+        self._timeline = ChatTimeline()
+        self._chat_has_more = False
+        self._chat_next_before = None
+        self._chat_loading = False
         self.room_view.set_room(room)
         self.room_view.set_user(self._username())
         self.room_view.clear_chat()
         self.room_view.set_members(list(room.members))
-        self.room_view.add_system_message(f"已进入 {room.display_name}（{room.code}）")
         self.room_view.set_connection_state("connecting", "正在建立实时连接")
         self.room_view.set_status("")
-        self._pending_chat_ids.clear()
         self.stack.setCurrentWidget(self.room_view)
         self.room_view.focus_chat_input()
+        self._system_message(f"已进入 {room.display_name}（{room.code}）")
         self._start_ws(room)
         # HTTP 成员兜底：WS room_joined 丢失/重连失败时仍能展示成员
         self._refresh_members_http(room, fallback=False)
+        # 进房先拉最近一页聊天历史；向上滚动用 next_before 续拉
+        self._load_chat_history(room, initial=True)
 
     def _start_ws(self, room: Room) -> None:
         self._stop_ws()
@@ -332,10 +352,11 @@ class MainWindow(QMainWindow):
                 on_state=on_state,
                 user=self.session.user or {"id": "0", "username": self._username()},
                 room=room,
+                store=self.api if isinstance(self.api, MockApiClient) else None,
             )
         elif not self.session.token:
             self.room_view.set_connection_state("offline", "未获取 JWT，聊天仅本地回显")
-            self.room_view.add_system_message(
+            self._system_message(
                 "当前登录没有 JWT（PROTOCOL B 阶段才上线）：实时聊天不可用，仅本地回显。"
             )
             return
@@ -418,7 +439,7 @@ class MainWindow(QMainWindow):
 
     def _on_ws_run_failed(self, exc: BaseException) -> None:
         self.room_view.set_connection_state("error", to_user_message(exc))
-        self.room_view.add_system_message(f"实时连接失败：{to_user_message(exc)}")
+        self._system_message(f"实时连接失败：{to_user_message(exc)}")
         if self._current_room is not None:
             self._refresh_members_http(self._current_room, fallback=True)
 
@@ -428,7 +449,7 @@ class MainWindow(QMainWindow):
         detail = str(info.get("message") or info.get("error") or "")
         if state == "connected":
             self.room_view.set_connection_state("connected", "实时连接已建立")
-            self.room_view.add_system_message("实时连接已建立")
+            self._system_message("实时连接已建立")
             room = self._current_room
             if self._ws is not None and room is not None:
                 self._safe_submit(self._ws.join_room(room.code, self._room_password))
@@ -446,7 +467,7 @@ class MainWindow(QMainWindow):
             self._refresh_members_http(self._current_room, fallback=True)
         elif state == "auth_error":
             self.room_view.set_connection_state("auth_error", detail)
-            self.room_view.add_system_message(f"认证失败：{detail or '登录状态无效'}")
+            self._system_message(f"认证失败：{detail or '登录状态无效'}")
             self._refresh_members_http(self._current_room, fallback=True)
         else:
             self.room_view.set_connection_state(state, detail)
@@ -474,7 +495,7 @@ class MainWindow(QMainWindow):
             if isinstance(user, Mapping):
                 member = Member.from_api(user)
                 self.room_view.add_member(member)
-                self.room_view.add_system_message(f"{member.display_name} 加入了房间")
+                self._system_message(f"{member.display_name} 加入了房间")
         elif mtype == "user_left":
             user = message.get("user")
             if isinstance(user, Mapping):
@@ -488,55 +509,170 @@ class MainWindow(QMainWindow):
                     "replaced": "被顶号",
                 }.get(reason, "")
                 suffix = f"（{reason_text}）" if reason_text else ""
-                self.room_view.add_system_message(f"{member.display_name} 离开了房间{suffix}")
+                self._system_message(f"{member.display_name} 离开了房间{suffix}")
         elif mtype == "chat_message":
             chat = ChatMessage.from_ws(message)
-            if chat.client_msg_id and chat.client_msg_id in self._pending_chat_ids:
-                self._pending_chat_ids.discard(chat.client_msg_id)
-                return  # 本机消息已本地回显，跳过服务端回显
-            self.room_view.add_chat_message(chat)
+            if not self._chat_belongs_to_current_room(chat.room_id):
+                return  # 只展示当前房间消息
+            result = self._timeline.merge_remote(chat)
+            if result != "duplicate":
+                self._render_chat(stick_to_bottom=(result == "appended"))
         elif mtype == "error":
-            text = str(message.get("message") or message.get("code") or "未知错误")
-            self.room_view.add_system_message(f"服务端错误：{text}")
+            self._handle_ws_error(message)
         elif mtype in ("heartbeat", "pong", "auth_ok"):
             return
         elif mtype in ("canvas_snapshot", "canvas_op", "skill_state"):
             return  # C2/C3 占位：本轮不实现画板与技能共享
         # 未知类型按协议要求直接忽略
 
+    # ---------- 聊天 ----------
+    def _system_message(self, text: str) -> None:
+        self._timeline.add_system(str(text))
+        self._render_chat()
+
+    def _render_chat(self, *, stick_to_bottom: bool = False) -> None:
+        self.room_view.set_chat_entries(list(self._timeline.entries), stick_to_bottom=stick_to_bottom)
+
+    def _chat_belongs_to_current_room(self, room_id: str) -> bool:
+        if not room_id:
+            return True
+        room = self._current_room
+        if room is None:
+            return False
+        return str(room_id) in {str(room.id), str(room.code)}
+
+    def _load_chat_history(self, room: Room, *, initial: bool = False) -> None:
+        if self._chat_loading:
+            return
+        if not initial and not self._chat_has_more:
+            return
+        if self._current_room is None or self._current_room.code != room.code:
+            return
+        self._chat_loading = True
+        before = None if initial else self._chat_next_before
+        if initial:
+            self.room_view.set_status("正在加载聊天记录…")
+        self._safe_submit(
+            self.api.get_messages(room.code, before=before, limit=50),
+            lambda page: self._on_chat_history(room.code, page, initial),
+            lambda exc: self._on_chat_history_failed(room.code, exc, initial),
+        )
+
+    def _on_chat_history(self, code: str, page: Any, initial: bool) -> None:
+        self._chat_loading = False
+        if self._current_room is None or self._current_room.code != code:
+            return
+        added = self._timeline.add_page(page)
+        self._chat_has_more = bool(page.has_more)
+        self._chat_next_before = page.next_before
+        self._render_chat(stick_to_bottom=initial)
+        if initial:
+            self.room_view.set_status(f"已加载 {len(page.messages)} 条历史消息" if page.messages else "")
+        elif added:
+            self.room_view.set_status(f"已加载 {added} 条更早消息")
+
+    def _on_chat_history_failed(self, code: str, exc: BaseException, initial: bool) -> None:
+        self._chat_loading = False
+        if self._current_room is None or self._current_room.code != code:
+            return
+        if isinstance(exc, ApiError) and exc.is_auth_error:
+            self._handle_auth_expired(exc)
+            return
+        if initial and self._timeline.is_empty:
+            self._chat_has_more = True  # 允许滚动到顶部时重试
+        self.room_view.set_status(f"聊天记录加载失败：{to_user_message(exc)}", error=True)
+
+    def _on_history_requested(self) -> None:
+        room = self._current_room
+        if room is not None and not self._chat_loading and self._chat_has_more:
+            self._load_chat_history(room, initial=False)
+
     def _on_chat_submitted(self, text: str) -> None:
         text = str(text).strip()
         if not text:
             return
-        username = self._username()
-        if self._ws is None or not getattr(self._ws, "connected", False):
-            self.room_view.add_chat_message(
-                ChatMessage(sender_name=username, content=text, ts=now_ms())
-            )
-            self.room_view.set_status("未连接实时频道，消息仅本地回显", error=True)
+        if len(text) > 2000:
+            self.room_view.set_status("消息最多 2000 字，请精简后再发", error=True)
+            self.room_view.append_chat_input(text)
             return
-
-        # 先本地回显；client_msg_id 在发送前登记，服务端回显据此去重（PROTOCOL.md §6.5）
-        self.room_view.add_chat_message(ChatMessage(sender_name=username, content=text, ts=now_ms()))
+        room = self._current_room
+        if room is None:
+            return
+        if self._ws is None or not getattr(self._ws, "connected", False):
+            self.room_view.set_status("实时连接未建立，消息未发送", error=True)
+            self.room_view.append_chat_input(text)
+            return
         client_msg_id = make_client_msg_id()
-        self._pending_chat_ids.add(client_msg_id)
+        self._timeline.add_pending(client_msg_id, self._username(), text, now_ms())
+        self._render_chat(stick_to_bottom=True)
+        self._send_chat(client_msg_id, text, room)
 
-        def sent(sent_id: Any) -> None:
-            if not sent_id:
-                self._pending_chat_ids.discard(client_msg_id)
-                self.room_view.add_system_message("消息发送失败：实时连接尚未就绪")
+    def _send_chat(self, client_msg_id: str, text: str, room: Room) -> None:
+        room_ref = room.id or room.code
+        self._safe_submit(
+            self._ws.send_chat(text, client_msg_id, room_ref),
+            lambda sent: self._on_chat_sent(client_msg_id, sent),
+            lambda exc: self._fail_chat(client_msg_id, to_user_message(exc)),
+        )
+        QTimer.singleShot(10_000, lambda: self._on_chat_timeout(client_msg_id))
 
-        def failed(exc: BaseException) -> None:
-            self._pending_chat_ids.discard(client_msg_id)
-            self.room_view.add_system_message(f"消息发送失败：{to_user_message(exc)}")
+    def _on_chat_sent(self, client_msg_id: str, sent_id: Any) -> None:
+        if not sent_id:
+            self._fail_chat(client_msg_id, "实时连接未就绪")
 
-        self._safe_submit(self._ws.send_chat(text, client_msg_id), sent, failed)
+    def _on_chat_timeout(self, client_msg_id: str) -> None:
+        entry = self._timeline.get(client_msg_id)
+        if entry is not None and entry.is_pending:
+            self._fail_chat(client_msg_id, "发送超时（未收到服务端广播）")
+
+    def _fail_chat(self, client_msg_id: str, reason: str) -> None:
+        if not self._timeline.fail(client_msg_id, reason):
+            return
+        entry = self._timeline.get(client_msg_id)
+        self._render_chat()
+        self.room_view.set_status(f"发送失败：{reason}（双击失败消息重试）", error=True)
+        if entry is not None:
+            self.room_view.append_chat_input(entry.content)
+
+    def _on_retry_chat(self, client_msg_id: str) -> None:
+        room = self._current_room
+        if room is None:
+            return
+        entry = self._timeline.retry(client_msg_id)
+        if entry is None:
+            return
+        if self._ws is None or not getattr(self._ws, "connected", False):
+            self._fail_chat(client_msg_id, "实时连接未建立")
+            return
+        self._render_chat(stick_to_bottom=True)
+        self._send_chat(client_msg_id, entry.content, room)
+
+    def _handle_ws_error(self, message: Mapping[str, Any]) -> None:
+        code = str(message.get("code") or message.get("error_code") or "")
+        text = str(message.get("message") or code or "未知错误")
+        self._timeline.add_system(f"服务端错误：{text}")
+        chat_reason = _CHAT_ERROR_REASONS.get(code)
+        if chat_reason:
+            failed = self._timeline.fail_all_pending(chat_reason)
+            if failed:
+                self.room_view.append_chat_input(failed[-1].content)
+                self.room_view.set_status(f"发送失败：{chat_reason}", error=True)
+            self._render_chat()
+            if code == "ROOM_CLOSED":
+                self.room_view.set_status("房间已关闭，即将返回房间列表", error=True)
+                QTimer.singleShot(1200, self._on_leave_room)
+            return
+        self._render_chat()
 
     def _on_leave_room(self) -> None:
         room = self._current_room
         self._stop_ws(room.code if room is not None else None)
         self._current_room = None
         self._room_password = None
+        self._timeline.clear()
+        self._chat_has_more = False
+        self._chat_next_before = None
+        self._chat_loading = False
         if room is not None:
             self._safe_submit(self.api.leave_room(room.code), on_error=lambda exc: None)
         self._show_rooms()

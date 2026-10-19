@@ -63,9 +63,17 @@ class MessageTests(unittest.TestCase):
     def test_chat_and_ping_messages(self) -> None:
         chat = protocol.chat_send_message("大家好", "m-1")
         self.assertEqual(chat, {"type": "chat_send", "client_msg_id": "m-1", "content": "大家好", "content_type": "text"})
+        with_room = protocol.chat_send_message("hi", "c-1", room_id="room-9")
+        self.assertEqual("room-9", with_room["room_id"])
+        self.assertEqual("hi", with_room["content"])
+        self.assertEqual("c-1", with_room["client_msg_id"])
         ping = protocol.ping_message(1750000000000)
         self.assertEqual(ping["type"], "ping")
         self.assertIsInstance(ping["ts"], int)
+
+    def test_room_messages_path(self) -> None:
+        self.assertEqual(protocol.room_messages_path("AB12C"), "/api/v1/rooms/AB12C/messages")
+        self.assertEqual(protocol.room_messages_path("a/b"), "/api/v1/rooms/a%2Fb/messages")
 
     def test_ids_are_unique(self) -> None:
         self.assertTrue(protocol.make_request_id().startswith("c-"))

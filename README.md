@@ -1,13 +1,13 @@
 # Delta Client —— 三角洲行动队友房间（Windows 桌面端 / PySide6）
 
-桌面客户端：**文字聊天、公共/私有房间、房间内画板协同（C2 占位）、本地截屏识别技能 CD 后共享给队友（C3 占位）**。
+桌面客户端：**文字聊天、公共/私有房间、房间内画板协同（D 占位）、本地截屏识别技能 CD 后共享给队友（E 占位）**。
 本项目只做桌面端，不做 Web；截屏与识别全部在客户端本地完成，服务端不接收图像。
 
-> 当前进度：**C1（工程骨架 + JWT 登录 + 房间界面）**。画板与截屏仅为占位，未实现。
+> 当前进度：**C1（骨架 + JWT 登录 + 房间界面）+ C（聊天：收发 / 历史 / 乐观更新）**。画板（D）与截屏/技能（E）仅为占位，未实现。
 
 ---
 
-## 1. 本轮 C1 已完成
+## 1. 已完成能力（C1 + C 聊天）
 
 | 模块 | 内容 |
 |---|---|
@@ -17,11 +17,12 @@
 | 会话 | `state/session.py`：token + 用户信息（内存；可选落盘，**不落盘密码**） |
 | 登录/注册 | `POST /api/v1/auth/login`、`POST /api/v1/auth/register`（404 时回退旧接口；注册带 token 自动登录） |
 | 房间 | 公共房间列表、刷新、创建（公开/私有+密码）、按 5 位房间号加入（私有需密码）、离开 |
-| 房间内页 | 成员列表（WS `room_joined` + HTTP 房间详情兜底）、聊天（WS 实时 + 本地回显）、画板占位 |
+| 房间内页 | 成员列表（WS `room_joined` + HTTP 房间详情兜底）、聊天（WS 实时 + 历史分页 + 乐观更新）、画板占位 |
+| 聊天（C） | 发送 `chat_send`（带 `room_id` / `client_msg_id`）、`chat_message` 广播认领（发送中→已发送、不重复插入）、失败标红双击重试（复用 `client_msg_id`）、进房拉最近 50 条、上滚 `next_before` 续拉 |
 | 连通性测试 | 设置页「测试连接」：探测 `/health` + `/api/v1/rooms?page=1`，分别报告可达/鉴权失效/超时/网络错误 |
-| 协议对齐 | PROTOCOL PR#9：`data.error_code`、§7.2/§7.3 实名错误码、WS `room_id_or_code` 与 join 前置条件 |
-| Mock | `--mock` / `DELTA_MOCK=1`：内置内存后端，后端接口未就绪也能完整演示 |
-| 测试 | 131 个纯逻辑 stdlib unittest，离线可跑 |
+| 协议对齐 | PROTOCOL C 定稿 + PR#9：`data.error_code`、§7.2/§7.3 实名错误码、WS `room_id_or_code` 与 join 前置条件、聊天字段 `id/user/content/client_msg_id/created_at` |
+| Mock | `--mock` / `DELTA_MOCK=1`：内置内存后端（含聊天历史），后端接口未就绪也能完整演示 |
+| 测试 | 150 个纯逻辑 stdlib unittest，离线可跑 |
 
 ---
 
@@ -36,6 +37,7 @@ delta_client/
 │   ├── errors.py            # HTTP/WS 错误 -> 统一 ApiError + 中文提示
 │   ├── backoff.py           # WS 重连指数退避
 │   ├── connection.py        # 连通性测试结果模型（/health + /api/v1/rooms）
+│   ├── chat.py              # 聊天时间线：乐观更新/广播认领/去重/失败重试/历史分页
 │   ├── rooms.py             # 房间号/房间名/可见性/密码校验
 │   ├── models.py            # Room / Member / ChatMessage 与容错解析
 │   └── validation.py        # 登录/注册输入校验、用户信息清洗
@@ -149,7 +151,7 @@ python -m unittest discover -s tests -v
 
 覆盖：配置加载与优先级、URL 规范化、协议路径/WS 消息、HTTP 错误映射、WS 重连退避、房间号校验（5 位 `[A-Z0-9]`）、房间/成员/消息解析、登录注册校验、token 存取与“不落盘密码”、Mock 后端完整流程。
 
-当前结果：**131 个用例全部通过**（约 0.5s）。
+当前结果：**150 个用例全部通过**（约 0.5s）。
 
 ---
 
@@ -170,7 +172,8 @@ python -m unittest discover -s tests -v
 | 离开房间 | WS `leave_room` + `POST /api/v1/rooms/{room_id_or_code}/leave` | 客户端离开/退出/关窗先发 WS `leave_room` 再 HTTP leave；服务端广播 `user_left(reason=left)` |
 | 实时连接 | `WS /ws` | 首消息 `{"type":"auth","token","protocol_version":1,"client":{...}}` |
 | 加入实时频道 | WS `join_room` | `{"room_id_or_code": ...}`（同时带旧字段 `room_code` 兼容）；**前置条件：先 HTTP 加入房间**，否则 `NOT_ROOM_MEMBER`；`password` 服务端忽略；成功回 `room_joined{room,members}` |
-| 聊天（C 阶段） | WS `chat_send` | PR#9 契约待部署；客户端已实现 `client_msg_id` 去重与 `RATE_LIMITED`/`INVALID_MESSAGE`/`ROOM_CLOSED` 错误映射 |
+| 聊天收发（C） | WS `chat_send` | `{client_msg_id,content,content_type,room_id}`；服务端向房间内所有连接（含发送者）广播 `chat_message`，客户端按 `client_msg_id` 认领「发送中→已发送」，不重复插入 |
+| 聊天历史（C） | `GET /api/v1/rooms/{room_id_or_code}/messages` | `?before=<消息 id>&limit=50`；`data.{items,has_more,next_before}`，`items` 新→旧；进房拉最近一页，上滚用 `next_before` 续拉 |
 | 心跳 | WS `ping` / 服务端 `heartbeat` | PR#9：服务端每 30s 下发；客户端 25s ping，90s 无消息判定失联 |
 
 错误体统一读取 `data.error_code`（PR#9 §1.4/§7.3），并已映射 §7.2 全部 WS 错误码（`NOT_AUTHENTICATED`/`AUTH_INVALID`/`AUTH_EXPIRED`/`NOT_ROOM_MEMBER`/`ROOM_CLOSED`/`INVALID_MESSAGE`/`CANVAS_SEQ_GAP` 等）。
@@ -192,14 +195,14 @@ python -m unittest discover -s tests -v
 - 断线重连：同账号新连接顶号后，客户端自动重连 → 重新 auth → 重新 `join_room` 成功。
 - 离开：WS `leave_room`（填 code 或内部 id 均可）会广播 `user_left(reason=left)`；B2b 当前直接断连不广播，PR#9 起断连会清理并广播 `reason=disconnected`（客户端已按 `left/disconnected/kicked/replaced` 展示原因）。
 - 连通性自检：真实后端 `/health` 与 `/api/v1/rooms?page=1` 均通过，设置页「测试连接」可区分可达/鉴权失效/超时/网络错误。
+- 聊天（C）：客户端按 C 定稿实现（乐观更新、广播认领、历史分页、失败重试），mock + 单测已打通；真实双账号联调待 C 部署完成后执行（本机检查部署 OpenAPI 时仍为 B2b）。
 - 房间对象比 PROTOCOL 多 `visibility/updated_at/closed_at/background` 等字段，客户端忽略未知字段。
 
 ### 6.4 后续里程碑 / 待部署
 
-1. PR #9（聊天 C）尚未合并/部署：当前 `chat_send` 仍回 `UNSUPPORTED_MESSAGE_TYPE`，客户端暂不测收发；契约已按 PR#9 对齐，部署后可直接联调。
-2. 列表分页 UI：C1 只渲染首屏 `items`，C2 视需要加分页/滚动加载。
+1. C 聊天代码已合并（bebb15e）但部署尚需确认：部署前 `/api/v1/rooms/{ref}/messages` 返回 404、`chat_send` 仍为 B2b 行为；客户端实现已就绪，部署后按双账号清单复验。
+2. 列表分页 UI：C1 只渲染首屏 `items`，后续视需要加分页/滚动加载。
 3. 画板（D）`canvas_*` 与技能（E）`skill_*` 本轮仅占位。
-4. 建议后端在 C 合并时确保 HTTP leave/kick 后摘除 WS 会话并广播 `user_left`（PR#9 §6.6 已描述）。
 
 ---
 
@@ -209,21 +212,21 @@ python -m unittest discover -s tests -v
 - 密码只在登录请求体内发送，**不落盘、不写日志、不进配置文件**；
 - JWT 默认只存内存；开启 `save_token` 时才落盘到 `~/.delta_client_session.json`，并用 `core.validation.sanitize_user` 清洗用户信息（去掉 password/token/secret 类字段）；
 - 错误提示只展示服务端 `message` 或客户端兜底文案，5xx 不展示内部细节；
-- 截屏/OCR/画板（C2/C3）本轮未实现，客户端不采集、不上传屏幕内容。
+- 截屏/OCR/画板（D/E）本轮未实现，客户端不采集、不上传屏幕内容。
 
 ---
 
 ## 8. 已知限制 / TODO
 
-- C1 不实现画板（C2）与截屏/技能识别（C3），房间内画板卡片仅为占位；
-- 房间列表暂无分页/自动定时刷新（提供手动刷新）；C1 只渲染 `items` 首屏；
+- 画板（D）与截屏/技能识别（E）未实现，房间内画板卡片仅为占位；
+- 房间列表暂无分页/自动定时刷新（提供手动刷新）；只渲染 `items` 首屏；
 - 成员列表以 WS `room_joined` 为准，HTTP 房间详情做兜底（进房一次 + 重连失败时 5s 节流）；
-- 聊天收发待后端 PR #9 合并/部署后联调；当前 UI 为 WS + 本地回显，错误码已按 PR#9 预留；
+- 聊天：进房拉最近 50 条，上滚按 `next_before` 续拉（服务端 `items` 新→旧）；发送失败/超时标红，双击重试复用同一 `client_msg_id`；`RATE_LIMITED` 会保留输入内容；
 - 断线重连后会自动重新 `join_room` 并依赖 `room_joined` 恢复状态（画板/技能快照本轮不消费）；
 - 离开房间/退出登录/关闭窗口会先发 WS `leave_room`，确保队友收到 `user_left`；
 - 设置页「测试连接」使用当前登录 token 探测 `/health` 与 `/api/v1/rooms?page=1`，未登录时会显示鉴权失效；
-- Mock 后端只用于演示，不模拟限频、多客户端并发与持久化；
-- 若后端返回的登录响应没有 token，界面会提示并进入“无 JWT 兼容模式”（聊天本地回显）。
+- Mock 后端只用于演示，不模拟限频、多客户端并发与持久化（但包含聊天历史，可离线演示收发/乐观更新）；
+- 若后端返回的登录响应没有 token，界面会提示并进入“无 JWT 兼容模式”（聊天仅本地回显）。
 
 ---
 

@@ -157,44 +157,83 @@ class Room:
 
 @dataclass(frozen=True)
 class ChatMessage:
-    """聊天消息（PROTOCOL.md §6.4 chat_message）。"""
+    """聊天消息（PROTOCOL.md §6.4 / C 定稿字段）。
 
+    ``id`` / ``room_id`` / ``user{id,username}`` / ``content`` / ``client_msg_id`` /
+    ``created_at``；同时兼容旧字段 ``message_id`` / ``sender`` / ``ts``。
+    """
+
+    message_id: str = ""
+    room_id: str = ""
+    sender_id: str = ""
     sender_name: str = ""
     content: str = ""
-    ts: int | None = None
-    message_id: str = ""
     client_msg_id: str = ""
+    created_at: int | None = None
     system: bool = False
+
+    @property
+    def ts(self) -> int | None:
+        """兼容旧字段名（早期代码/测试用 ``ts``）。"""
+        return self.created_at
 
     @classmethod
     def from_ws(cls, payload: Mapping[str, Any]) -> "ChatMessage":
         if not isinstance(payload, Mapping):
             payload = {}
+        user = payload.get("user")
         sender = payload.get("sender")
-        if isinstance(sender, Mapping):
+        if isinstance(user, Mapping):
+            sender_id = _as_str(_first(user, "id", "user_id", "userId"))
+            sender_name = _as_str(_first(user, "username", "name", "nickname", "id"))
+        elif isinstance(sender, Mapping):
+            sender_id = _as_str(_first(sender, "id", "user_id", "userId"))
             sender_name = _as_str(_first(sender, "username", "name", "id"))
-        elif isinstance(payload.get("username"), str):
-            sender_name = payload["username"]
         else:
-            sender_name = _as_str(payload.get("sender_name"))
+            sender_id = _as_str(_first(payload, "user_id", "sender_id"))
+            sender_name = _as_str(_first(payload, "username", "sender_name"))
         return cls(
+            message_id=_as_str(_first(payload, "id", "message_id", "messageId")),
+            room_id=_as_str(_first(payload, "room_id", "roomId", "room_code")),
+            sender_id=sender_id,
             sender_name=sender_name or "未知用户",
             content=_as_str(payload.get("content")),
-            ts=parse_ts(payload.get("ts")),
-            message_id=_as_str(_first(payload, "message_id", "messageId")),
             client_msg_id=_as_str(_first(payload, "client_msg_id", "clientMsgId")),
+            created_at=parse_ts(_first(payload, "created_at", "createdAt", "ts")),
             system=False,
         )
 
     @property
     def time_text(self) -> str:
-        return format_timestamp(self.ts)
+        return format_timestamp(self.created_at)
 
     def display_text(self) -> str:
         if self.system:
             return f"— {self.content} —"
         stamp = f"[{self.time_text}] " if self.time_text else ""
         return f"{stamp}{self.sender_name}：{self.content}"
+
+
+@dataclass(frozen=True)
+class ChatPage:
+    """聊天历史一页（``items`` 按 created_at 倒序，即新→旧）。"""
+
+    messages: tuple[ChatMessage, ...] = ()
+    has_more: bool = False
+    next_before: str | None = None
+
+
+def parse_chat_page(payload: Any) -> ChatPage:
+    """解析 ``GET /api/v1/rooms/{ref}/messages`` 的 ``{items,has_more,next_before}``。"""
+    data = unwrap_payload(payload)
+    if not isinstance(data, Mapping):
+        return ChatPage()
+    raw_items = data.get("items")
+    messages: tuple[ChatMessage, ...] = ()
+    if isinstance(raw_items, list):
+        messages = tuple(ChatMessage.from_ws(item) for item in raw_items if isinstance(item, Mapping))
+    next_before = _as_str(_first(data, "next_before", "nextBefore")) or None
+    return ChatPage(messages=messages, has_more=bool(data.get("has_more")), next_before=next_before)
 
 
 def make_system_message(content: str) -> ChatMessage:

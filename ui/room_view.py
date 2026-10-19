@@ -17,12 +17,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.chat import STATUS_FAILED, STATUS_PENDING, ChatEntry
 from core.models import ChatMessage, Member, Room
 
 
 class RoomView(QWidget):
     leave_requested = Signal()
     chat_submitted = Signal(str)
+    history_requested = Signal()
+    retry_requested = Signal(str)  # client_msg_id
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -108,12 +111,18 @@ class RoomView(QWidget):
 
         self.chat_list = QListWidget()
         self.chat_list.setWordWrap(True)
+        self.chat_list.itemDoubleClicked.connect(self._on_chat_double_clicked)
+        self.chat_list.verticalScrollBar().valueChanged.connect(self._on_chat_scrolled)
         layout.addWidget(self.chat_list, stretch=1)
+
+        hint = QLabel("向上滚动加载更早消息；发送失败的消息双击可重试")
+        hint.setObjectName("Hint")
+        layout.addWidget(hint)
 
         input_row = QHBoxLayout()
         input_row.setSpacing(8)
         self.chat_input = QLineEdit()
-        self.chat_input.setPlaceholderText("输入消息，Enter 发送（C1 聊天为回显演示，C 阶段接正式聊天）")
+        self.chat_input.setPlaceholderText("输入消息，Enter 发送（1-2000 字）")
         self.chat_input.returnPressed.connect(self._emit_chat)
         self.send_button = QPushButton("发送")
         self.send_button.setObjectName("Primary")
@@ -145,11 +154,11 @@ class RoomView(QWidget):
         icon = QLabel("◈")
         icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon.setStyleSheet("color: #4a5c72; font-size: 48px;")
-        caption = QLabel("画板协同（C2 占位）")
+        caption = QLabel("画板协同（D 阶段占位）")
         caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
         caption.setObjectName("Muted")
         details = QLabel(
-            "逻辑画布 1920×1080\n底图由运营方配置\n\n本轮 C1 不实现绘制、\n不上传任何截图"
+            "逻辑画布 1920×1080\n底图由运营方配置\n\nD 协议接入后实现绘制，\n不上传任何截图"
         )
         details.setAlignment(Qt.AlignmentFlag.AlignCenter)
         details.setObjectName("Hint")
@@ -159,7 +168,7 @@ class RoomView(QWidget):
         placeholder_layout.addWidget(details)
         layout.addWidget(placeholder, stretch=1)
 
-        note = QLabel("技能 CD 共享（C3）同样是占位，截屏与识别只会在本机进行")
+        note = QLabel("技能 CD 共享（E）同样是占位，截屏与识别只会在本机进行")
         note.setObjectName("Hint")
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -216,21 +225,43 @@ class RoomView(QWidget):
         style.unpolish(self.connection_badge)
         style.polish(self.connection_badge)
 
-    def add_chat_message(self, message: ChatMessage) -> None:
-        item = QListWidgetItem(message.display_text())
-        item.setToolTip(message.display_text())
-        if message.system:
-            item.setForeground(QColor("#8b98a8"))
-        elif self._username and message.sender_name == self._username:
-            item.setForeground(QColor("#ffd071"))
-        self.chat_list.addItem(item)
-        QTimer.singleShot(0, self.chat_list.scrollToBottom)
+    def set_chat_entries(self, entries: list[ChatEntry], *, stick_to_bottom: bool = False) -> None:
+        """按时间线整体渲染聊天列表（保持滚动位置/吸底）。"""
+        bar = self.chat_list.verticalScrollBar()
+        at_bottom = bar.value() >= bar.maximum() - 4
+        old_value, old_max = bar.value(), bar.maximum()
 
-    def add_system_message(self, text: str) -> None:
-        self.add_chat_message(ChatMessage(system=True, content=str(text)))
+        self.chat_list.clear()
+        for entry in entries:
+            item = QListWidgetItem(entry.display_text())
+            item.setToolTip(entry.display_text())
+            item.setData(
+                Qt.ItemDataRole.UserRole,
+                {"client_msg_id": entry.client_msg_id, "status": entry.status},
+            )
+            if entry.system:
+                item.setForeground(QColor("#8b98a8"))
+            elif entry.status == STATUS_FAILED:
+                item.setForeground(QColor("#ff7b6b"))
+            elif entry.status == STATUS_PENDING:
+                item.setForeground(QColor("#aebbc9"))
+            elif entry.outgoing or (self._username and entry.sender_name == self._username):
+                item.setForeground(QColor("#ffd071"))
+            self.chat_list.addItem(item)
+
+        if stick_to_bottom or at_bottom:
+            QTimer.singleShot(0, self.chat_list.scrollToBottom)
+        elif old_value > 0:
+            # 历史插入头部后保持视口位置
+            bar.setValue(min(old_value + (bar.maximum() - old_max), bar.maximum()))
 
     def clear_chat(self) -> None:
         self.chat_list.clear()
+
+    def append_chat_input(self, text: str) -> None:
+        """恢复输入框内容（发送失败重试用）。"""
+        if not self.chat_input.text().strip():
+            self.chat_input.setText(text)
 
     def set_status(self, text: str, error: bool = False) -> None:
         self.status_label.setText(str(text))
@@ -240,6 +271,17 @@ class RoomView(QWidget):
         self.chat_input.setFocus()
 
     # ---------- 内部 ----------
+    def _on_chat_scrolled(self, value: int) -> None:
+        if value == 0 and self.chat_list.count() > 0:
+            self.history_requested.emit()
+
+    def _on_chat_double_clicked(self, item: QListWidgetItem) -> None:
+        data = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(data, dict):
+            return
+        if data.get("status") == STATUS_FAILED and data.get("client_msg_id"):
+            self.retry_requested.emit(str(data["client_msg_id"]))
+
     @staticmethod
     def _member_item(member: Member) -> QListWidgetItem:
         marker = "●" if member.online else "○"

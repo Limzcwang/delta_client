@@ -19,7 +19,7 @@ from typing import Any, Callable, Mapping
 from core import protocol
 from core.connection import ConnectionCheck, ProbeResult, probe_from_error, probe_ok
 from core.errors import ApiError, ErrorKind, api_error_from_exception, api_error_from_response
-from core.models import Room, RoomDetail, parse_room_detail, parse_room_list
+from core.models import ChatPage, Room, RoomDetail, parse_chat_page, parse_room_detail, parse_room_list
 from core.protocol import extract_token, extract_user, unwrap_payload
 from core.rooms import room_reference
 
@@ -261,6 +261,28 @@ class ApiClient:
         if detail is None:
             raise ApiError(ErrorKind.UNKNOWN, "房间详情响应格式异常", detail=body)
         return detail
+
+    async def get_messages(
+        self,
+        room_id_or_code: str,
+        *,
+        before: str | None = None,
+        limit: int = 50,
+    ) -> ChatPage:
+        """聊天历史（PROTOCOL C）：按 ``created_at`` 倒序返回一页。
+
+        ``before`` 为上一页最后一条消息 id（字符串，服务端按 created_at 过滤）；
+        向上翻页时把它传回即可。
+        """
+        params: dict[str, Any] = {"limit": max(1, min(100, int(limit)))}
+        if before:
+            params["before"] = str(before)
+        body = await self.request_data(
+            "GET",
+            protocol.room_messages_path(room_reference(room_id_or_code)),
+            params=params,
+        )
+        return parse_chat_page(body)
 
     async def check_connection(self) -> ConnectionCheck:
         """连通性自检：``/health`` + ``GET /api/v1/rooms?page=1``。

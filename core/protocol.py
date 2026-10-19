@@ -67,6 +67,11 @@ def room_detail_path(room_code: str) -> str:
     return f"{API_V1_ROOMS}/{quote(str(room_code), safe='')}"
 
 
+def room_messages_path(room_id_or_code: str) -> str:
+    """聊天历史：``GET /api/v1/rooms/{room_id_or_code}/messages``（C）。"""
+    return f"{API_V1_ROOMS}/{quote(str(room_id_or_code), safe='')}/messages"
+
+
 def ws_url_for(server_url: str, ws_path: str = "/ws") -> str:
     """由 HTTP 基地址推导 WebSocket 地址（PROTOCOL.md §1.1 目标 wss://host/ws）。
 
@@ -128,13 +133,26 @@ def leave_room_message(room_id_or_code: str | None = None) -> dict[str, Any]:
     return message
 
 
-def chat_send_message(content: str, client_msg_id: str) -> dict[str, Any]:
-    return {
+def chat_send_message(
+    content: str,
+    client_msg_id: str,
+    room_id: str | None = None,
+    content_type: str = "text",
+) -> dict[str, Any]:
+    """WS ``chat_send``（PROTOCOL C 定稿）。
+
+    服务端用会话房间（不读 ``room_id``），但按联调约定仍带上房间引用，
+    便于服务端日志/未来多房间扩展；``client_msg_id`` 用于回显认领与重试。
+    """
+    message: dict[str, Any] = {
         "type": WS_CHAT_SEND,
         "client_msg_id": client_msg_id,
         "content": content,
-        "content_type": "text",
+        "content_type": content_type,
     }
+    if room_id:
+        message["room_id"] = str(room_id)
+    return message
 
 
 def ping_message(ts_ms: int) -> dict[str, Any]:
