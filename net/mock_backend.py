@@ -636,6 +636,30 @@ class MockApiClient:
         )
         return RoomDetail(room=Room.from_api(_copy_room_payload(payload)), members=members)
 
+    async def get_operator_config(self, etag: str = ""):
+        """Mock 配置中心：同版本 304；修改 operator_config_version 模拟 200 更新。"""
+        import json
+
+        from core.operator_config import OperatorConfigResponse
+        from core.operators import operators_asset_path
+
+        version = getattr(self, "operator_config_version", "mock-2026.10.20")
+        current_etag = f'"{version}"'
+        if etag and etag == current_etag:
+            return OperatorConfigResponse(304, None, current_etag)
+        try:
+            payload = json.loads(operators_asset_path().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            payload = {"operators": []}
+        payload.update(
+            {
+                "version": version,
+                "etag": current_etag,
+                "updated_at": "2026-10-20T00:00:00Z",
+            }
+        )
+        return OperatorConfigResponse(200, payload, current_etag)
+
     async def check_connection(self) -> ConnectionCheck:
         """Mock 版连通性自检（演示/测试用）。"""
         await self._tick()

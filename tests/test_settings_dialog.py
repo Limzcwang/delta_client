@@ -57,6 +57,28 @@ class SettingsOperatorTests(unittest.TestCase):
             any("版本 v0.1.2" in label.text() for label in dialog.findChildren(QLabel))
         )
 
+    def test_config_center_labels_and_check_button(self) -> None:
+        from types import SimpleNamespace
+
+        manager = SimpleNamespace(
+            state=SimpleNamespace(version="v3", source_label="服务器", updated_at="2026-10-20")
+        )
+        dialog = SettingsDialog(
+            AppConfig(server_migrated=False),
+            catalog=self.catalog,
+            config_manager=manager,
+        )
+        self.dialogs.append(dialog)
+        self.assertIn("v3", dialog.config_version_label.text())
+        self.assertIn("服务器", dialog.config_source_label.text())
+        self.assertIn("2026-10-20", dialog.config_updated_label.text())
+        events: list[bool] = []
+        dialog.config_check_requested.connect(lambda: events.append(True))
+        dialog.check_config_button.click()
+        self.assertEqual([True], events)
+        dialog.set_config_check_result("已是最新", ok=True)
+        self.assertIn("已是最新", dialog.config_check_result.text())
+
     def test_server_migration_hint(self) -> None:
         dialog = self._dialog("honglang")
         self.assertTrue(dialog.server_migrated_label.isHidden())

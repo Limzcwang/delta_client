@@ -25,6 +25,7 @@ API_V1_ME_PASSWORD = "/api/v1/users/me/password"
 API_V1_ROOMS = "/api/v1/rooms"
 #: H1：「我的房间」（按加入时间倒序，page/page_size）
 API_V1_MY_ROOMS = "/api/v1/rooms/mine"
+API_V1_OPERATOR_CONFIG = "/api/v1/config/operators"
 API_HEALTH = "/health"
 
 #: 过渡期兼容路径（A 现状）

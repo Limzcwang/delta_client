@@ -22,10 +22,11 @@
 | E3b HUD 采集/标定/识别 | 部分完成：采集层(WGC/mss)/2FPS 线程、HUD profile+标定对话框、OCR/模板匹配/单帧流水线、识别 HUD 按钮；未实机抓帧/未接入自动共享循环 |
 | E2b ready_at 接收端 | 完成：server_received_at/ready_at 解析、ready_at 倒计时兜底、auth_ok+pong RTT/2 偏移 EMA、单调时钟 tick |
 | E4 悬浮窗/自动循环 | 完成：穿透/置顶/跟随/编辑模式/透明度/快捷键/失败回落；自动识别变化去抖+限频+暂停条件；`识别 HUD` 与自动循环共享缓存 |
+| E5 干员配置中心 | 完成：ETag/304、缓存写入+热更新、损坏回退内置、网络失败静默、设置页版本/来源/手动检查；缓存 `%APPDATA%\DeltaClient\operators.json` |
 | 上报 payload 清洗 | 完成：pct/remaining/charges/max 强制 int+clamp+NaN 过滤，未知槽降级，captured_at 整数校验 |
 - 本地工作副本：`.tmp/client-work`，当前分支 `feat/canvas-tools`。
 - 远端集成分支：`feat/client-chat`（lead 用 patch 应用，不要直接改远端）。
-- 测试：`python -m unittest discover -s tests -v` → **371 用例**（含 40 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑。
+- 测试：`python -m unittest discover -s tests -v` → **381 用例**（含 40 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑。
 - GUI 冒烟脚本在 `.tmp/client-work-smoke/`（不在仓库内）：`smoke.py`（登录/房间/聊天/设置）、`smoke_canvas.py`（画板保存/恢复）、`smoke_canvas_map.py`（底图比例/坐标/透明层/图标工具栏/截图）、`smoke_skill_panel.py`（技能面板三状态/E1 载荷/E3a 干员配置与未知 CD/开关/模拟/移除截图）、`smoke_hud.py`（标定预览/OCR 识别结果面板截图）、`smoke_f.py`（昵称/注册规则/资料/房主管理）、`smoke_username_input.py`（输入过滤/粘贴/光标/IME/注册密码边界）、`smoke_my_rooms.py`（我的房间/退出/关闭/空态）、`smoke_create_room.py`（建房实时校验/失败保留表单/密码 4–32）、`smoke_saved_logins.py`（历史账号/重启带出/删除/失败清密码）、`smoke_kick.py`（右键移出/room_kicked 回大厅）、`smoke_member_menu.py`（多成员/长昵称/行高/右键菜单状态/截图）、`live_*.py`（真实后端联调）。
 - 本机沙箱曾把 PySide6 装到 `.tmp/pydeps` 并用 `PYTHONPATH` 跑 GUI；正常开发直接 `pip install -r requirements.txt`。
 
@@ -125,7 +126,7 @@
 6. 分页 UI：房间列表只有首屏 `items`。
 7. 设置页可加 WS 连通性测试（现在只测 `/health` 与 rooms）。
 8. 服务端若提供幂等去重（client_msg_id 唯一）可去掉 UI 侧重复消息兜底。
-9. 增加 GUI 自动化测试（pytest-qt 等）——当前 371 个测试中 40 个为 PySide6 组件测试，其余为纯逻辑；复杂交互仍用冒烟脚本验证。
+9. 增加 GUI 自动化测试（pytest-qt 等）——当前 381 个测试中 40 个为 PySide6 组件测试，其余为纯逻辑；复杂交互仍用冒烟脚本验证。
 10. E3b 后续：实机验证 WGC/mss 抓帧、接入 2 FPS 自动共享循环；E2 接收端 ready_at（server_received_at/绝对时间倒计时）待做；E4 悬浮窗待做。
 
 ---

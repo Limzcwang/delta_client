@@ -43,6 +43,7 @@ from core.models import (
     parse_members,
 )
 from core.operators import Operator, OperatorCatalog, load_operator_catalog
+from core.operator_config import OperatorConfigManager
 from core.protocol import extract_token, extract_user, make_client_msg_id, message_type
 from core.rooms import ValidationError, validate_room_delete_confirmation
 from core.skills import (
@@ -148,7 +149,8 @@ class MainWindow(QMainWindow):
         self._skill_share_enabled = False
         self._skill_sim_index = 0
         self._self_skill_state: SkillState | None = None
-        self.operator_catalog: OperatorCatalog = load_operator_catalog()
+        self.operator_config = OperatorConfigManager()
+        self.operator_catalog: OperatorCatalog = self.operator_config.catalog
         # F-c5：历史窗口文案（room_joined / 历史接口可选字段）
         self._history_window_days: int | None = None
 
@@ -166,6 +168,7 @@ class MainWindow(QMainWindow):
             self._set_status("已恢复上次登录状态")
         else:
             self._show_login()
+        QTimer.singleShot(0, lambda: self._refresh_operator_config(silent=True))
 
     # ---------- 构建 ----------
     def _build_ui(self) -> None:
@@ -388,6 +391,7 @@ class MainWindow(QMainWindow):
         else:
             # 后端 B 阶段前 /api/users/login 不返回 JWT，保留兼容分支
             self._set_status("登录成功，但服务器未返回 JWT（PROTOCOL B 阶段才上线）")
+        self._refresh_operator_config(silent=True)
         self._show_rooms()
 
     def _on_login_failure(self, exc: BaseException, username: str = "") -> None:
@@ -711,6 +715,7 @@ class MainWindow(QMainWindow):
 
     # ---------- 房间内 ----------
     def _enter_room(self, room: Room, password: str | None = None) -> None:
+        self._refresh_operator_config(silent=True)
         self._stop_lobby_timer()
         self._current_room = room
         self._room_password = password
@@ -1102,6 +1107,52 @@ class MainWindow(QMainWindow):
         self._clear_room_state()
         self._set_status(text)
         self._show_rooms()
+
+    # ---------- 干员配置中心 ----------
+    def _refresh_operator_config(self, silent: bool = True, dialog=None) -> None:
+        manager = self.operator_config
+
+        def success(response) -> None:
+            status = int(getattr(response, "status", 0))
+            message = ""
+            if status == 304:
+                message = "已是最新"
+            elif status == 200:
+                if manager.apply_server_payload(response.payload, getattr(response, "etag", "")):
+                    message = f"已更新到版本 {manager.state.version}"
+                else:
+                    message = "服务器配置结构非法，继续使用当前配置"
+            else:
+                message = f"服务器返回异常状态 {status}"
+            self._apply_operator_catalog()
+            if dialog is not None:
+                dialog.refresh_operator_catalog(manager.catalog)
+                dialog.refresh_operator_config_info(manager)
+                dialog.set_config_check_result(message, ok=(status in (200, 304)))
+            if status == 200 and not silent:
+                self.room_view.set_status(message)
+
+        def error(exc: BaseException) -> None:
+            message = "网络失败，请稍后"
+            if dialog is not None:
+                dialog.set_config_check_result(message, ok=False)
+            if not silent:
+                self.room_view.set_status(message, error=True)
+            logger.debug("干员配置更新失败：%s", exc)
+
+        try:
+            coro = self.api.get_operator_config(manager.state.etag)
+        except Exception as exc:  # noqa: BLE001
+            error(exc)
+            return
+        self._safe_submit(coro, success, error)
+
+    def _apply_operator_catalog(self) -> None:
+        self.operator_catalog = self.operator_config.catalog
+        self.room_view.skill_panel.set_operator_catalog(self.operator_catalog)
+        self.overlay.catalog = self.operator_catalog
+        self._sync_overlay_states()
+        self._on_operator_changed()
 
     # ---------- E4：悬浮窗 / 自动循环 ----------
     def _open_capture_source(self):
@@ -1908,7 +1959,10 @@ class MainWindow(QMainWindow):
         self._open_settings(start_tab=0)
 
     def _open_settings(self, start_tab: int = 0) -> None:
-        dialog = SettingsDialog(self.config, self, self.operator_catalog)
+        dialog = SettingsDialog(self.config, self, self.operator_catalog, self.operator_config)
+        dialog.config_check_requested.connect(
+            lambda: self._refresh_operator_config(silent=False, dialog=dialog)
+        )
         dialog.test_requested.connect(
             lambda server_text, ws_text: self._on_test_connection(dialog, server_text, ws_text)
         )

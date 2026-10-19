@@ -312,6 +312,33 @@ class ApiClient:
         )
         return parse_chat_page(body)
 
+    async def get_operator_config(self, etag: str = ""):
+        """E5：公开干员配置中心；304 返回无 payload，200 返回 body+ETag。"""
+        from core.operator_config import OperatorConfigResponse
+
+        try:
+            session = await self._ensure_session()
+            headers = self._headers(auth=False)
+            if etag:
+                headers["If-None-Match"] = str(etag)
+            async with session.get(
+                self.url(protocol.API_V1_OPERATOR_CONFIG), headers=headers
+            ) as response:
+                response_etag = str(response.headers.get("ETag") or "")
+                if response.status == 304:
+                    return OperatorConfigResponse(304, None, response_etag or etag)
+                text = await response.text()
+                body = _decode_body(text)
+                if response.status >= 400:
+                    raise api_error_from_response(response.status, body)
+                return OperatorConfigResponse(response.status, body, response_etag)
+        except ApiError:
+            raise
+        except asyncio.CancelledError:  # pragma: no cover
+            raise
+        except Exception as exc:
+            raise api_error_from_exception(exc) from exc
+
     async def get_canvas(self, room_id_or_code: str) -> CanvasSnapshot:
         """画板快照（PROTOCOL D）：``GET /api/v1/rooms/{ref}/canvas``。
 

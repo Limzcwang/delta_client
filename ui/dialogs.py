@@ -307,17 +307,20 @@ class SettingsDialog(QDialog):
     test_requested = Signal(str, str)  # (server_url 文本, ws_url 文本)
     nickname_save_requested = Signal(str)
     password_change_requested = Signal(str, str)  # (旧密码, 新密码)
+    config_check_requested = Signal()
 
     def __init__(
         self,
         config: AppConfig,
         parent: QWidget | None = None,
         catalog: OperatorCatalog | None = None,
+        config_manager=None,
     ) -> None:
         super().__init__(parent)
         self._config = config
         self._result: AppConfig | None = None
         self._catalog = catalog if catalog is not None else load_operator_catalog()
+        self._config_manager = config_manager
         self._hud_profile: dict = dict(config.hud_profile or {})
         self._overlay_position_reset = False
         self._build()
@@ -426,6 +429,26 @@ class SettingsDialog(QDialog):
         self.operator_combo.currentIndexChanged.connect(self._refresh_operator_detail)
         self._refresh_operator_detail()
 
+        config_row = QHBoxLayout()
+        self.config_version_label = QLabel()
+        self.config_updated_label = QLabel()
+        self.config_source_label = QLabel()
+        for label in (self.config_version_label, self.config_updated_label, self.config_source_label):
+            label.setObjectName("Hint")
+        self.check_config_button = QPushButton("检查更新")
+        self.check_config_button.clicked.connect(self.config_check_requested.emit)
+        config_row.addWidget(self.config_version_label)
+        config_row.addWidget(self.config_source_label)
+        config_row.addWidget(self.config_updated_label)
+        config_row.addStretch(1)
+        config_row.addWidget(self.check_config_button)
+        layout.addLayout(config_row)
+        self.config_check_result = QLabel("")
+        self.config_check_result.setObjectName("Hint")
+        self.config_check_result.setWordWrap(True)
+        layout.addWidget(self.config_check_result)
+        self.refresh_operator_config_info(self._config_manager)
+
         calibration_row = QHBoxLayout()
         self.calibration_button = QPushButton("HUD 标定…")
         self.calibration_button.clicked.connect(self._open_calibration)
@@ -444,6 +467,45 @@ class SettingsDialog(QDialog):
         layout.addWidget(hint)
         layout.addStretch(1)
         return page
+
+    def refresh_operator_config_info(self, manager=None) -> None:
+        if manager is not None:
+            self._config_manager = manager
+        manager = self._config_manager
+        if manager is None:
+            self.config_version_label.setText("配置版本：内置")
+            self.config_source_label.setText("来源：内置")
+            self.config_updated_label.setText("更新时间：-")
+            return
+        state = manager.state
+        self.config_version_label.setText(f"配置版本：{state.version}")
+        self.config_source_label.setText(f"来源：{state.source_label}")
+        self.config_updated_label.setText(f"更新时间：{state.updated_at or '-'}")
+
+    def refresh_operator_catalog(self, catalog: OperatorCatalog) -> None:
+        current = str(self.operator_combo.currentData() or "")
+        self._catalog = catalog
+        self.operator_combo.blockSignals(True)
+        self.operator_combo.clear()
+        for operator in catalog:
+            self.operator_combo.addItem(operator.display_name, operator.id)
+        index = self.operator_combo.findData(current or self._config.operator_id)
+        if index < 0 and self.operator_combo.count():
+            index = 0
+        if index >= 0:
+            self.operator_combo.setCurrentIndex(index)
+        self.operator_combo.blockSignals(False)
+        self._refresh_operator_detail()
+
+    def set_config_check_result(self, text: str, ok: bool | None = None) -> None:
+        self.config_check_result.setText(text)
+        if ok is True:
+            self.config_check_result.setStyleSheet("color:#8be3a8;")
+        elif ok is False:
+            self.config_check_result.setStyleSheet("color:#ff9b8f;")
+        else:
+            self.config_check_result.setStyleSheet("")
+        self.config_check_result.show()
 
     def _refresh_operator_detail(self) -> None:
         operator = self._catalog.get(str(self.operator_combo.currentData() or ""))
