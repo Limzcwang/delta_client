@@ -3,9 +3,35 @@
 
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+
 project = Path(SPECPATH).resolve()
 assets = project / "assets"
 version_file = project / "build" / "version_info.txt"
+
+# E3b：若构建环境安装了采集/OCR 依赖则收集模型与原生库；未安装时不影响 P1/P2 构建。
+e3_hiddenimports = [
+    "windows_capture",
+    "mss",
+    "rapidocr_onnxruntime",
+    "onnxruntime",
+    "cv2",
+    "numpy",
+    "shapely",
+    "pyclipper",
+    "PIL",
+]
+e3_datas = []
+e3_binaries = []
+for package in ("rapidocr_onnxruntime", "onnxruntime", "cv2"):
+    try:
+        e3_datas += collect_data_files(package)
+    except Exception:
+        pass
+    try:
+        e3_binaries += collect_dynamic_libs(package)
+    except Exception:
+        pass
 
 # 明确排除用不到的 Qt 大模块，控制体积；QtCore/Gui/Widgets 由应用实际导入。
 excluded_qt = [
@@ -60,10 +86,10 @@ excluded_qt = [
 a = Analysis(
     [str(project / "main.py")],
     pathex=[str(project)],
-    binaries=[],
+    binaries=e3_binaries,
     # assets 整目录：canvas_map.png / operators.json / operators/*.png / app.ico
-    datas=[(str(assets), "assets")],
-    hiddenimports=["aiohttp", "websockets"],
+    datas=[(str(assets), "assets")] + e3_datas,
+    hiddenimports=["aiohttp", "websockets"] + e3_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

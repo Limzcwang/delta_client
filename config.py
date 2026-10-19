@@ -127,6 +127,7 @@ class AppConfig:
     use_mock: bool = False
     persist_token: bool = False
     operator_id: str = ""
+    hud_profile: dict[str, Any] | None = None
     request_timeout: float = DEFAULT_TIMEOUT
     source: str = "default"
 
@@ -147,6 +148,7 @@ class AppConfig:
             "mock": self.use_mock,
             "save_token": self.persist_token,
             "operator_id": self.operator_id,
+            "hud_profile": self.hud_profile,
             "request_timeout": self.request_timeout,
         }
 
@@ -213,6 +215,9 @@ def load_config(
         persist_token = parse_bool(env_map.get("DELTA_SAVE_TOKEN"), persist_token)
 
     operator_id = str(file_data.get("operator_id") or "").strip()
+    hud_profile = file_data.get("hud_profile")
+    if not isinstance(hud_profile, dict):
+        hud_profile = None
 
     timeout = DEFAULT_TIMEOUT
     raw_timeout = file_data.get("request_timeout")
@@ -225,6 +230,7 @@ def load_config(
         use_mock=use_mock,
         persist_token=persist_token,
         operator_id=operator_id,
+        hud_profile=hud_profile,
         request_timeout=timeout,
         source=source,
     )

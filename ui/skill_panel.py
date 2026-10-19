@@ -272,6 +272,7 @@ class SkillPanel(QWidget):
 
     sharing_toggled = Signal(bool)
     simulate_requested = Signal()
+    capture_requested = Signal()
 
     def __init__(
         self,
@@ -311,6 +312,11 @@ class SkillPanel(QWidget):
         self.simulate_button.setObjectName("Link")
         self.simulate_button.clicked.connect(self.simulate_requested.emit)
         header.addWidget(self.simulate_button)
+        self.capture_button = QPushButton("识别 HUD")
+        self.capture_button.setObjectName("Link")
+        self.capture_button.setToolTip("截取游戏窗口并识别技能栏（E3b）")
+        self.capture_button.clicked.connect(self.capture_requested.emit)
+        header.addWidget(self.capture_button)
         root.addLayout(header)
 
         hint = QLabel("默认关闭；开启后 2 次/秒限频上报 · 左大招 / 中技能 / 右投掷物 · 30 分钟未更新=未共享")
