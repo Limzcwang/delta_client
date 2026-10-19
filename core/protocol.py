@@ -51,6 +51,7 @@ WS_USER_LEFT = "user_left"
 WS_CHAT_MESSAGE = "chat_message"
 WS_ROOM_UPDATED = "room_updated"
 WS_ROOM_DELETED = "room_deleted"
+WS_ROOM_KICKED = "room_kicked"
 WS_SKILL_STATE = "skill_state"
 WS_HEARTBEAT = "heartbeat"
 WS_PONG = "pong"
@@ -73,6 +74,11 @@ def room_leave_path(room_code: str) -> str:
 
 def room_detail_path(room_code: str) -> str:
     return f"{API_V1_ROOMS}/{quote(str(room_code), safe='')}"
+
+
+def room_kick_path(room_id_or_code: str) -> str:
+    """H3：房主移出成员 ``POST /api/v1/rooms/{room_id_or_code}/kick``。"""
+    return f"{API_V1_ROOMS}/{quote(str(room_id_or_code), safe='')}/kick"
 
 
 def room_messages_path(room_id_or_code: str) -> str:

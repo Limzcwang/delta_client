@@ -270,6 +270,15 @@ class ApiClient:
                 return  # 房间已关闭/路由未实现：离开是尽力而为
             raise
 
+    async def kick_member(self, room_id_or_code: str, user_id: str) -> dict[str, Any]:
+        """H3：房主移出成员 ``POST /api/v1/rooms/{room_id_or_code}/kick``。"""
+        body = await self.request_data(
+            "POST",
+            protocol.room_kick_path(room_reference(room_id_or_code)),
+            json_body={"user_id": str(user_id)},
+        )
+        return dict(body) if isinstance(body, Mapping) else {}
+
     async def get_room_detail(self, room_id_or_code: str) -> RoomDetail:
         """房间详情（PROTOCOL PR#9 §3.2：``GET /api/v1/rooms/{room_id_or_code}``）。
 
