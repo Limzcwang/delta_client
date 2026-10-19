@@ -10,6 +10,7 @@ from typing import Any, Callable
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
 from core.hud_ocr import HudOcr
+from core.hud_brightness import SkillTransitionTracker
 from core.hud_pipeline import RecognitionFrame, recognize_frame
 from core.hud_profile import HudProfile
 from core.operator_match import recognize_operator_auto
@@ -55,6 +56,7 @@ class _HudTask(QRunnable):
         catalog: OperatorCatalog,
         threshold: float,
         detect_operator: bool,
+        server_now: int = 0,
         debug_export: bool = False,
     ) -> None:
         super().__init__()
@@ -67,6 +69,7 @@ class _HudTask(QRunnable):
         self.catalog = catalog
         self.threshold = threshold
         self.detect_operator = detect_operator
+        self.server_now = int(server_now)
         self.debug_export = debug_export
 
     def run(self) -> None:
@@ -100,10 +103,20 @@ class _HudTask(QRunnable):
                 )
                 if operator_id:
                     operator = self.catalog.get(operator_id) or operator
+                    if operator is not None and operator.id != self.service.tracker_operator:
+                        self.service.tracker.reset()
+                        self.service.tracker_operator = operator.id
                 if self.token != self.service.token:
                     return
             ocr = get_hud_ocr()
-            recognized = recognize_frame(self.frame, self.profile, operator=operator, ocr=ocr)
+            recognized = recognize_frame(
+                self.frame,
+                self.profile,
+                operator=operator,
+                ocr=ocr,
+                tracker=self.service.tracker,
+                server_now=self.server_now,
+            )
             if self.token != self.service.token:
                 return
             result = HudRecognitionResult(
@@ -142,7 +155,13 @@ class HudRecognitionService(QObject):
         self._signals.failed.connect(self._on_failed)
         self.token = 0
         self.busy = False
+        self.tracker = SkillTransitionTracker()
+        self.tracker_operator = ""
         self._callback: Callable[[HudRecognitionResult], None] | None = None
+
+    def reset_tracker(self) -> None:
+        self.tracker.reset()
+        self.tracker_operator = ""
 
     @property
     def active(self) -> bool:
@@ -158,6 +177,7 @@ class HudRecognitionService(QObject):
         *,
         detect_operator: bool = True,
         debug_export: bool = False,
+        server_now: int = 0,
         callback: Callable[[HudRecognitionResult], None],
     ) -> bool:
         if self.busy:
@@ -176,6 +196,7 @@ class HudRecognitionService(QObject):
                 catalog,
                 threshold,
                 detect_operator,
+                server_now,
                 debug_export,
             )
         )

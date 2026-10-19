@@ -101,6 +101,7 @@ class SlotRecognition:
     slot: int
     state: str = SKILL_UNKNOWN
     remaining_ms: int = 0
+    ready_at: int = 0
     percent: float = 0.0
     charges: int = 0
     max_charges: int = 0
@@ -109,6 +110,8 @@ class SlotRecognition:
 
     def to_payload(self) -> dict[str, Any]:
         item: dict[str, Any] = {"slot": self.slot, "state": self.state}
+        if self.ready_at > 0:
+            item["ready_at"] = int(self.ready_at)
         if self.state != SKILL_UNKNOWN:
             if self.remaining_ms:
                 item["remaining_ms"] = int(self.remaining_ms)

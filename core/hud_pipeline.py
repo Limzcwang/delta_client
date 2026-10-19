@@ -34,6 +34,9 @@ class SlotDiagnostic:
     mask_ratio: float = 0.0
     icon_score: float = 0.0
     expanded_roi: tuple[int, int, int, int] | None = None
+    p90: float = 0.0
+    bright_ratio: float = 0.0
+    transition: str = ""
     state: str = "unknown"
     remaining_ms: int = 0
     reason: str = ""
@@ -47,6 +50,9 @@ class SlotDiagnostic:
             "mask_ratio": round(float(self.mask_ratio), 4),
             "icon_score": round(float(self.icon_score), 4),
             "expanded_roi": list(self.expanded_roi) if self.expanded_roi else None,
+            "p90": round(float(self.p90), 2),
+            "bright_ratio": round(float(self.bright_ratio), 4),
+            "transition": self.transition,
             "state": self.state,
             "remaining_ms": int(self.remaining_ms),
             "reason": self.reason,
@@ -252,12 +258,22 @@ def recognize_frame(
     *,
     operator: Operator | None = None,
     ocr: HudOcr | None = None,
-) -> RecognitionFrame:
-    """识别一帧；有图标模板时图标优先，否则回退 OCR 规则。"""
+    tracker: Any = None,
+    server_now: int = 0,
+    use_icons: bool = False,
+    ) -> RecognitionFrame:
+    """默认亮度/状态跳变识别；use_icons 仅供旧模板实验，不参与生产。"""
     ocr = ocr or HudOcr()
-    templates = load_skill_icon_templates(operator.id) if operator is not None else {}
-    if templates and len(templates) == 3 and hasattr(frame, "shape") and len(getattr(frame, "shape", ())) >= 2:
-        return _recognize_frame_icons(frame, profile, operator, ocr, templates)
+    if use_icons:
+        templates = load_skill_icon_templates(operator.id) if operator is not None else {}
+        if templates and len(templates) == 3 and hasattr(frame, "shape") and len(getattr(frame, "shape", ())) >= 2:
+            return _recognize_frame_icons(frame, profile, operator, ocr, templates)
+    if hasattr(frame, "shape") and len(getattr(frame, "shape", ())) >= 2:
+        from core.hud_brightness import recognize_frame_brightness
+
+        return recognize_frame_brightness(
+            frame, profile, operator=operator, ocr=ocr, tracker=tracker, server_now=server_now
+        )
     rois = profile.slot_rois()
     result = RecognitionFrame(operator_id=operator.id if operator else "", operator_name=operator.display_name if operator else "")
     try:

@@ -74,7 +74,7 @@ class SkillIconRecognitionTests(unittest.TestCase):
         return frame
 
     def test_real_templates_match_all_slots(self) -> None:
-        result = recognize_frame(self._frame(), self._profile(), operator=self._operator(), ocr=_EmptyOcr())
+        result = recognize_frame(self._frame(), self._profile(), operator=self._operator(), ocr=_EmptyOcr(), use_icons=True)
         self.assertEqual(3, len(result.diagnostics))
         for diagnostic in result.diagnostics:
             self.assertGreaterEqual(diagnostic.icon_score, 0.70, diagnostic.reason)
@@ -84,13 +84,13 @@ class SkillIconRecognitionTests(unittest.TestCase):
 
     def test_icon_miss_degrades_unknown(self) -> None:
         frame = np.zeros((147, 290, 3), dtype=np.uint8)
-        result = recognize_frame(frame, self._profile(), operator=self._operator(), ocr=_EmptyOcr())
+        result = recognize_frame(frame, self._profile(), operator=self._operator(), ocr=_EmptyOcr(), use_icons=True)
         for diagnostic in result.diagnostics:
             self.assertEqual("unknown", diagnostic.state)
             self.assertIn("图标未命中", diagnostic.reason)
 
     def test_ultimate_without_percent_uses_mask(self) -> None:
-        result = recognize_frame(self._frame(), self._profile(), operator=self._operator(), ocr=_EmptyOcr())
+        result = recognize_frame(self._frame(), self._profile(), operator=self._operator(), ocr=_EmptyOcr(), use_icons=True)
         ultimate = result.diagnostics[0]
         self.assertNotEqual("unknown", ultimate.state)
         self.assertIn(ultimate.state, ("ready", "charging", "unknown"))
@@ -110,14 +110,14 @@ class SkillIconRecognitionTests(unittest.TestCase):
             frame[roi.y : roi.bottom, roi.x : roi.right] = cv2.resize(
                 templates[index], (roi.width, roi.height)
             )
-        clean = recognize_frame(frame, profile, operator=operator, ocr=_EmptyOcr())
+        clean = recognize_frame(frame, profile, operator=operator, ocr=_EmptyOcr(), use_icons=True)
         clean_scores = [item.icon_score for item in clean.diagnostics]
         for score in clean_scores:
             self.assertGreaterEqual(score, 0.90)
         dirty = frame.copy()
         for roi in profile.slot_rois():
             dirty[roi.y : roi.y + 28, roi.right - 28 : roi.right] = 255
-        masked = recognize_frame(dirty, profile, operator=operator, ocr=_EmptyOcr())
+        masked = recognize_frame(dirty, profile, operator=operator, ocr=_EmptyOcr(), use_icons=True)
         for before, after in zip(clean_scores, [item.icon_score for item in masked.diagnostics]):
             self.assertGreaterEqual(after, 0.90)
             self.assertLess(abs(before - after), 0.05)
@@ -125,5 +125,6 @@ class SkillIconRecognitionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 
 

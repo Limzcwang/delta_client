@@ -760,6 +760,7 @@ class MainWindow(QMainWindow):
         self._skills.clear()
         self._self_skill_state = None
         self._skill_share_enabled = False
+        self._hud_service.reset_tracker()
         if hasattr(self, "_auto_controller"):
             self._auto_controller.stop()
         self.room_view.skill_panel.clear()
@@ -1258,6 +1259,7 @@ class MainWindow(QMainWindow):
             "threshold": float(self.config.operator_recognition_threshold),
             "detect_operator": bool(self.config.auto_operator_enabled),
             "debug_export": bool(self.config.hud_debug_export),
+            "server_now": self._server_now_ms(),
         }
 
     def _on_auto_operator_detected(self, operator_id: str, score: float) -> None:
@@ -1543,6 +1545,7 @@ class MainWindow(QMainWindow):
                 float(self.config.operator_recognition_threshold),
                 detect_operator=True,
                 debug_export=bool(self.config.hud_debug_export),
+                server_now=self._server_now_ms(),
                 callback=self._finish_manual_operator_result,
             )
             self._hud_timeout.start()
@@ -1708,6 +1711,7 @@ class MainWindow(QMainWindow):
             float(self.config.operator_recognition_threshold),
             detect_operator=bool(self.config.auto_operator_enabled),
             debug_export=bool(self.config.hud_debug_export),
+            server_now=self._server_now_ms(),
             callback=callback,
         )
         if not accepted:
@@ -2253,6 +2257,7 @@ class MainWindow(QMainWindow):
         self._skills.clear()
         self._self_skill_state = None
         self._skill_share_enabled = False
+        self._hud_service.reset_tracker()
         if hasattr(self, "_auto_controller"):
             self._auto_controller.stop()
         self.room_view.skill_panel.clear()
@@ -2293,6 +2298,7 @@ class MainWindow(QMainWindow):
         self._recognized_operator_id = ""
         self._operator_recognized_at = 0.0
         self._self_skill_state = None
+        self._hud_service.reset_tracker()
         if self._current_room is None:
             return
         state = self._build_simulated_skill()

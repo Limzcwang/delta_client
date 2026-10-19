@@ -87,6 +87,7 @@ class HudProfile:
     ocr_threshold: float = 0.5
     template_threshold: float = 0.70
     skill_icon_threshold: float = 0.70
+    brightness_threshold: int = 140
     mask_dark_threshold: int = 70
     #: 技能栏整体左右内缩比例（图标之间有缝隙时用于单槽微调）
     slot_gap: int = 0
@@ -127,6 +128,7 @@ class HudProfile:
             ocr_threshold=self.ocr_threshold,
             template_threshold=self.template_threshold,
             skill_icon_threshold=self.skill_icon_threshold,
+            brightness_threshold=self.brightness_threshold,
             mask_dark_threshold=self.mask_dark_threshold,
             slot_gap=self.slot_gap,
         )
@@ -143,6 +145,7 @@ class HudProfile:
             "ocr_threshold": self.ocr_threshold,
             "template_threshold": self.template_threshold,
             "skill_icon_threshold": self.skill_icon_threshold,
+            "brightness_threshold": self.brightness_threshold,
             "mask_dark_threshold": self.mask_dark_threshold,
             "slot_gap": self.slot_gap,
         }
@@ -163,6 +166,7 @@ class HudProfile:
             ocr_threshold=float(data.get("ocr_threshold", 0.5)),
             template_threshold=float(data.get("template_threshold", 0.70)),
             skill_icon_threshold=float(data.get("skill_icon_threshold", 0.70)),
+            brightness_threshold=int(data.get("brightness_threshold", 140)),
             mask_dark_threshold=int(data.get("mask_dark_threshold", 70)),
             slot_gap=int(data.get("slot_gap", 0) or 0),
             raw=dict(data),

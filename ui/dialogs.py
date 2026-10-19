@@ -455,6 +455,16 @@ class SettingsDialog(QDialog):
         self.hud_debug_check = QCheckBox("HUD 调试导出（三槽 ROI/整帧/result.json，保留最近 10 次）")
         self.hud_debug_check.setChecked(bool(self._config.hud_debug_export))
         layout.addWidget(self.hud_debug_check)
+        brightness_row = QHBoxLayout()
+        brightness_row.addWidget(QLabel("就绪亮度阈值（p90）"))
+        self.brightness_spin = QSpinBox()
+        self.brightness_spin.setRange(100, 220)
+        from core.hud_profile import HudProfile as _HudProfile
+
+        self.brightness_spin.setValue(int(_HudProfile.from_dict(self._hud_profile or {}).brightness_threshold))
+        brightness_row.addWidget(self.brightness_spin)
+        brightness_row.addStretch(1)
+        layout.addLayout(brightness_row)
 
         layout.addWidget(QLabel("游戏窗口 / 采屏诊断"))
         row = QHBoxLayout()
@@ -821,6 +831,7 @@ class SettingsDialog(QDialog):
         self.hud_profile_label.setText(
             f"当前 profile：skill_bar=({bar.x},{bar.y}) {bar.width}×{bar.height}；"
             f"avatar_roi=({avatar.x},{avatar.y}) {avatar.width}×{avatar.height}；"
+            f"亮度阈值 {profile.brightness_threshold}；"
             f"OCR 阈值 {profile.ocr_threshold:.2f} / 头像阈值 {profile.template_threshold:.2f}"
         )
 
@@ -985,6 +996,8 @@ class SettingsDialog(QDialog):
             self.error_label.setText("显示/隐藏与编辑模式快捷键不能相同")
             self.error_label.show()
             return
+        self._hud_profile = dict(self._hud_profile or {})
+        self._hud_profile["brightness_threshold"] = int(self.brightness_spin.value())
         self._result = replace(
             self._config,
             server_url=server_url,

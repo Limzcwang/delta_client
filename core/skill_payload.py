@@ -89,6 +89,9 @@ def sanitize_slot(index: int, slot: Any) -> dict[str, Any]:
         }
         if pct is not None:
             item["pct"] = pct
+        ready_at = clamp_int(getattr(slot, "ready_at", None), 0, 2**53 - 1)
+        if ready_at:
+            item["ready_at"] = ready_at
         return item
     remaining = clean_remaining(getattr(slot, "remaining_ms", None))
     if state == SKILL_CHARGING and remaining is None:
@@ -101,13 +104,17 @@ def sanitize_slot(index: int, slot: Any) -> dict[str, Any]:
     charges = clamp_int(getattr(slot, "charges", None), 0, max_charges)
     if charges is None:
         charges = 0
-    return {
+    item = {
         "slot": index,
         "state": state,
         "remaining_ms": remaining if remaining is not None else 0,
         "charges": charges,
         "max_charges": max_charges,
     }
+    ready_at = clamp_int(getattr(slot, "ready_at", None), 0, 2**53 - 1)
+    if ready_at:
+        item["ready_at"] = ready_at
+    return item
 
 
 def build_payload_from_state(state: SkillState) -> list[dict[str, Any]]:
@@ -151,6 +158,11 @@ def _validate_slot(item: Any) -> tuple[bool, str]:
         or not (0 <= charges <= max_charges)
     ):
         return False, "charges 必须是 0..max_charges 整数"
+    ready_at = item.get("ready_at")
+    if ready_at is not None and (
+        not isinstance(ready_at, int) or isinstance(ready_at, bool) or ready_at < 0
+    ):
+        return False, "ready_at 必须是非负整数"
     return True, ""
 
 
