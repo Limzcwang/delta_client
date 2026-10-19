@@ -1,0 +1,235 @@
+"""客户端配置：服务器地址、WebSocket 地址与运行模式。
+
+配置优先级（高 -> 低）：
+1. 命令行参数（``main.py`` 的 ``--server`` / ``--mock`` / ``--no-mock``）
+2. 环境变量：``DELTA_SERVER`` / ``DELTA_WS`` / ``DELTA_MOCK`` / ``DELTA_SAVE_TOKEN``
+3. 配置文件：``~/.delta_client.json``（可用 ``DELTA_CLIENT_CONFIG`` 指定其它路径）
+4. 内置默认值：``http://127.0.0.1:8000``
+
+配置文件示例::
+
+    {
+      "server_url": "http://127.0.0.1:8000",
+      "ws_url": null,
+      "mock": false,
+      "save_token": false,
+      "request_timeout": 15.0
+    }
+
+安全约定：配置文件只保存连接参数，**不保存密码、不保存 token**；
+token 的可选落盘由 :class:`state.session.Session` 单独处理。
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Mapping
+
+from core.protocol import ws_url_for
+
+DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
+DEFAULT_TIMEOUT = 15.0
+CONFIG_FILENAME = ".delta_client.json"
+CONFIG_ENV = "DELTA_CLIENT_CONFIG"
+
+_TRUE_VALUES = frozenset({"1", "true", "yes", "on", "y", "t"})
+_FALSE_VALUES = frozenset({"0", "false", "no", "off", "n", "f"})
+
+
+class ConfigError(ValueError):
+    """配置错误（供 UI 提示用户修正配置）。"""
+
+
+def parse_bool(value: Any, default: bool = False) -> bool:
+    """宽松解析布尔值（环境变量/JSON 都可能出现字符串）。"""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in _TRUE_VALUES:
+        return True
+    if text in _FALSE_VALUES:
+        return False
+    return default
+
+
+def _normalize_url(raw: Any, schemes: tuple[str, ...], label: str) -> str:
+    """校验并规范化 URL：补协议、去尾部斜杠、丢弃 query/fragment。"""
+    text = str(raw or "").strip()
+    if not text:
+        raise ConfigError(f"{label}不能为空")
+    if "://" not in text:
+        text = f"{schemes[0]}://{text}"
+    try:
+        parts = __import__("urllib.parse", fromlist=["urlsplit"]).urlsplit(text)
+    except ValueError as exc:  # 例如端口非法
+        raise ConfigError(f"{label}不合法：{text}") from exc
+    scheme = parts.scheme.lower()
+    if scheme not in schemes:
+        raise ConfigError(f"{label}协议不支持：{scheme}（仅支持 {'/'.join(schemes)}）")
+    if not parts.hostname:
+        raise ConfigError(f"{label}缺少主机名：{text}")
+    try:
+        port = parts.port
+    except ValueError as exc:
+        raise ConfigError(f"{label}端口不合法：{text}") from exc
+    if port is not None and not (0 < port < 65536):
+        raise ConfigError(f"{label}端口不合法：{port}")
+    path = parts.path.rstrip("/")
+    return f"{scheme}://{parts.netloc}{path}"
+
+
+def normalize_server_url(raw: Any) -> str:
+    """规范化 HTTP(S) 服务器地址，例如 ``127.0.0.1:8000`` -> ``http://127.0.0.1:8000``。"""
+    return _normalize_url(raw, ("http", "https"), "服务器地址")
+
+
+def normalize_ws_url(raw: Any) -> str:
+    """规范化 WebSocket 地址；也接受 http(s) 写法并自动换成 ws(s)。"""
+    text = str(raw or "").strip()
+    if text.lower().startswith("https://"):
+        text = "wss://" + text[len("https://") :]
+    elif text.lower().startswith("http://"):
+        text = "ws://" + text[len("http://") :]
+    return _normalize_url(text, ("ws", "wss"), "WebSocket 地址")
+
+
+def config_path_from_env(env: Mapping[str, str] | None = None) -> Path:
+    """配置文件路径：``DELTA_CLIENT_CONFIG`` 优先，否则 ``~/.delta_client.json``。"""
+    source = os.environ if env is None else env
+    override = str(source.get(CONFIG_ENV, "") or "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / CONFIG_FILENAME
+
+
+@dataclass(frozen=True)
+class AppConfig:
+    """客户端生效配置（不可变，改配置请用 dataclasses.replace）。"""
+
+    server_url: str = DEFAULT_SERVER_URL
+    ws_url: str | None = None
+    use_mock: bool = False
+    persist_token: bool = False
+    request_timeout: float = DEFAULT_TIMEOUT
+    source: str = "default"
+
+    @property
+    def effective_ws_url(self) -> str:
+        """显式配置的 WS 地址优先，否则由 HTTP 地址推导（``ws(s)://host/ws``）。"""
+        return self.ws_url or ws_url_for(self.server_url)
+
+    @property
+    def mode_label(self) -> str:
+        return "MOCK" if self.use_mock else "LIVE"
+
+    def public_dict(self) -> dict[str, Any]:
+        """可安全落盘/打印的配置（不含任何凭据）。"""
+        return {
+            "server_url": self.server_url,
+            "ws_url": self.ws_url,
+            "mock": self.use_mock,
+            "save_token": self.persist_token,
+            "request_timeout": self.request_timeout,
+        }
+
+
+def _read_config_file(path: Path) -> dict[str, Any]:
+    """读取 JSON 配置；文件不存在/损坏时返回空字典（不阻塞启动）。"""
+    try:
+        if not path.is_file():
+            return {}
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def load_config(
+    path: str | os.PathLike[str] | None = None,
+    env: Mapping[str, str] | None = None,
+    server_override: str | None = None,
+    ws_override: str | None = None,
+    mock_override: bool | None = None,
+) -> AppConfig:
+    """按优先级合并 CLI / 环境变量 / 配置文件，返回生效配置。"""
+    env_map: Mapping[str, str] = os.environ if env is None else env
+    config_path = Path(path).expanduser() if path is not None else config_path_from_env(env_map)
+    file_data = _read_config_file(config_path)
+
+    server = DEFAULT_SERVER_URL
+    source = "default"
+
+    file_server = file_data.get("server_url")
+    if isinstance(file_server, str) and file_server.strip():
+        server = normalize_server_url(file_server)
+        source = "file"
+
+    env_server = str(env_map.get("DELTA_SERVER", "") or "").strip()
+    if env_server:
+        server = normalize_server_url(env_server)
+        source = "env"
+
+    if server_override:
+        server = normalize_server_url(server_override)
+        source = "cli"
+
+    ws_url: str | None = None
+    file_ws = file_data.get("ws_url")
+    if isinstance(file_ws, str) and file_ws.strip():
+        ws_url = normalize_ws_url(file_ws)
+    env_ws = str(env_map.get("DELTA_WS", "") or "").strip()
+    if env_ws:
+        ws_url = normalize_ws_url(env_ws)
+    if ws_override:
+        ws_url = normalize_ws_url(ws_override)
+
+    use_mock = parse_bool(file_data.get("mock"), False)
+    if "DELTA_MOCK" in env_map:
+        use_mock = parse_bool(env_map.get("DELTA_MOCK"), use_mock)
+    if mock_override is not None:
+        use_mock = bool(mock_override)
+
+    persist_token = parse_bool(file_data.get("save_token"), False)
+    if "DELTA_SAVE_TOKEN" in env_map:
+        persist_token = parse_bool(env_map.get("DELTA_SAVE_TOKEN"), persist_token)
+
+    timeout = DEFAULT_TIMEOUT
+    raw_timeout = file_data.get("request_timeout")
+    if isinstance(raw_timeout, (int, float)) and raw_timeout > 0:
+        timeout = float(raw_timeout)
+
+    return AppConfig(
+        server_url=server,
+        ws_url=ws_url,
+        use_mock=use_mock,
+        persist_token=persist_token,
+        request_timeout=timeout,
+        source=source,
+    )
+
+
+def save_config(config: AppConfig, path: str | os.PathLike[str] | None = None) -> Path:
+    """原子写入配置文件，返回实际写入路径。"""
+    target = Path(path).expanduser() if path is not None else config_path_from_env()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = config.public_dict()
+    tmp_fd, tmp_name = tempfile.mkstemp(prefix=".delta_client.", suffix=".json.tmp", dir=str(target.parent))
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+        os.replace(tmp_name, target)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    return target

@@ -1,0 +1,254 @@
+"""WebSocket 客户端（websockets）：认证、心跳、指数退避重连与消息分发。
+
+按 PROTOCOL.md §6 实现：
+- 连接后第一条业务消息为 ``{"type":"auth","token":...}``；
+- 收到 ``auth_ok`` 视为连接成功（退避计数清零）；
+- 心跳：服务端 15s 下发 heartbeat；客户端 20s 主动 ping，45s 无消息判定失联并重连；
+- 指数退避：1s/2s/4s… 上限 30s（:mod:`core.backoff`）；
+- 未知消息类型原样交给回调，由 UI 忽略（协议要求客户端不因新增消息崩溃）。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from typing import Any, Awaitable, Callable
+
+from core import protocol
+from core.backoff import ReconnectBackoff
+from core.models import now_ms
+
+logger = logging.getLogger(__name__)
+
+MessageCallback = Callable[[dict[str, Any]], None]
+StateCallback = Callable[[str, dict[str, Any]], None]
+
+
+class WsAuthError(Exception):
+    """服务端返回 auth_error（token 过期/无效），重连没有意义。"""
+
+
+class WsClient:
+    """可重连的 WebSocket 客户端；回调在 asyncio 线程执行，UI 需自行切回主线程。"""
+
+    is_mock = False
+
+    def __init__(
+        self,
+        url: str,
+        token: str,
+        *,
+        on_message: MessageCallback | None = None,
+        on_state: StateCallback | None = None,
+        heartbeat_interval: float = 20.0,
+        heartbeat_timeout: float = 45.0,
+        connect_timeout: float = 10.0,
+        backoff: ReconnectBackoff | None = None,
+        connect_factory: Callable[[str], Awaitable[Any]] | None = None,
+    ) -> None:
+        self.url = url
+        self.token = token
+        self.on_message = on_message
+        self.on_state = on_state
+        self.heartbeat_interval = float(heartbeat_interval)
+        self.heartbeat_timeout = float(heartbeat_timeout)
+        self.connect_timeout = float(connect_timeout)
+        self.backoff = backoff or ReconnectBackoff(base=1.0, factor=2.0, max_delay=30.0)
+        self._connect_factory = connect_factory
+        self._ws: Any = None
+        self._stopped = False
+        self._state = "idle"
+        self._last_rx = 0.0
+        self._stop_event = asyncio.Event()
+
+    # ---------- 状态 ----------
+    @property
+    def state(self) -> str:
+        return self._state
+
+    @property
+    def connected(self) -> bool:
+        return self._state == "connected"
+
+    def _set_state(self, state: str, **info: Any) -> None:
+        self._state = state
+        callback = self.on_state
+        if callback is None:
+            return
+        try:
+            callback(state, info)
+        except Exception:  # pragma: no cover - 回调异常不应拖垮连接
+            logger.exception("WS 状态回调异常")
+
+    def _emit(self, message: dict[str, Any]) -> None:
+        callback = self.on_message
+        if callback is None:
+            return
+        try:
+            callback(message)
+        except Exception:  # pragma: no cover
+            logger.exception("WS 消息回调异常")
+
+    # ---------- 连接 ----------
+    def _import_websockets(self) -> Any:
+        try:
+            import websockets
+        except ImportError as exc:  # pragma: no cover - 依赖缺失时才触发
+            raise RuntimeError("缺少 websockets 依赖，请先执行 pip install -r requirements.txt") from exc
+        return websockets
+
+    async def _open(self) -> Any:
+        if self._connect_factory is not None:
+            return await self._connect_factory(self.url)
+        websockets = self._import_websockets()
+        try:
+            return await asyncio.wait_for(
+                websockets.connect(
+                    self.url,
+                    ping_interval=None,  # 应用层心跳，避免与协议 heartbeat 混淆
+                    open_timeout=self.connect_timeout,
+                    close_timeout=2,
+                ),
+                timeout=self.connect_timeout + 2,
+            )
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError(f"连接 {self.url} 超时") from exc
+
+    async def run(self) -> None:
+        """持续运行：连接 -> 认证 -> 收发；断开后按退避自动重连，直到 :meth:`close`。"""
+        if self._stopped:  # close() 可能先于 run() 被调用
+            self._set_state("stopped")
+            return
+        self._stop_event = asyncio.Event()
+        self.backoff.reset()
+        while not self._stopped:
+            self._set_state("connecting", url=self.url)
+            ws: Any = None
+            try:
+                ws = await self._open()
+                await self._serve(ws)
+            except WsAuthError as exc:
+                self._set_state("auth_error", message=str(exc))
+                return
+            except asyncio.CancelledError:
+                raise
+            except RuntimeError as exc:  # 依赖缺失等不可重试错误
+                self._set_state("error", message=str(exc))
+                return
+            except Exception as exc:
+                logger.info("WebSocket 连接中断：%s", exc)
+                self._set_state("reconnecting", error=str(exc))
+            finally:
+                if ws is not None:
+                    try:
+                        await ws.close()
+                    except Exception:
+                        pass
+                self._ws = None
+            if self._stopped:
+                break
+            delay = self.backoff.next_delay()
+            self._set_state("waiting", delay=delay)
+            await self._sleep_or_stop(delay)
+        self._set_state("stopped")
+
+    async def _sleep_or_stop(self, delay: float) -> None:
+        try:
+            await asyncio.wait_for(self._stop_event.wait(), timeout=delay)
+        except asyncio.TimeoutError:
+            pass
+
+    async def _serve(self, ws: Any) -> None:
+        self._ws = ws
+        loop = asyncio.get_running_loop()
+        self._last_rx = loop.time()
+        await ws.send(json.dumps(protocol.auth_message(self.token)))
+        self._set_state("authenticating", url=self.url)
+        heartbeat = asyncio.create_task(self._heartbeat_loop(ws), name="delta-ws-heartbeat")
+        watchdog = asyncio.create_task(self._watchdog(ws), name="delta-ws-watchdog")
+        try:
+            async for raw in ws:
+                self._last_rx = loop.time()
+                message = protocol.parse_json_message(raw)
+                if message is None:
+                    continue
+                mtype = protocol.message_type(message)
+                if mtype == protocol.WS_AUTH_OK:
+                    self.backoff.reset()
+                    self._set_state(
+                        "connected",
+                        user=message.get("user"),
+                        heartbeat_interval_ms=message.get("heartbeat_interval_ms"),
+                    )
+                elif mtype == protocol.WS_AUTH_ERROR:
+                    text = str(message.get("message") or "认证失败，请重新登录")
+                    self._set_state("auth_error", code=message.get("code"), message=text)
+                    raise WsAuthError(text)
+                self._emit(message)
+        finally:
+            for task in (heartbeat, watchdog):
+                task.cancel()
+            await asyncio.gather(heartbeat, watchdog, return_exceptions=True)
+
+    async def _heartbeat_loop(self, ws: Any) -> None:
+        while True:
+            await asyncio.sleep(self.heartbeat_interval)
+            try:
+                await ws.send(json.dumps(protocol.ping_message(now_ms())))
+            except Exception:
+                return
+
+    async def _watchdog(self, ws: Any) -> None:
+        loop = asyncio.get_running_loop()
+        while True:
+            await asyncio.sleep(min(5.0, max(1.0, self.heartbeat_timeout / 3.0)))
+            idle = loop.time() - self._last_rx
+            if idle > self.heartbeat_timeout:
+                self._set_state("reconnecting", error=f"心跳超时（{idle:.0f}s 未收到服务端消息）")
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
+                return
+
+    # ---------- 发送 ----------
+    async def _send(self, payload: dict[str, Any]) -> bool:
+        ws = self._ws
+        if ws is None or not self.connected:
+            return False
+        try:
+            await ws.send(json.dumps(payload, ensure_ascii=False))
+            return True
+        except Exception:
+            return False
+
+    async def join_room(self, room_code: str, password: str | None = None) -> bool:
+        return await self._send(protocol.join_room_message(room_code, password))
+
+    async def leave_room(self, room_id_or_code: str) -> bool:
+        return await self._send(protocol.leave_room_message(room_id_or_code))
+
+    async def send_chat(self, content: str, client_msg_id: str | None = None) -> str | None:
+        """发送聊天消息，返回 ``client_msg_id``（发送失败返回 None）。
+
+        允许调用方预先提供 id，以便在发送前登记到去重集合，避免服务端回显先于
+        本地登记造成重复展示。
+        """
+        client_msg_id = client_msg_id or protocol.make_client_msg_id()
+        sent = await self._send(protocol.chat_send_message(content, client_msg_id))
+        return client_msg_id if sent else None
+
+    async def close(self) -> None:
+        """停止重连并关闭当前连接（可重复调用）。"""
+        self._stopped = True
+        try:
+            self._stop_event.set()
+        except RuntimeError:
+            pass
+        ws = self._ws
+        if ws is not None:
+            try:
+                await ws.close()
+            except Exception:
+                pass
