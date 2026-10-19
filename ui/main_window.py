@@ -46,6 +46,7 @@ from net.api_client import ApiClient, LoginResult
 from net.mock_backend import MockApiClient, MockWsClient
 from net.ws_client import WsClient
 from state.session import Session, default_session_path
+from state.saved_logins import SavedLoginInfo, SavedLogins
 from ui.async_bridge import AsyncBridge
 from ui.dialogs import (
     CreateRoomDialog,
@@ -97,6 +98,8 @@ class MainWindow(QMainWindow):
             persist_token=config.persist_token,
             persist_path=default_session_path(),
         )
+        # H2：历史账号/DPAPI 加密密码
+        self.saved_logins = SavedLogins()
         self.bridge = AsyncBridge(self)
         self.bridge.start()
         self.api: Any = self._build_api()
@@ -158,6 +161,9 @@ class MainWindow(QMainWindow):
         self.login_view.login_requested.connect(self._on_login)
         self.login_view.register_requested.connect(self._on_register)
         self.login_view.settings_requested.connect(self._on_settings)
+        self.login_view.saved_login_selected.connect(self._on_saved_login_selected)
+        self.login_view.saved_login_delete_requested.connect(self._on_saved_login_delete)
+        self.login_view.saved_login_clear_requested.connect(self._on_saved_login_clear)
 
         self.room_list_view.refresh_requested.connect(self._refresh_lobby)
         self.room_list_view.create_requested.connect(self._on_create_room)
@@ -217,10 +223,58 @@ class MainWindow(QMainWindow):
         self.login_view.set_server_text(self.config.server_url, self.config.mode_label)
         self.login_view.set_busy(False)
         self.login_view.set_mode("login")
+        self.login_view.focus_first()
+        self._auto_fill_saved_login()
         if message:
             self.login_view.show_error(message)
         self.stack.setCurrentWidget(self.login_view)
-        self.login_view.focus_first()
+
+    # ---------- H2：历史账号 ----------
+    def _saved_login_infos(self) -> list[SavedLoginInfo]:
+        return self.saved_logins.infos()
+
+    def _refresh_saved_login_view(self) -> None:
+        self.login_view.set_saved_logins(self._saved_login_infos())
+
+    def _auto_fill_saved_login(self) -> None:
+        self._refresh_saved_login_view()
+        recent = self.saved_logins.recent_info()
+        if recent is None:
+            return
+        password = self.saved_logins.password_for(recent.username)
+        expired = bool(recent.has_password and recent.expired and password is None)
+        self.login_view.apply_saved_login(
+            recent.username, password or "", expired=expired
+        )
+
+    def _on_saved_login_selected(self, username: str) -> None:
+        self.login_view.set_mode("login")
+        self._refresh_saved_login_view()
+        info = next(
+            (entry for entry in self._saved_login_infos() if entry.username == username),
+            None,
+        )
+        password = self.saved_logins.password_for(username)
+        expired = bool(info is not None and info.has_password and info.expired and password is None)
+        self.login_view.apply_saved_login(username, password or "", expired=expired)
+        if password:
+            self.login_view.focus_login_button()
+        else:
+            self.login_view.password_edit.setFocus()
+
+    def _on_saved_login_delete(self, username: str) -> None:
+        self.saved_logins.remove(username)
+        self._refresh_saved_login_view()
+        self.login_view.saved_hint.setText("已删除该账号的本地记录")
+        self.login_view.saved_hint.setStyleSheet("color: #8b98a8;")
+        self.login_view.saved_hint.show()
+
+    def _on_saved_login_clear(self) -> None:
+        self.saved_logins.clear()
+        self._refresh_saved_login_view()
+        self.login_view.saved_hint.setText("已清空本地历史账号")
+        self.login_view.saved_hint.setStyleSheet("color: #8b98a8;")
+        self.login_view.saved_hint.show()
 
     def _show_rooms(self) -> None:
         self.room_list_view.set_user(self._username())
@@ -265,13 +319,20 @@ class MainWindow(QMainWindow):
         self.login_view.hide_messages()
         self._safe_submit(
             self.api.login(username, password),
-            self._on_login_success,
-            self._on_login_failure,
+            lambda result: self._on_login_success(result, username, password),
+            lambda exc: self._on_login_failure(exc, username),
         )
 
-    def _on_login_success(self, result: LoginResult) -> None:
+    def _on_login_success(
+        self, result: LoginResult, username: str = "", password: str = ""
+    ) -> None:
         self.login_view.set_busy(False)
         self.session.set_login(result.token, result.user)
+        account = str(result.user.get("username") or username or "").strip()
+        if account and password:
+            # H2：登录成功记录历史账号（密码 DPAPI 加密；失败则只存账号）
+            self.saved_logins.upsert(account, password)
+            self._refresh_saved_login_view()
         if result.token:
             self._set_status(f"登录成功：{self._username()}")
         else:
@@ -279,9 +340,19 @@ class MainWindow(QMainWindow):
             self._set_status("登录成功，但服务器未返回 JWT（PROTOCOL B 阶段才上线）")
         self._show_rooms()
 
-    def _on_login_failure(self, exc: BaseException) -> None:
+    def _on_login_failure(self, exc: BaseException, username: str = "") -> None:
         self.login_view.set_busy(False)
-        self.login_view.show_error(to_user_message(exc))
+        message = to_user_message(exc)
+        if (
+            username
+            and isinstance(exc, ApiError)
+            and exc.kind == ErrorKind.AUTH
+            and self.saved_logins.clear_password(username)
+        ):
+            # 用户名或密码错误：清除本地密码，账号保留
+            self._refresh_saved_login_view()
+            message = f"{message}（已清除本地保存的密码）"
+        self.login_view.show_error(message)
 
     def _on_register(self, username: str, password: str) -> None:
         self.login_view.set_busy(True)
@@ -964,7 +1035,10 @@ class MainWindow(QMainWindow):
         self._update_profile_dialog(
             dialog, "password", "密码已修改，当前登录保持有效", True
         )
-        self._set_status("密码已修改，当前登录保持有效")
+        # H2：改密成功后清除本地保存的密码（账号保留）
+        self.saved_logins.clear_password(self._account())
+        self._refresh_saved_login_view()
+        self._set_status("密码已修改，当前登录保持有效（已清除本地保存的密码）")
 
     @staticmethod
     def _update_profile_dialog(
