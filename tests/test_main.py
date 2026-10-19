@@ -15,9 +15,10 @@ class VersionTests(unittest.TestCase):
         with redirect_stdout(output):
             code = entry.main(["--version"])
         self.assertEqual(0, code)
-        self.assertIn("0.1.2", output.getvalue())
+        self.assertIn("0.1.3", output.getvalue())
 
 
 if __name__ == "__main__":
     unittest.main()
+
 

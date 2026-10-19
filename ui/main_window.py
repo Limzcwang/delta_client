@@ -1121,7 +1121,7 @@ class MainWindow(QMainWindow):
                 if manager.apply_server_payload(response.payload, getattr(response, "etag", "")):
                     message = f"已更新到版本 {manager.state.version}"
                 else:
-                    message = "服务器配置结构非法，继续使用当前配置"
+                    message = "服务器配置异常，已保留本地配置"
             else:
                 message = f"服务器返回异常状态 {status}"
             self._apply_operator_catalog()

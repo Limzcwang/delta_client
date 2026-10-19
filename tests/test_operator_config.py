@@ -24,7 +24,12 @@ def payload(version="v2", count=2, **extra):
         }
         for index in range(count)
     ]
-    result = {"version": version, "updated_at": "2026-10-20T00:00:00Z", "operators": operators}
+    result = {
+        "version": version,
+        "meta": {"slot_meaning": {"0": "大招"}},
+        "updated_at": "2026-10-20T00:00:00Z",
+        "operators": operators,
+    }
     result.update(extra)
     return result
 
@@ -111,14 +116,20 @@ class ManagerTests(unittest.TestCase):
         for bad in (
             {},
             {"version": "v", "operators": []},
-            {"version": "v", "operators": [{"name": "x"}]},
-            {"operators": [{"id": "x", "name": "x"}]},
+            {"version": "v", "meta": {}, "operators": []},
+            {"version": "v", "meta": {}, "operators": [{"name": "x", "skills": [{"slot": 0, "name": "a"}]}]},
+            {"version": "v", "meta": {}, "operators": [{"id": "x", "name": "x"}]},
+            {"version": "v", "meta": {}, "operators": [{"id": "x", "name": "x", "skills": []}]},
+            {"version": "v", "meta": {}, "operators": [{"id": "x", "name": "x", "skills": [{"slot": 3, "name": "a"}]}]},
+            {"version": "v", "meta": {}, "operators": [{"id": "x", "name": "x", "skills": [{"slot": 0}]}]},
+            {"version": "v", "meta": {}, "operators": "not-array"},
         ):
             with self.subTest(bad=bad):
                 valid, reason = validate_payload(bad)
                 self.assertFalse(valid)
                 self.assertFalse(manager.apply_server_payload(bad, "e"))
                 self.assertEqual("builtin", manager.state.version)
+        self.assertFalse(self.cache.exists())
 
     def test_unwraps_data_envelope(self) -> None:
         manager = self._manager()

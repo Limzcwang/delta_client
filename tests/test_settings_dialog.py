@@ -54,7 +54,7 @@ class SettingsOperatorTests(unittest.TestCase):
         from PySide6.QtWidgets import QLabel
 
         self.assertTrue(
-            any("版本 v0.1.2" in label.text() for label in dialog.findChildren(QLabel))
+            any("版本 v0.1.3" in label.text() for label in dialog.findChildren(QLabel))
         )
 
     def test_config_center_labels_and_check_button(self) -> None:
@@ -137,6 +137,7 @@ class SettingsOperatorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 
 
 

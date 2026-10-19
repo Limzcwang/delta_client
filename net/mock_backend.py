@@ -656,6 +656,7 @@ class MockApiClient:
                 "version": version,
                 "etag": current_etag,
                 "updated_at": "2026-10-20T00:00:00Z",
+                "meta": payload.get("_meta") or {"slot_meaning": {"0": "大招"}},
             }
         )
         return OperatorConfigResponse(200, payload, current_etag)
