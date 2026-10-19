@@ -46,9 +46,19 @@ class MessageTests(unittest.TestCase):
     def test_join_room_message_optional_password(self) -> None:
         no_password = protocol.join_room_message("AB12C")
         self.assertNotIn("password", no_password)
+        # PR#9 §6.3：新字段 room_id_or_code，同时保留旧字段 room_code
+        self.assertEqual(no_password["room_id_or_code"], "AB12C")
+        self.assertEqual(no_password["room_code"], "AB12C")
         with_password = protocol.join_room_message("AB12C", "1234", request_id="c-1")
         self.assertEqual(with_password["password"], "1234")
         self.assertEqual(with_password["request_id"], "c-1")
+
+    def test_leave_room_message(self) -> None:
+        message = protocol.leave_room_message("AB12C")
+        self.assertEqual(message["type"], "leave_room")
+        self.assertEqual(message["room_id_or_code"], "AB12C")
+        self.assertEqual(protocol.leave_room_message()["type"], "leave_room")
+        self.assertNotIn("room_id", protocol.leave_room_message())
 
     def test_chat_and_ping_messages(self) -> None:
         chat = protocol.chat_send_message("大家好", "m-1")

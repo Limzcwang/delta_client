@@ -99,7 +99,18 @@ def auth_message(token: str, protocol_version: int = PROTOCOL_VERSION) -> dict[s
 def join_room_message(
     room_code: str, password: str | None = None, request_id: str | None = None
 ) -> dict[str, Any]:
-    message: dict[str, Any] = {"type": WS_JOIN_ROOM, "room_code": str(room_code)}
+    """WS ``join_room``（PROTOCOL PR#9 §6.3）。
+
+    新字段 ``room_id_or_code`` 同时接受 5 位 code 与内部 id；同时保留旧字段
+    ``room_code`` 以兼容 B2b（服务端忽略未知字段）。前置条件：必须先通过
+    HTTP ``POST /rooms/{room_id_or_code}/join`` 成为成员，否则回 ``NOT_ROOM_MEMBER``。
+    ``password`` 在 C 起被服务端忽略（HTTP 已校验），保留仅用于旧服务端兼容。
+    """
+    message: dict[str, Any] = {
+        "type": WS_JOIN_ROOM,
+        "room_id_or_code": str(room_code),
+        "room_code": str(room_code),
+    }
     if password:
         message["password"] = password
     if request_id:
@@ -107,8 +118,14 @@ def join_room_message(
     return message
 
 
-def leave_room_message(room_id_or_code: str) -> dict[str, Any]:
-    return {"type": WS_LEAVE_ROOM, "room_id": str(room_id_or_code)}
+def leave_room_message(room_id_or_code: str | None = None) -> dict[str, Any]:
+    """WS ``leave_room``；PR#9 起服务端忽略房间参数（退出当前频道）。"""
+    message: dict[str, Any] = {"type": WS_LEAVE_ROOM}
+    if room_id_or_code:
+        # 旧字段+新字段都带，B2b 之前实现会读取
+        message["room_id"] = str(room_id_or_code)
+        message["room_id_or_code"] = str(room_id_or_code)
+    return message
 
 
 def chat_send_message(content: str, client_msg_id: str) -> dict[str, Any]:

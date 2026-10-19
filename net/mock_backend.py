@@ -15,11 +15,13 @@ import uuid
 from typing import Any, Mapping
 
 from core import protocol
+from core.connection import ConnectionCheck, probe_ok
 from core.errors import ApiError, ErrorKind
-from core.models import Room, now_ms
+from core.models import Member, Room, RoomDetail, now_ms
 from core.rooms import (
     ValidationError,
     normalize_room_code,
+    room_reference,
     validate_room_code,
     validate_room_name,
     validate_visibility,
@@ -80,6 +82,22 @@ def _copy_room_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     return copy
 
 
+#: 演示房间成员（用于 Mock 的 HTTP 成员兜底，模拟 ``GET /rooms/{ref}`` 返回）
+_SEED_MEMBERS: dict[str, list[dict[str, Any]]] = {
+    "AB12C": [
+        {"id": "2", "username": "player", "online": True},
+        {"id": "3", "username": "队友-Bravo", "online": True},
+    ],
+    "K7M2P": [
+        {"id": "3", "username": "队友-Charlie", "online": True},
+        {"id": "4", "username": "队友-Delta", "online": True},
+        {"id": "5", "username": "队友-Echo", "online": False},
+        {"id": "6", "username": "队友-Foxtrot", "online": True},
+    ],
+    "Q4W8E": [{"id": "2", "username": "player", "online": False}],
+}
+
+
 class MockApiClient:
     """内存版 API 客户端（用于 ``--mock`` / ``DELTA_MOCK=1``）。"""
 
@@ -91,8 +109,12 @@ class MockApiClient:
         self.latency = max(0.0, float(latency))
         self._users: dict[str, dict[str, Any]] = {item["username"]: dict(item) for item in _MOCK_USERS}
         self._rooms: dict[str, dict[str, Any]] = {item["code"]: dict(item) for item in _SEED_ROOMS}
+        self._room_members: dict[str, list[dict[str, Any]]] = {
+            code: [dict(member) for member in members] for code, members in _SEED_MEMBERS.items()
+        }
         self._memberships: set[tuple[str, str]] = set()
         self._username: str | None = None
+        self._current_user: dict[str, Any] | None = None
 
     # ---------- 基础 ----------
     async def _tick(self) -> None:
@@ -104,6 +126,26 @@ class MockApiClient:
 
     def _user_id(self, username: str) -> str:
         return str(self._users.get(username, {}).get("id", "0"))
+
+    def _self_member(self) -> dict[str, Any]:
+        if self._current_user is not None:
+            return {
+                "id": str(self._current_user.get("id", "0")),
+                "username": str(self._current_user.get("username", "")),
+                "online": True,
+            }
+        return {"id": "1", "username": self._username or "demo", "online": True}
+
+    def _find_room(self, room_id_or_code: str) -> dict[str, Any] | None:
+        text = str(room_id_or_code or "").strip()
+        code = room_reference(text)
+        payload = self._rooms.get(code)
+        if payload is not None:
+            return payload
+        for item in self._rooms.values():
+            if str(item.get("id")) == text:
+                return item
+        return None
 
     # ---------- 认证 ----------
     def _issue_token(self, user: Mapping[str, Any]) -> str:
@@ -117,6 +159,7 @@ class MockApiClient:
             raise ApiError(ErrorKind.AUTH, "用户名或密码错误", status=401)
         token = self._issue_token(user)
         public_user = {"id": str(user["id"]), "username": str(user["username"])}
+        self._current_user = public_user
         return LoginResult(
             token=token,
             user=public_user,
@@ -136,6 +179,7 @@ class MockApiClient:
         self._users[name] = {"id": new_id, "username": name, "password": raw_password}
         user = self._users[name]
         self._username = name
+        self._current_user = {"id": new_id, "username": name}
         token = self._issue_token(user)
         # 与 B2b 的 v1 注册响应保持一致（同登录），便于 UI 注册后自动登录
         return {
@@ -182,8 +226,13 @@ class MockApiClient:
         if password:
             payload["password"] = str(password)
         self._rooms[code] = payload
+        members = self._room_members.setdefault(code, [])
         if self._username:
             self._memberships.add((self._username, code))
+            self_member = self._self_member()
+            if not any(item.get("username") == self_member["username"] for item in members):
+                members.append(self_member)
+        payload["member_count"] = len(members)
         return Room.from_api(_copy_room_payload(payload))
 
     async def join_room(self, room_code: str, password: str | None = None) -> Room:
@@ -204,9 +253,16 @@ class MockApiClient:
                 ErrorKind.ROOM_PASSWORD_INVALID, "房间密码错误", status=403, code="ROOM_PASSWORD_INVALID"
             )
         key = (self._username or "", code)
+        members = self._room_members.setdefault(code, [])
+        self_member = self._self_member()
         if key not in self._memberships:
             self._memberships.add(key)
-            payload["member_count"] = int(payload.get("member_count", 0)) + 1
+            if not any(
+                str(item.get("id")) == str(self_member["id"]) or item.get("username") == self_member["username"]
+                for item in members
+            ):
+                members.append(self_member)
+        payload["member_count"] = len(members)
         return Room.from_api(_copy_room_payload(payload))
 
     async def leave_room(self, room_code: str) -> None:
@@ -216,8 +272,40 @@ class MockApiClient:
         if key in self._memberships:
             self._memberships.discard(key)
             payload = self._rooms.get(code)
+            self_member = self._self_member()
             if payload is not None:
-                payload["member_count"] = max(0, int(payload.get("member_count", 1)) - 1)
+                members = self._room_members.get(code, [])
+                self._room_members[code] = [
+                    item
+                    for item in members
+                    if not (
+                        str(item.get("id")) == str(self_member["id"])
+                        or item.get("username") == self_member["username"]
+                    )
+                ]
+                payload["member_count"] = len(self._room_members[code])
+
+    async def get_room_detail(self, room_id_or_code: str) -> RoomDetail:
+        """Mock 版房间详情（对应 ``GET /api/v1/rooms/{room_id_or_code}``）。"""
+        await self._tick()
+        payload = self._find_room(room_id_or_code)
+        if payload is None:
+            raise ApiError(ErrorKind.ROOM_NOT_FOUND, "房间不存在或已关闭", status=404, code=40402)
+        members = tuple(
+            Member.from_api(item) for item in self._room_members.get(str(payload["code"]), [])
+        )
+        return RoomDetail(room=Room.from_api(_copy_room_payload(payload)), members=members)
+
+    async def check_connection(self) -> ConnectionCheck:
+        """Mock 版连通性自检（演示/测试用）。"""
+        await self._tick()
+        rooms = await self.list_rooms()
+        return ConnectionCheck(
+            server_url=self.base_url,
+            health=probe_ok("health", "/health 200（mock）", elapsed_ms=0),
+            rooms=probe_ok("rooms", f"/api/v1/rooms 200（{len(rooms)} 个房间）", elapsed_ms=0),
+            rooms_count=len(rooms),
+        )
 
     def _generate_room_code(self) -> str:
         while True:

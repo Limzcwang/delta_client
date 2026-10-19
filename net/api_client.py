@@ -12,14 +12,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
 from core import protocol
+from core.connection import ConnectionCheck, ProbeResult, probe_from_error, probe_ok
 from core.errors import ApiError, ErrorKind, api_error_from_exception, api_error_from_response
-from core.models import Room, parse_room_list
+from core.models import Room, RoomDetail, parse_room_detail, parse_room_list
 from core.protocol import extract_token, extract_user, unwrap_payload
-from core.rooms import normalize_room_code
+from core.rooms import room_reference
 
 
 @dataclass(frozen=True)
@@ -220,7 +222,7 @@ class ApiClient:
         return self._room_from_payload(body)
 
     async def join_room(self, room_code: str, password: str | None = None) -> Room:
-        code = normalize_room_code(room_code)
+        code = room_reference(room_code)
         payload: dict[str, Any] = {}
         if password:
             payload["password"] = password
@@ -242,12 +244,63 @@ class ApiClient:
     async def leave_room(self, room_code: str) -> None:
         try:
             await self._request(
-                "POST", protocol.room_leave_path(normalize_room_code(room_code)), json_body={}
+                "POST", protocol.room_leave_path(room_reference(room_code)), json_body={}
             )
         except ApiError as exc:
             if exc.status == 404:
                 return  # 房间已关闭/路由未实现：离开是尽力而为
             raise
+
+    async def get_room_detail(self, room_id_or_code: str) -> RoomDetail:
+        """房间详情（PROTOCOL PR#9 §3.2：``GET /api/v1/rooms/{room_id_or_code}``）。
+
+        WS ``room_joined`` 丢失/重连失败时用它的 ``members`` 兜底成员展示。
+        """
+        body = await self.request_data("GET", protocol.room_detail_path(room_reference(room_id_or_code)))
+        detail = parse_room_detail(body)
+        if detail is None:
+            raise ApiError(ErrorKind.UNKNOWN, "房间详情响应格式异常", detail=body)
+        return detail
+
+    async def check_connection(self) -> ConnectionCheck:
+        """连通性自检：``/health`` + ``GET /api/v1/rooms?page=1``。
+
+        分别归类 HTTP 可达 / 鉴权失效 / 超时 / 网络 / 服务端错误，供设置页展示。
+        """
+        health = await self._probe_health()
+        rooms, rooms_count = await self._probe_rooms()
+        return ConnectionCheck(
+            server_url=self.base_url,
+            health=health,
+            rooms=rooms,
+            rooms_count=rooms_count,
+        )
+
+    async def _probe_health(self) -> ProbeResult:
+        started = time.monotonic()
+        try:
+            body = await self._request("GET", protocol.API_HEALTH, auth=False)
+        except Exception as exc:  # noqa: BLE001 - 探测不抛出，统一转结果（CancelledError 不吞）
+            error = exc if isinstance(exc, ApiError) else api_error_from_exception(exc)
+            return probe_from_error("health", error, elapsed_ms=_elapsed_ms(started))
+        status_text = ""
+        if isinstance(body, Mapping):
+            status_text = str(body.get("status") or body.get("message") or "").strip()
+        detail = "/health 200" + (f"（{status_text}）" if status_text else "")
+        return probe_ok("health", detail, status=200, elapsed_ms=_elapsed_ms(started))
+
+    async def _probe_rooms(self) -> tuple[ProbeResult, int | None]:
+        started = time.monotonic()
+        try:
+            body = await self._request(
+                "GET", protocol.API_V1_ROOMS, params={"page": 1}
+            )
+        except Exception as exc:  # noqa: BLE001 - 同上，CancelledError 继续向上传播
+            error = exc if isinstance(exc, ApiError) else api_error_from_exception(exc)
+            return probe_from_error("rooms", error, elapsed_ms=_elapsed_ms(started)), None
+        rooms = parse_room_list(unwrap_payload(body))
+        detail = f"/api/v1/rooms 200（{len(rooms)} 个房间）"
+        return probe_ok("rooms", detail, status=200, elapsed_ms=_elapsed_ms(started)), len(rooms)
 
     async def get_me(self) -> dict[str, Any]:
         body = await self.request_data("GET", protocol.API_V1_ME)
@@ -261,3 +314,7 @@ class ApiClient:
                 return Room.from_api(room)
             return Room.from_api(body)
         return Room.from_api({})
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, int((time.monotonic() - started) * 1000))

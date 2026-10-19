@@ -12,6 +12,7 @@ from core.models import (
     make_system_message,
     now_ms,
     parse_members,
+    parse_room_detail,
     parse_room_list,
     parse_ts,
 )
@@ -126,6 +127,49 @@ class ParseListTests(unittest.TestCase):
         self.assertEqual(len(members), 1)
         self.assertIsInstance(members[0], Member)
         self.assertEqual(parse_members({"members": "bad"}), [])
+
+
+class ParseRoomDetailTests(unittest.TestCase):
+    def test_envelope_detail(self) -> None:
+        detail = parse_room_detail(
+            {
+                "code": 200,
+                "message": "OK",
+                "data": {
+                    "room": {"id": "r1", "code": "ab12c", "name": "开黑房", "member_count": 2},
+                    "members": [
+                        {"id": "1", "username": "alice", "online": True},
+                        {"id": "2", "username": "bob", "online": False},
+                    ],
+                },
+            }
+        )
+        self.assertIsNotNone(detail)
+        assert detail is not None
+        self.assertEqual(detail.room.code, "AB12C")
+        self.assertEqual(len(detail.members), 2)
+        self.assertTrue(detail.members[0].online)
+        self.assertFalse(detail.members[1].online)
+        self.assertEqual(detail.member_names, ("alice", "bob"))
+
+    def test_bare_detail_and_room_members_fallback(self) -> None:
+        detail = parse_room_detail(
+            {
+                "room": {
+                    "code": "AB12C",
+                    "members": [{"id": "1", "username": "alice"}],
+                },
+                "members": [],
+            }
+        )
+        self.assertIsNotNone(detail)
+        assert detail is not None
+        self.assertEqual([m.username for m in detail.members], ["alice"])
+
+    def test_invalid_payload(self) -> None:
+        self.assertIsNone(parse_room_detail(None))
+        self.assertIsNone(parse_room_detail("junk"))
+        self.assertIsNone(parse_room_detail([]))
 
 
 class ChatMessageTests(unittest.TestCase):

@@ -3,7 +3,8 @@
 按 PROTOCOL.md §6 实现：
 - 连接后第一条业务消息为 ``{"type":"auth","token":...}``；
 - 收到 ``auth_ok`` 视为连接成功（退避计数清零）；
-- 心跳：服务端 15s 下发 heartbeat；客户端 20s 主动 ping，45s 无消息判定失联并重连；
+- 心跳：PROTOCOL PR#9 §6.1 服务端每 30s 下发 heartbeat，客户端 25s 主动 ping，
+  90s 无任何消息判定失联并重连；
 - 指数退避：1s/2s/4s… 上限 30s（:mod:`core.backoff`）；
 - 未知消息类型原样交给回调，由 UI 忽略（协议要求客户端不因新增消息崩溃）。
 """
@@ -41,8 +42,8 @@ class WsClient:
         *,
         on_message: MessageCallback | None = None,
         on_state: StateCallback | None = None,
-        heartbeat_interval: float = 20.0,
-        heartbeat_timeout: float = 45.0,
+        heartbeat_interval: float = 25.0,
+        heartbeat_timeout: float = 90.0,
         connect_timeout: float = 10.0,
         backoff: ReconnectBackoff | None = None,
         connect_factory: Callable[[str], Awaitable[Any]] | None = None,

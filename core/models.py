@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Mapping
 
-from core.protocol import WS_CHAT_MESSAGE
+from core.protocol import WS_CHAT_MESSAGE, unwrap_payload
 from core.rooms import normalize_room_code, room_has_password
 
 
@@ -223,6 +223,31 @@ def parse_members(payload: Any) -> list[Member]:
     if not isinstance(payload, list):
         return []
     return [Member.from_api(item) for item in payload if isinstance(item, Mapping)]
+
+
+@dataclass(frozen=True)
+class RoomDetail:
+    """房间详情：``GET /api/v1/rooms/{room_id_or_code}`` 的 ``{room, members}``。"""
+
+    room: Room = field(default_factory=Room)
+    members: tuple[Member, ...] = ()
+
+    @property
+    def member_names(self) -> tuple[str, ...]:
+        return tuple(member.display_name for member in self.members)
+
+
+def parse_room_detail(payload: Any) -> RoomDetail | None:
+    """解析房间详情（兼容统一包 ``{code,data:{room,members}}`` 与裸 ``{room,members}``）。"""
+    data = unwrap_payload(payload)
+    if not isinstance(data, Mapping):
+        return None
+    room_payload = data.get("room")
+    room = Room.from_api(room_payload if isinstance(room_payload, Mapping) else data)
+    members = parse_members(data.get("members"))
+    if not members and room.members:
+        members = list(room.members)
+    return RoomDetail(room=room, members=tuple(members))
 
 
 def message_is_chat(message: Mapping[str, Any]) -> bool:

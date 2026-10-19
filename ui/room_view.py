@@ -89,7 +89,7 @@ class RoomView(QWidget):
         self.member_list = QListWidget()
         layout.addWidget(self.member_list, stretch=1)
 
-        hint = QLabel("成员来自 WS room_joined / user_joined（C 阶段完善）")
+        hint = QLabel("成员优先来自 WS room_joined；WS 丢失时用 HTTP 房间详情兜底")
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
         layout.addWidget(hint)

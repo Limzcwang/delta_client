@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Mapping
 
 from PySide6.QtGui import QCloseEvent
@@ -15,9 +16,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from config import AppConfig, save_config
+from config import AppConfig, ConfigError, normalize_server_url, normalize_ws_url, save_config
 from core.errors import ApiError, ErrorKind, to_user_message
-from core.models import ChatMessage, Member, Room, now_ms, parse_members
+from core.models import ChatMessage, Member, Room, RoomDetail, now_ms, parse_members
 from core.protocol import extract_token, extract_user, make_client_msg_id, message_type
 from net.api_client import ApiClient, LoginResult
 from net.mock_backend import MockApiClient, MockWsClient
@@ -61,6 +62,8 @@ class MainWindow(QMainWindow):
         self._current_room: Room | None = None
         self._room_password: str | None = None
         self._pending_chat_ids: set[str] = set()
+        self._last_members_refresh = 0.0
+        self._ws_members_loaded = False
 
         self.setWindowTitle("Delta Client - 三角洲行动队友房间")
         self.resize(1200, 780)
@@ -297,6 +300,8 @@ class MainWindow(QMainWindow):
     def _enter_room(self, room: Room, password: str | None = None) -> None:
         self._current_room = room
         self._room_password = password
+        self._ws_members_loaded = False
+        self._last_members_refresh = 0.0
         self.room_view.set_room(room)
         self.room_view.set_user(self._username())
         self.room_view.clear_chat()
@@ -308,6 +313,8 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(self.room_view)
         self.room_view.focus_chat_input()
         self._start_ws(room)
+        # HTTP 成员兜底：WS room_joined 丢失/重连失败时仍能展示成员
+        self._refresh_members_http(room, fallback=False)
 
     def _start_ws(self, room: Room) -> None:
         self._stop_ws()
@@ -369,9 +376,51 @@ class MainWindow(QMainWindow):
 
         self._safe_submit(_shutdown())
 
+    # ---------- 成员兜底（HTTP） ----------
+    def _refresh_members_http(self, room: Room, *, fallback: bool) -> None:
+        """HTTP 成员兜底：``GET /api/v1/rooms/{room_id_or_code}`` 拉 ``members``。
+
+        WS ``room_joined`` 是权威来源；进入房间时先渲染一次，断线/重连失败时按
+        5s 节流刷新，避免 WS 快照丢失时成员区长期空白。
+        """
+        if room is None or not room.code:
+            return
+        now = time.monotonic()
+        if fallback and now - self._last_members_refresh < 5.0:
+            return
+        self._last_members_refresh = now
+        code = room.code
+        self._safe_submit(
+            self.api.get_room_detail(code),
+            lambda detail: self._on_members_fallback(code, detail, fallback),
+            lambda exc: self._on_members_fallback_failed(code, exc, fallback),
+        )
+
+    def _on_members_fallback(self, code: str, detail: RoomDetail, fallback: bool) -> None:
+        if self._current_room is None or self._current_room.code != code:
+            return
+        if detail.members:
+            self.room_view.set_members(list(detail.members))
+        if self._current_room.name == "" and detail.room.name:
+            self._current_room = detail.room
+            self.room_view.set_room(detail.room)
+        if fallback and not self._ws_members_loaded:
+            self.room_view.set_status(f"已通过 HTTP 同步成员（{len(detail.members)} 人）")
+
+    def _on_members_fallback_failed(self, code: str, exc: BaseException, fallback: bool) -> None:
+        if self._current_room is None or self._current_room.code != code:
+            return
+        if isinstance(exc, ApiError) and exc.is_auth_error:
+            self._handle_auth_expired(exc)
+            return
+        if fallback and not self._ws_members_loaded:
+            self.room_view.set_status(f"成员同步失败：{to_user_message(exc)}", error=True)
+
     def _on_ws_run_failed(self, exc: BaseException) -> None:
         self.room_view.set_connection_state("error", to_user_message(exc))
         self.room_view.add_system_message(f"实时连接失败：{to_user_message(exc)}")
+        if self._current_room is not None:
+            self._refresh_members_http(self._current_room, fallback=True)
 
     def _on_ws_state(self, generation: int, state: str, info: Mapping[str, Any]) -> None:
         if generation != self._ws_generation or self._current_room is None:
@@ -389,15 +438,20 @@ class MainWindow(QMainWindow):
             delay = float(info.get("delay") or 0.0)
             self.room_view.set_connection_state("waiting", detail or f"{delay:.0f}s 后重连")
             self.room_view.set_status(f"连接中断，{delay:.0f}s 后自动重连", error=True)
+            self._refresh_members_http(self._current_room, fallback=True)
         elif state == "reconnecting":
             self.room_view.set_connection_state("reconnecting", detail)
             if detail:
                 self.room_view.set_status(f"重连中：{detail}", error=True)
+            self._refresh_members_http(self._current_room, fallback=True)
         elif state == "auth_error":
             self.room_view.set_connection_state("auth_error", detail)
             self.room_view.add_system_message(f"认证失败：{detail or '登录状态无效'}")
+            self._refresh_members_http(self._current_room, fallback=True)
         else:
             self.room_view.set_connection_state(state, detail)
+            if state in ("error", "stopped"):
+                self._refresh_members_http(self._current_room, fallback=True)
 
     def _on_ws_message(self, generation: int, message: Mapping[str, Any]) -> None:
         if generation != self._ws_generation or self._current_room is None:
@@ -411,6 +465,8 @@ class MainWindow(QMainWindow):
                 self.room_view.set_room(room)
             members = parse_members(message.get("members"))
             if members:
+                self._ws_members_loaded = True
+                self._last_members_refresh = time.monotonic()
                 self.room_view.set_members(members)
             self.room_view.set_status("")
         elif mtype == "user_joined":
@@ -424,7 +480,15 @@ class MainWindow(QMainWindow):
             if isinstance(user, Mapping):
                 member = Member.from_api(user)
                 self.room_view.remove_member(member)
-                self.room_view.add_system_message(f"{member.display_name} 离开了房间")
+                reason = str(message.get("reason") or "")
+                reason_text = {
+                    "left": "离开",
+                    "disconnected": "断线",
+                    "kicked": "被房主移出",
+                    "replaced": "被顶号",
+                }.get(reason, "")
+                suffix = f"（{reason_text}）" if reason_text else ""
+                self.room_view.add_system_message(f"{member.display_name} 离开了房间{suffix}")
         elif mtype == "chat_message":
             chat = ChatMessage.from_ws(message)
             if chat.client_msg_id and chat.client_msg_id in self._pending_chat_ids:
@@ -480,6 +544,9 @@ class MainWindow(QMainWindow):
     # ---------- 设置 ----------
     def _on_settings(self) -> None:
         dialog = SettingsDialog(self.config, self)
+        dialog.test_requested.connect(
+            lambda server_text, ws_text: self._on_test_connection(dialog, server_text, ws_text)
+        )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         new_config = dialog.config_result()
@@ -519,6 +586,29 @@ class MainWindow(QMainWindow):
             self._show_login()
         self._set_status(f"配置已保存：{saved_path}")
 
+    # ---------- 连通性测试 ----------
+    def _on_test_connection(self, dialog: SettingsDialog, server_text: str, ws_text: str) -> None:
+        try:
+            server_url = normalize_server_url(server_text)
+            if ws_text.strip():
+                normalize_ws_url(ws_text)  # 只为校验格式，WS 不作为本次探测目标
+        except ConfigError as exc:
+            self._update_test_dialog(dialog, f"配置错误：{exc}", False)
+            return
+        dialog.set_testing(True)
+        self._safe_submit(
+            _run_connection_check(server_url, self.session.token, timeout=8.0),
+            lambda check: self._update_test_dialog(dialog, check.format_text(), check.ok),
+            lambda exc: self._update_test_dialog(dialog, f"测试失败：{to_user_message(exc)}", False),
+        )
+
+    @staticmethod
+    def _update_test_dialog(dialog: SettingsDialog, text: str, ok: bool) -> None:
+        try:
+            dialog.set_test_result(text, ok)
+        except RuntimeError:  # 对话框已关闭，忽略迟到的测试回调
+            logger.debug("设置对话框已关闭，忽略连通性测试结果")
+
     # ---------- 关闭 ----------
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt 覆盖
         try:
@@ -528,3 +618,12 @@ class MainWindow(QMainWindow):
         finally:
             self.bridge.stop()
             super().closeEvent(event)
+
+
+async def _run_connection_check(server_url: str, token: str | None, timeout: float = 8.0) -> Any:
+    """用临时 ApiClient 做一次连通性测试，结束后关闭连接池。"""
+    client = ApiClient(server_url, token_provider=lambda: token, timeout=timeout)
+    try:
+        return await client.check_connection()
+    finally:
+        await client.close()

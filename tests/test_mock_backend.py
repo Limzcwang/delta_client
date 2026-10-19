@@ -130,6 +130,38 @@ class MockApiTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_room_detail_members_and_connection_check(self) -> None:
+        async def scenario() -> None:
+            api = MockApiClient(latency=0)
+            await api.login("demo", "demo123")
+
+            detail = await api.get_room_detail("ab12c")
+            self.assertEqual(detail.room.code, "AB12C")
+            self.assertEqual({m.username for m in detail.members}, {"player", "队友-Bravo"})
+
+            await api.join_room("AB12C")
+            after_join = await api.get_room_detail("AB12C")
+            self.assertIn("demo", {m.username for m in after_join.members})
+
+            await api.leave_room("AB12C")
+            after_leave = await api.get_room_detail("AB12C")
+            self.assertNotIn("demo", {m.username for m in after_leave.members})
+
+            by_id = await api.get_room_detail("mock-room-ab12c")
+            self.assertEqual(by_id.room.code, "AB12C")
+
+            with self.assertRaises(ApiError) as not_found:
+                await api.get_room_detail("ZZZZZ")
+            self.assertEqual(not_found.exception.kind, ErrorKind.ROOM_NOT_FOUND)
+
+            check = await api.check_connection()
+            self.assertTrue(check.ok)
+            self.assertIn("HTTP 可达：✅", check.format_text())
+            self.assertIn("房间接口：✅", check.format_text())
+            self.assertGreaterEqual(check.rooms_count or 0, 2)
+
+        asyncio.run(scenario())
+
 
 class MockWsTests(unittest.TestCase):
     def test_ws_auth_join_and_chat_echo(self) -> None:

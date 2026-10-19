@@ -9,6 +9,7 @@ from core.rooms import (
     is_valid_room_code,
     normalize_room_code,
     room_has_password,
+    room_reference,
     validate_room_code,
     validate_room_name,
     validate_room_password,
@@ -43,6 +44,12 @@ class RoomCodeTests(unittest.TestCase):
         with self.assertRaises(ValidationError) as ctx:
             validate_room_code("")
         self.assertIn("请输入房间号", str(ctx.exception))
+
+    def test_room_reference_keeps_internal_id(self) -> None:
+        # PR#9 §3.2：路径参数是 {room_id_or_code}，内部 id 不能盲目 upper()
+        self.assertEqual(room_reference(" ab12c "), "AB12C")
+        self.assertEqual(room_reference("c88256846df346c59c4a5dc48a1b32f6"), "c88256846df346c59c4a5dc48a1b32f6")
+        self.assertEqual(room_reference(""), "")
 
 
 class RoomNameTests(unittest.TestCase):

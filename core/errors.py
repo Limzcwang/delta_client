@@ -83,6 +83,33 @@ CODE_KINDS: dict[Any, ErrorKind] = {
     "NOT_AUTHENTICATED": ErrorKind.AUTH,
     "NOT_ROOM_MEMBER": ErrorKind.FORBIDDEN,
     "UNSUPPORTED_MESSAGE_TYPE": ErrorKind.VALIDATION,
+    # PROTOCOL PR#9 §7.2 WebSocket 错误码
+    "AUTH_INVALID": ErrorKind.AUTH,
+    "AUTH_EXPIRED": ErrorKind.TOKEN_EXPIRED,
+    "ALREADY_AUTHENTICATED": ErrorKind.VALIDATION,
+    "NOT_ROOM_OWNER": ErrorKind.FORBIDDEN,
+    "MEMBER_NOT_FOUND": ErrorKind.NOT_FOUND,
+    "ROOM_CLOSED": ErrorKind.ROOM_NOT_FOUND,
+    "INVALID_MESSAGE": ErrorKind.VALIDATION,
+    "INVALID_JSON": ErrorKind.VALIDATION,
+    "CANVAS_SEQ_GAP": ErrorKind.VALIDATION,
+    # PROTOCOL PR#9 §7.3 HTTP data.error_code
+    "ROOM_NAME_INVALID": ErrorKind.VALIDATION,
+    "INVALID_BACKGROUND": ErrorKind.VALIDATION,
+    "INVALID_VISIBILITY": ErrorKind.VALIDATION,
+    "ROOM_PASSWORD_NOT_ALLOWED": ErrorKind.VALIDATION,
+    "CANNOT_KICK_OWNER": ErrorKind.FORBIDDEN,
+    "INVALID_PAGINATION": ErrorKind.VALIDATION,
+    "INVALID_CURSOR": ErrorKind.VALIDATION,
+    "ROOM_OWNER_MUST_CLOSE": ErrorKind.CONFLICT,
+    "ROOM_CODE_GENERATION_FAILED": ErrorKind.SERVER,
+    "ROOM_ALREADY_EXISTS": ErrorKind.CONFLICT,
+    "CREATE_ROOM_FAILED": ErrorKind.SERVER,
+    "JOIN_ROOM_FAILED": ErrorKind.SERVER,
+    "LEAVE_ROOM_FAILED": ErrorKind.SERVER,
+    "GET_PUBLIC_ROOMS_FAILED": ErrorKind.SERVER,
+    "USER_NOT_IN_ROOM": ErrorKind.FORBIDDEN,
+    "INVALID_DOMAIN": ErrorKind.VALIDATION,
 }
 
 CODE_MESSAGES: dict[Any, str] = {
@@ -118,6 +145,32 @@ CODE_MESSAGES: dict[Any, str] = {
     "NOT_AUTHENTICATED": "请先完成认证，请重新登录",
     "NOT_ROOM_MEMBER": "你不在该房间中，请重新加入",
     "UNSUPPORTED_MESSAGE_TYPE": "当前版本不支持该消息类型",
+    # PROTOCOL PR#9 §7.2 WebSocket 错误码
+    "AUTH_INVALID": "登录凭证无效，请重新登录",
+    "AUTH_EXPIRED": "登录已过期，请重新登录",
+    "ALREADY_AUTHENTICATED": "已登录，无需重复认证",
+    "NOT_ROOM_OWNER": "只有房主才能执行该操作",
+    "MEMBER_NOT_FOUND": "目标成员不存在",
+    "ROOM_CLOSED": "房间已关闭",
+    "INVALID_MESSAGE": "消息内容不合法（1-2000 字符）",
+    "INVALID_JSON": "消息不是合法 JSON",
+    "CANVAS_SEQ_GAP": "画板状态不同步，正在重新同步",
+    # PROTOCOL PR#9 §7.3 HTTP data.error_code
+    "ROOM_NAME_INVALID": "房间名称不合法（1-32 字符）",
+    "INVALID_BACKGROUND": "房间底图不合法",
+    "INVALID_VISIBILITY": "房间可见性不合法",
+    "ROOM_PASSWORD_NOT_ALLOWED": "公开房间不允许设置密码",
+    "CANNOT_KICK_OWNER": "不能移出房主",
+    "INVALID_PAGINATION": "分页参数不合法",
+    "INVALID_CURSOR": "分页游标不合法",
+    "ROOM_OWNER_MUST_CLOSE": "房主离开前需先关闭房间或转让",
+    "ROOM_CODE_GENERATION_FAILED": "房间号生成失败，请重试",
+    "ROOM_ALREADY_EXISTS": "房间号已存在",
+    "CREATE_ROOM_FAILED": "创建房间失败，请稍后重试",
+    "JOIN_ROOM_FAILED": "加入房间失败，请稍后重试",
+    "LEAVE_ROOM_FAILED": "离开房间失败，请稍后重试",
+    "GET_PUBLIC_ROOMS_FAILED": "获取房间列表失败，请稍后重试",
+    "INTERNAL_ERROR": "服务端内部错误，请稍后重试",
 }
 
 #: HTTP 状态码兜底映射（无业务码时使用）
@@ -302,7 +355,8 @@ class ApiError(Exception):
         request_id: str | None = None,
     ) -> None:
         self.kind = kind
-        self.message = message or default_message(kind)
+        self.server_message = str(message).strip() if message else ""
+        self.message = self.server_message or default_message(kind)
         self.status = status
         self.code = code
         self.detail = detail
@@ -321,7 +375,9 @@ class ApiError(Exception):
 
     @property
     def user_message(self) -> str:
-        return user_message(self.kind, code=self.code, message=self.message, status=self.status)
+        return user_message(
+            self.kind, code=self.code, message=self.server_message, status=self.status
+        )
 
     @property
     def is_auth_error(self) -> bool:
