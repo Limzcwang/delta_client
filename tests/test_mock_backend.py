@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import unittest
 
+from core.canvas import make_stroke_op
 from core.errors import ApiError, ErrorKind
+from core.models import Room
 from core.rooms import is_valid_room_code
 from net.mock_backend import MockApiClient, MockWsClient
 
@@ -35,6 +37,9 @@ class MockApiTests(unittest.TestCase):
             api = MockApiClient(latency=0)
             created = await api.register("newbie", "abc123")
             self.assertEqual(created["username"], "newbie")
+            # Mock 与 B2b v1 注册一致：返回 access_token + user，UI 可自动登录
+            self.assertTrue(created.get("access_token"))
+            self.assertEqual(created["user"]["username"], "newbie")
 
             with self.assertRaises(ApiError) as duplicate:
                 await api.register("newbie", "abc123")
@@ -127,17 +132,124 @@ class MockApiTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_room_detail_members_and_connection_check(self) -> None:
+        async def scenario() -> None:
+            api = MockApiClient(latency=0)
+            await api.login("demo", "demo123")
+
+            detail = await api.get_room_detail("ab12c")
+            self.assertEqual(detail.room.code, "AB12C")
+            self.assertEqual({m.username for m in detail.members}, {"player", "队友-Bravo"})
+
+            await api.join_room("AB12C")
+            after_join = await api.get_room_detail("AB12C")
+            self.assertIn("demo", {m.username for m in after_join.members})
+
+            await api.leave_room("AB12C")
+            after_leave = await api.get_room_detail("AB12C")
+            self.assertNotIn("demo", {m.username for m in after_leave.members})
+
+            by_id = await api.get_room_detail("mock-room-ab12c")
+            self.assertEqual(by_id.room.code, "AB12C")
+
+            with self.assertRaises(ApiError) as not_found:
+                await api.get_room_detail("ZZZZZ")
+            self.assertEqual(not_found.exception.kind, ErrorKind.ROOM_NOT_FOUND)
+
+            check = await api.check_connection()
+            self.assertTrue(check.ok)
+            self.assertIn("HTTP 可达：✅", check.format_text())
+            self.assertIn("房间接口：✅", check.format_text())
+            self.assertGreaterEqual(check.rooms_count or 0, 2)
+
+        asyncio.run(scenario())
+
+    def test_message_history_pagination(self) -> None:
+        async def scenario() -> None:
+            api = MockApiClient(latency=0)
+            page = await api.get_messages("AB12C", limit=2)
+            self.assertEqual(["mock-msg-0003", "mock-msg-0002"], [m.message_id for m in page.messages])
+            self.assertTrue(page.has_more)
+            self.assertEqual("mock-msg-0002", page.next_before)
+            self.assertEqual("先热身两把", page.messages[0].content)
+
+            older = await api.get_messages("AB12C", before=page.next_before, limit=2)
+            self.assertEqual(["mock-msg-0001"], [m.message_id for m in older.messages])
+            self.assertFalse(older.has_more)
+            self.assertIsNone(older.next_before)
+
+            api.append_message("AB12C", {"id": "1", "username": "demo"}, "新消息", "c-new")
+            latest = await api.get_messages("AB12C")
+            self.assertEqual("新消息", latest.messages[0].content)
+            self.assertEqual("c-new", latest.messages[0].client_msg_id)
+
+            with self.assertRaises(ApiError) as not_found:
+                await api.get_messages("ZZZZZ")
+            self.assertEqual(not_found.exception.kind, ErrorKind.ROOM_NOT_FOUND)
+
+        asyncio.run(scenario())
+
+
+class MockCanvasTests(unittest.TestCase):
+    def test_canvas_snapshot_flow(self) -> None:
+        async def scenario() -> None:
+            api = MockApiClient(latency=0)
+            await api.login("demo", "demo123")
+            room = await api.create_room("画板房", "public")
+
+            initial = await api.get_canvas(room.code)
+            self.assertEqual(0, len(initial.strokes))
+            self.assertEqual(0, initial.rev)
+
+            messages: list[dict] = []
+            ws = MockWsClient(
+                on_message=messages.append,
+                user={"id": "1", "username": "demo"},
+                room=room,
+                latency=0,
+                store=api,
+            )
+            task = asyncio.create_task(ws.run())
+            await asyncio.sleep(0.02)
+            await ws.join_room(room.code)
+            await asyncio.sleep(0.02)
+            joined = next(message for message in messages if message["type"] == "room_joined")
+            self.assertEqual([], joined["canvas_snapshot"]["strokes"])
+
+            op = make_stroke_op([(0.1, 0.1), (0.2, 0.2)], "#FF3B30", 4)
+            self.assertTrue(await ws.send_canvas_op(op, 0, room.id))
+            snapshot = await api.get_canvas(room.code)
+            self.assertEqual(1, len(snapshot.strokes))
+            self.assertEqual(0, snapshot.rev)
+
+            ack = await ws.save_canvas_snapshot([op], 1, room.id)
+            self.assertIsNotNone(ack)
+            self.assertEqual(1, ack["rev"])
+            saved = await api.get_canvas(room.code)
+            self.assertEqual(1, len(saved.strokes))
+            self.assertEqual(1, saved.rev)
+
+            await ws.close()
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+        asyncio.run(scenario())
+
 
 class MockWsTests(unittest.TestCase):
     def test_ws_auth_join_and_chat_echo(self) -> None:
         async def scenario() -> None:
             messages: list[dict] = []
             states: list[str] = []
+            api = MockApiClient(latency=0)
+            await api.login("demo", "demo123")
             ws = MockWsClient(
                 on_message=messages.append,
                 on_state=lambda state, info: states.append(state),
                 user={"id": "1", "username": "demo"},
+                room=Room.from_api({"id": "mock-room-ab12c", "code": "AB12C", "name": "新手训练房"}),
                 latency=0,
+                store=api,
             )
             task = asyncio.create_task(ws.run())
             await asyncio.sleep(0.02)
@@ -153,12 +265,20 @@ class MockWsTests(unittest.TestCase):
             self.assertTrue(room_joined["members"])
             self.assertEqual(room_joined["room"]["code"], "AB12C")
 
-            client_msg_id = await ws.send_chat("大家好")
-            self.assertTrue(client_msg_id)
+            client_msg_id = await ws.send_chat("大家好", "c-test", "mock-room-ab12c")
+            self.assertEqual("c-test", client_msg_id)
             await asyncio.sleep(0.35)
             chat = next(message for message in messages if message["type"] == "chat_message")
             self.assertEqual(chat["content"], "大家好")
             self.assertEqual(chat["client_msg_id"], client_msg_id)
+            self.assertTrue(chat["id"])
+            self.assertEqual("demo", chat["user"]["username"])
+            self.assertIsInstance(chat["created_at"], int)
+
+            # Mock 回显也写入历史，供进房拉历史/分页测试
+            page = await api.get_messages("AB12C")
+            self.assertEqual("大家好", page.messages[0].content)
+            self.assertEqual(client_msg_id, page.messages[0].client_msg_id)
 
             await ws.close()
             await asyncio.sleep(0.02)

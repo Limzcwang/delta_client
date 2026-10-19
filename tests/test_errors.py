@@ -10,10 +10,59 @@ from core.errors import (
     ErrorKind,
     api_error_from_exception,
     api_error_from_response,
+    code_message,
+    kind_for_code,
     kind_for_status,
     parse_error_body,
     to_user_message,
 )
+
+WS_ERROR_CODES = [
+    "NOT_AUTHENTICATED",
+    "AUTH_INVALID",
+    "AUTH_EXPIRED",
+    "ALREADY_AUTHENTICATED",
+    "NOT_ROOM_MEMBER",
+    "NOT_ROOM_OWNER",
+    "MEMBER_NOT_FOUND",
+    "ROOM_NOT_FOUND",
+    "ROOM_CLOSED",
+    "ROOM_PASSWORD_REQUIRED",
+    "ROOM_PASSWORD_INVALID",
+    "ROOM_FULL",
+    "RATE_LIMITED",
+    "INVALID_MESSAGE",
+    "INVALID_PAYLOAD",
+    "INVALID_JSON",
+    "UNSUPPORTED_MESSAGE_TYPE",
+    "CANVAS_SEQ_GAP",
+    "CANVAS_OUT_OF_ORDER",
+    "INVALID_CANVAS_OP",
+    "INTERNAL_ERROR",
+]
+
+HTTP_ERROR_CODES = [
+    "ROOM_NOT_FOUND",
+    "MEMBER_NOT_FOUND",
+    "NOT_ROOM_MEMBER",
+    "NOT_ROOM_OWNER",
+    "ROOM_PASSWORD_REQUIRED",
+    "ROOM_PASSWORD_INVALID",
+    "ROOM_NAME_INVALID",
+    "INVALID_BACKGROUND",
+    "INVALID_VISIBILITY",
+    "ROOM_PASSWORD_NOT_ALLOWED",
+    "CANNOT_KICK_OWNER",
+    "INVALID_PAGINATION",
+    "INVALID_CURSOR",
+    "INVALID_MESSAGE",
+    "ROOM_FULL",
+    "ROOM_OWNER_MUST_CLOSE",
+    "ROOM_CLOSED",
+    "RATE_LIMITED",
+    "ROOM_CODE_GENERATION_FAILED",
+    "INVALID_CANVAS_OP",
+]
 
 
 class StatusMappingTests(unittest.TestCase):
@@ -90,6 +139,46 @@ class ErrorBodyTests(unittest.TestCase):
         self.assertIsNone(code)
         self.assertEqual(message, "OK")
 
+    def test_b2b_nested_data_error_code(self) -> None:
+        """B2b 实测错误体：顶层 code 只是 40000 类别，具体码在 data.error_code。"""
+        body = {
+            "code": 40000,
+            "message": "该房间需要密码",
+            "data": {"error_code": "ROOM_PASSWORD_REQUIRED"},
+            "request_id": "req_1",
+        }
+        error = api_error_from_response(400, body)
+        self.assertEqual(error.code, "ROOM_PASSWORD_REQUIRED")
+        self.assertEqual(error.kind, ErrorKind.ROOM_PASSWORD_REQUIRED)
+        self.assertEqual(error.user_message, "该房间需要密码")
+        self.assertEqual(error.request_id, "req_1")
+
+        invalid = api_error_from_response(
+            400,
+            {"code": 40000, "message": "房间密码错误", "data": {"error_code": "ROOM_PASSWORD_INVALID"}},
+        )
+        self.assertEqual(invalid.kind, ErrorKind.ROOM_PASSWORD_INVALID)
+        self.assertTrue(invalid.needs_room_password)
+
+    def test_b2b_ws_error_code_aliases(self) -> None:
+        not_authenticated = api_error_from_response(
+            400,
+            {"type": "error", "code": "NOT_AUTHENTICATED", "error_code": "NOT_AUTHENTICATED", "message": "请先完成认证"},
+        )
+        self.assertEqual(not_authenticated.kind, ErrorKind.AUTH)
+        self.assertTrue(not_authenticated.is_auth_error)
+
+        not_member = api_error_from_response(
+            400,
+            {"type": "error", "code": "NOT_ROOM_MEMBER", "error_code": "NOT_ROOM_MEMBER", "message": "你不在该房间中"},
+        )
+        self.assertEqual(not_member.kind, ErrorKind.FORBIDDEN)
+
+        unsupported = api_error_from_response(
+            400, {"type": "error", "code": "UNSUPPORTED_MESSAGE_TYPE", "message": "当前版本不支持消息类型"}
+        )
+        self.assertEqual(unsupported.kind, ErrorKind.VALIDATION)
+
 
 class ExceptionMappingTests(unittest.TestCase):
     def test_timeout(self) -> None:
@@ -108,6 +197,49 @@ class ExceptionMappingTests(unittest.TestCase):
     def test_to_user_message(self) -> None:
         self.assertEqual(to_user_message(ApiError(ErrorKind.NETWORK)), "无法连接到服务器，请检查网络或服务器地址")
         self.assertEqual(to_user_message(RuntimeError("自定义错误")), "自定义错误")
+
+
+class ProtocolPr9ErrorTableTests(unittest.TestCase):
+    """PROTOCOL PR#9 §7.2/§7.3：客户端必须认识全部实名错误码。"""
+
+    def test_all_ws_codes_known(self) -> None:
+        for code in WS_ERROR_CODES:
+            with self.subTest(code=code):
+                kind = kind_for_code(code)
+                self.assertIsNotNone(kind, f"WS 错误码 {code} 未映射")
+                self.assertNotEqual(kind, ErrorKind.UNKNOWN, f"WS 错误码 {code} 映射为 UNKNOWN")
+                self.assertTrue(code_message(code), f"WS 错误码 {code} 缺少用户文案")
+
+    def test_all_http_error_codes_known(self) -> None:
+        for code in HTTP_ERROR_CODES:
+            with self.subTest(code=code):
+                kind = kind_for_code(code)
+                self.assertIsNotNone(kind, f"HTTP error_code {code} 未映射")
+                self.assertNotEqual(kind, ErrorKind.UNKNOWN, f"HTTP error_code {code} 映射为 UNKNOWN")
+                self.assertTrue(code_message(code), f"HTTP error_code {code} 缺少用户文案")
+
+    def test_auth_code_semantics(self) -> None:
+        self.assertEqual(kind_for_code("AUTH_INVALID"), ErrorKind.AUTH)
+        self.assertEqual(kind_for_code("AUTH_EXPIRED"), ErrorKind.TOKEN_EXPIRED)
+        self.assertEqual(kind_for_code("NOT_AUTHENTICATED"), ErrorKind.AUTH)
+        self.assertEqual(kind_for_code("NOT_ROOM_MEMBER"), ErrorKind.FORBIDDEN)
+        self.assertEqual(kind_for_code("ROOM_CLOSED"), ErrorKind.ROOM_NOT_FOUND)
+        self.assertEqual(kind_for_code("ROOM_OWNER_MUST_CLOSE"), ErrorKind.CONFLICT)
+
+    def test_auth_expired_ws_error_maps_to_relogin(self) -> None:
+        error = api_error_from_response(
+            401, {"type": "error", "code": "AUTH_EXPIRED", "message": "登录已过期，请重新登录"}
+        )
+        self.assertTrue(error.is_auth_error)
+        self.assertEqual(error.kind, ErrorKind.TOKEN_EXPIRED)
+
+    def test_room_owner_must_close_message(self) -> None:
+        error = api_error_from_response(
+            409,
+            {"code": 40900, "message": "", "data": {"error_code": "ROOM_OWNER_MUST_CLOSE"}},
+        )
+        self.assertEqual(error.kind, ErrorKind.CONFLICT)
+        self.assertIn("房主", error.user_message)
 
 
 if __name__ == "__main__":

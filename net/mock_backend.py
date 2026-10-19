@@ -15,11 +15,14 @@ import uuid
 from typing import Any, Mapping
 
 from core import protocol
+from core.canvas import CanvasSnapshot, parse_canvas_snapshot
+from core.connection import ConnectionCheck, probe_ok
 from core.errors import ApiError, ErrorKind
-from core.models import Room, now_ms
+from core.models import ChatMessage, ChatPage, Member, Room, RoomDetail, now_ms
 from core.rooms import (
     ValidationError,
     normalize_room_code,
+    room_reference,
     validate_room_code,
     validate_room_name,
     validate_visibility,
@@ -80,6 +83,52 @@ def _copy_room_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     return copy
 
 
+#: 演示房间成员（用于 Mock 的 HTTP 成员兜底，模拟 ``GET /rooms/{ref}`` 返回）
+_SEED_MEMBERS: dict[str, list[dict[str, Any]]] = {
+    "AB12C": [
+        {"id": "2", "username": "player", "online": True},
+        {"id": "3", "username": "队友-Bravo", "online": True},
+    ],
+    "K7M2P": [
+        {"id": "3", "username": "队友-Charlie", "online": True},
+        {"id": "4", "username": "队友-Delta", "online": True},
+        {"id": "5", "username": "队友-Echo", "online": False},
+        {"id": "6", "username": "队友-Foxtrot", "online": True},
+    ],
+    "Q4W8E": [{"id": "2", "username": "player", "online": False}],
+}
+
+#: 演示聊天历史（按时间正序；接口返回时倒序分页）
+_SEED_MESSAGES: dict[str, list[dict[str, Any]]] = {
+    "AB12C": [
+        {
+            "id": "mock-msg-0001",
+            "room_id": "mock-room-ab12c",
+            "user": {"id": "2", "username": "player"},
+            "content": "欢迎来到新手训练房",
+            "client_msg_id": None,
+            "created_at": now_ms() - 300_000,
+        },
+        {
+            "id": "mock-msg-0002",
+            "room_id": "mock-room-ab12c",
+            "user": {"id": "3", "username": "队友-Bravo"},
+            "content": "今晚一起上分吗？",
+            "client_msg_id": None,
+            "created_at": now_ms() - 180_000,
+        },
+        {
+            "id": "mock-msg-0003",
+            "room_id": "mock-room-ab12c",
+            "user": {"id": "2", "username": "player"},
+            "content": "先热身两把",
+            "client_msg_id": None,
+            "created_at": now_ms() - 60_000,
+        },
+    ],
+}
+
+
 class MockApiClient:
     """内存版 API 客户端（用于 ``--mock`` / ``DELTA_MOCK=1``）。"""
 
@@ -91,8 +140,17 @@ class MockApiClient:
         self.latency = max(0.0, float(latency))
         self._users: dict[str, dict[str, Any]] = {item["username"]: dict(item) for item in _MOCK_USERS}
         self._rooms: dict[str, dict[str, Any]] = {item["code"]: dict(item) for item in _SEED_ROOMS}
+        self._room_members: dict[str, list[dict[str, Any]]] = {
+            code: [dict(member) for member in members] for code, members in _SEED_MEMBERS.items()
+        }
         self._memberships: set[tuple[str, str]] = set()
         self._username: str | None = None
+        self._current_user: dict[str, Any] | None = None
+        self._messages: dict[str, list[dict[str, Any]]] = {
+            code: [dict(message) for message in messages] for code, messages in _SEED_MESSAGES.items()
+        }
+        #: 画板状态（内存，mock 下按房间保存 strokes/rev）
+        self._room_canvas: dict[str, dict[str, Any]] = {}
 
     # ---------- 基础 ----------
     async def _tick(self) -> None:
@@ -105,15 +163,39 @@ class MockApiClient:
     def _user_id(self, username: str) -> str:
         return str(self._users.get(username, {}).get("id", "0"))
 
+    def _self_member(self) -> dict[str, Any]:
+        if self._current_user is not None:
+            return {
+                "id": str(self._current_user.get("id", "0")),
+                "username": str(self._current_user.get("username", "")),
+                "online": True,
+            }
+        return {"id": "1", "username": self._username or "demo", "online": True}
+
+    def _find_room(self, room_id_or_code: str) -> dict[str, Any] | None:
+        text = str(room_id_or_code or "").strip()
+        code = room_reference(text)
+        payload = self._rooms.get(code)
+        if payload is not None:
+            return payload
+        for item in self._rooms.values():
+            if str(item.get("id")) == text:
+                return item
+        return None
+
     # ---------- 认证 ----------
+    def _issue_token(self, user: Mapping[str, Any]) -> str:
+        return f"mock-token.{user['id']}.{uuid.uuid4().hex}"
+
     async def login(self, username: str, password: str) -> LoginResult:
         await self._tick()
         self._username = str(username or "").strip()
         user = self._users.get(self._username)
         if user is None or str(user.get("password")) != str(password):
             raise ApiError(ErrorKind.AUTH, "用户名或密码错误", status=401)
-        token = f"mock-token.{user['id']}.{uuid.uuid4().hex}"
+        token = self._issue_token(user)
         public_user = {"id": str(user["id"]), "username": str(user["username"])}
+        self._current_user = public_user
         return LoginResult(
             token=token,
             user=public_user,
@@ -131,7 +213,19 @@ class MockApiClient:
             raise ApiError(ErrorKind.CONFLICT, "用户名已存在", status=409, code="USERNAME_EXISTS")
         new_id = str(max(int(item["id"]) for item in self._users.values()) + 1)
         self._users[name] = {"id": new_id, "username": name, "password": raw_password}
-        return {"id": new_id, "username": name}
+        user = self._users[name]
+        self._username = name
+        self._current_user = {"id": new_id, "username": name}
+        token = self._issue_token(user)
+        # 与 B2b 的 v1 注册响应保持一致（同登录），便于 UI 注册后自动登录
+        return {
+            "id": new_id,
+            "username": name,
+            "access_token": token,
+            "token_type": "Bearer",
+            "expires_in": 604800,
+            "user": {"id": new_id, "username": name},
+        }
 
     # ---------- 房间 ----------
     async def list_rooms(self) -> list[Room]:
@@ -168,8 +262,13 @@ class MockApiClient:
         if password:
             payload["password"] = str(password)
         self._rooms[code] = payload
+        members = self._room_members.setdefault(code, [])
         if self._username:
             self._memberships.add((self._username, code))
+            self_member = self._self_member()
+            if not any(item.get("username") == self_member["username"] for item in members):
+                members.append(self_member)
+        payload["member_count"] = len(members)
         return Room.from_api(_copy_room_payload(payload))
 
     async def join_room(self, room_code: str, password: str | None = None) -> Room:
@@ -190,9 +289,16 @@ class MockApiClient:
                 ErrorKind.ROOM_PASSWORD_INVALID, "房间密码错误", status=403, code="ROOM_PASSWORD_INVALID"
             )
         key = (self._username or "", code)
+        members = self._room_members.setdefault(code, [])
+        self_member = self._self_member()
         if key not in self._memberships:
             self._memberships.add(key)
-            payload["member_count"] = int(payload.get("member_count", 0)) + 1
+            if not any(
+                str(item.get("id")) == str(self_member["id"]) or item.get("username") == self_member["username"]
+                for item in members
+            ):
+                members.append(self_member)
+        payload["member_count"] = len(members)
         return Room.from_api(_copy_room_payload(payload))
 
     async def leave_room(self, room_code: str) -> None:
@@ -202,8 +308,136 @@ class MockApiClient:
         if key in self._memberships:
             self._memberships.discard(key)
             payload = self._rooms.get(code)
+            self_member = self._self_member()
             if payload is not None:
-                payload["member_count"] = max(0, int(payload.get("member_count", 1)) - 1)
+                members = self._room_members.get(code, [])
+                self._room_members[code] = [
+                    item
+                    for item in members
+                    if not (
+                        str(item.get("id")) == str(self_member["id"])
+                        or item.get("username") == self_member["username"]
+                    )
+                ]
+                payload["member_count"] = len(self._room_members[code])
+
+    async def get_room_detail(self, room_id_or_code: str) -> RoomDetail:
+        """Mock 版房间详情（对应 ``GET /api/v1/rooms/{room_id_or_code}``）。"""
+        await self._tick()
+        payload = self._find_room(room_id_or_code)
+        if payload is None:
+            raise ApiError(ErrorKind.ROOM_NOT_FOUND, "房间不存在或已关闭", status=404, code=40402)
+        members = tuple(
+            Member.from_api(item) for item in self._room_members.get(str(payload["code"]), [])
+        )
+        return RoomDetail(room=Room.from_api(_copy_room_payload(payload)), members=members)
+
+    async def check_connection(self) -> ConnectionCheck:
+        """Mock 版连通性自检（演示/测试用）。"""
+        await self._tick()
+        rooms = await self.list_rooms()
+        return ConnectionCheck(
+            server_url=self.base_url,
+            health=probe_ok("health", "/health 200（mock）", elapsed_ms=0),
+            rooms=probe_ok("rooms", f"/api/v1/rooms 200（{len(rooms)} 个房间）", elapsed_ms=0),
+            rooms_count=len(rooms),
+        )
+
+    # ---------- 聊天 ----------
+    def append_message(
+        self,
+        room_ref: str,
+        user: Mapping[str, Any],
+        content: str,
+        client_msg_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Mock WS 发送后落一份消息（供回显与历史查询）。"""
+        code = room_reference(str(room_ref))
+        payload = self._find_room(code)
+        room_id = str(payload["id"]) if payload is not None else str(room_ref)
+        message = {
+            "id": f"mock-msg-{uuid.uuid4().hex[:12]}",
+            "room_id": room_id,
+            "room_code": str(payload["code"]) if payload is not None else code,
+            "user": {
+                "id": str(user.get("id", "0")),
+                "username": str(user.get("username", "")),
+            },
+            "content": str(content),
+            "client_msg_id": client_msg_id or None,
+            "created_at": now_ms(),
+        }
+        key = str(payload["code"]) if payload is not None else code
+        self._messages.setdefault(key, []).append(message)
+        return message
+
+    async def get_messages(
+        self,
+        room_id_or_code: str,
+        *,
+        before: str | None = None,
+        limit: int = 50,
+    ) -> ChatPage:
+        """Mock 版聊天历史：最新一页在前（新→旧），``before`` 为消息 id。"""
+        await self._tick()
+        payload = self._find_room(room_id_or_code)
+        if payload is None:
+            raise ApiError(ErrorKind.ROOM_NOT_FOUND, "房间不存在或已关闭", status=404, code=40402)
+        code = str(payload["code"])
+        messages = self._messages.setdefault(code, [])
+        if before:
+            index = next((i for i, item in enumerate(messages) if item.get("id") == before), None)
+            if index is not None:
+                messages = messages[:index]
+        page_size = max(1, min(100, int(limit)))
+        window = messages[-page_size:]
+        has_more = len(messages) > len(window)
+        page_items = list(reversed(window))
+        next_before = page_items[-1]["id"] if has_more and page_items else None
+        return ChatPage(
+            messages=tuple(ChatMessage.from_ws(item) for item in page_items),
+            has_more=has_more,
+            next_before=next_before,
+        )
+
+    # ---------- 画板 ----------
+    def _canvas_state(self, room_ref: str) -> dict[str, Any]:
+        payload = self._find_room(room_ref)
+        key = str(payload["code"]) if payload is not None else room_reference(str(room_ref))
+        return self._room_canvas.setdefault(
+            key, {"strokes": [], "rev": 0, "updated_at": None}
+        )
+
+    def canvas_payload(self, room_ref: str) -> dict[str, Any]:
+        state = self._canvas_state(room_ref)
+        return {
+            "strokes": [dict(op) for op in state.get("strokes", [])],
+            "rev": int(state.get("rev", 0)),
+        }
+
+    def apply_canvas_op(self, room_ref: str, op: Mapping[str, Any], rev: int) -> None:
+        state = self._canvas_state(room_ref)
+        state["rev"] = max(int(state.get("rev", 0)), int(rev))
+        if op.get("kind") == "clear":
+            state["strokes"] = []
+        else:
+            state["strokes"].append(dict(op))
+
+    def save_canvas_snapshot(
+        self, room_ref: str, strokes: list[Mapping[str, Any]], rev: int
+    ) -> dict[str, Any]:
+        state = self._canvas_state(room_ref)
+        state["strokes"] = [dict(op) for op in strokes]
+        state["rev"] = int(rev)
+        state["updated_at"] = now_ms()
+        return {"strokes": list(state["strokes"]), "rev": state["rev"], "updated_at": state["updated_at"]}
+
+    async def get_canvas(self, room_id_or_code: str) -> CanvasSnapshot:
+        await self._tick()
+        payload = self._find_room(room_id_or_code)
+        if payload is None:
+            raise ApiError(ErrorKind.ROOM_NOT_FOUND, "房间不存在或已关闭", status=404, code=40402)
+        return parse_canvas_snapshot(self.canvas_payload(str(payload["code"])))
 
     def _generate_room_code(self) -> str:
         while True:
@@ -227,6 +461,7 @@ class MockWsClient:
         user: Mapping[str, Any] | None = None,
         room: Room | None = None,
         latency: float = _MOCK_LATENCY,
+        store: MockApiClient | None = None,
     ) -> None:
         self.url = url
         self.token = token
@@ -235,6 +470,7 @@ class MockWsClient:
         self.user: dict[str, Any] = dict(user or {"id": "1", "username": "demo"})
         self.room = room
         self.latency = max(0.0, float(latency))
+        self.store = store
         self.connected = False
         self._state = "idle"
         self._stop_event: asyncio.Event | None = None
@@ -282,43 +518,82 @@ class MockWsClient:
             members.append({"id": "2", "username": "队友-Alpha", "online": True})
         if self.user.get("username") != "队友-Bravo":
             members.append({"id": "3", "username": "队友-Bravo", "online": True})
+        canvas_snapshot = (
+            self.store.canvas_payload(str(raw.get("code") or room_code))
+            if self.store is not None
+            else {"strokes": [], "rev": 0}
+        )
         self._emit(
             {
                 "type": protocol.WS_ROOM_JOINED,
                 "room": raw,
                 "members": members,
-                "canvas_snapshot": {
-                    "seq": 0,
-                    "canvas_size": [1920, 1080],
-                    "background": {"id": raw.get("background_id", "bg_default_01")},
-                    "ops": [],
-                },
+                "canvas_snapshot": canvas_snapshot,
                 "skill_state": {"items": []},
                 "server_time": now_ms(),
             }
         )
         return True
 
-    async def send_chat(self, content: str, client_msg_id: str | None = None) -> str | None:
+    async def send_chat(
+        self,
+        content: str,
+        client_msg_id: str | None = None,
+        room_id: str | None = None,
+    ) -> str | None:
         client_msg_id = client_msg_id or protocol.make_client_msg_id()
+        room_ref = self.room.code if self.room is not None else (room_id or "")
 
         async def _echo() -> None:
             await asyncio.sleep(self.latency + 0.2)
-            self._emit(
-                {
-                    "type": protocol.WS_CHAT_MESSAGE,
+            if self.store is not None:
+                message = self.store.append_message(room_ref, self.user, content, client_msg_id)
+            else:
+                message = {
+                    "id": f"mock-msg-{uuid.uuid4().hex[:12]}",
                     "room_id": str(self.room.id) if self.room is not None else "",
-                    "message_id": f"mock-msg-{uuid.uuid4().hex[:8]}",
-                    "client_msg_id": client_msg_id,
-                    "sender": {"id": str(self.user.get("id", "1")), "username": str(self.user.get("username", "demo"))},
+                    "room_code": room_ref,
+                    "user": {
+                        "id": str(self.user.get("id", "1")),
+                        "username": str(self.user.get("username", "demo")),
+                    },
                     "content": content,
-                    "content_type": "text",
-                    "ts": now_ms(),
+                    "client_msg_id": client_msg_id,
+                    "created_at": now_ms(),
                 }
-            )
+            payload = {"type": protocol.WS_CHAT_MESSAGE}
+            payload.update(message)
+            self._emit(payload)
 
         asyncio.get_running_loop().create_task(_echo())
         return client_msg_id
+
+    async def send_canvas_op(self, op: dict[str, Any], rev: int, room_id: str) -> bool:
+        room_ref = self.room.code if self.room is not None else str(room_id)
+        if self.store is not None:
+            self.store.apply_canvas_op(room_ref, op, rev)
+        return True
+
+    async def save_canvas_snapshot(
+        self,
+        strokes: list[dict[str, Any]],
+        rev: int,
+        room_id: str,
+        timeout: float = 3.0,
+    ) -> dict[str, Any] | None:
+        room_ref = self.room.code if self.room is not None else str(room_id)
+        if self.store is not None:
+            saved = self.store.save_canvas_snapshot(room_ref, strokes, rev)
+        else:
+            saved = {"strokes": list(strokes), "rev": int(rev), "updated_at": now_ms()}
+        ack = {
+            "type": protocol.WS_CANVAS_SNAPSHOT_SAVED,
+            "room_id": str(room_id),
+            "rev": saved.get("rev", rev),
+            "updated_at": saved.get("updated_at"),
+        }
+        self._emit(ack)
+        return ack
 
     async def leave_room(self, room_id_or_code: str) -> bool:
         return True

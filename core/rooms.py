@@ -26,6 +26,16 @@ def is_valid_room_code(code: Any) -> bool:
     return bool(ROOM_CODE_PATTERN.fullmatch(normalize_room_code(code)))
 
 
+def room_reference(raw: Any) -> str:
+    """房间引用：5 位房间号规范化为大写，其它（如内部 room_id）原样保留。
+
+    PROTOCOL §3.2 起路径参数为 ``{room_id_or_code}``，客户端可能同时拿到
+    code 与内部 id；内部 id 往往是大小写敏感的字符串，不能盲目 upper()。
+    """
+    text = str(raw or "").strip()
+    return normalize_room_code(text) if is_valid_room_code(text) else text
+
+
 def validate_room_code(raw: Any) -> str:
     """校验并返回规范化房间号，非法时抛 :class:`ValidationError`。"""
     code = normalize_room_code(raw)

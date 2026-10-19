@@ -6,12 +6,15 @@ import unittest
 
 from core.models import (
     ChatMessage,
+    ChatPage,
     Member,
     Room,
     format_timestamp,
     make_system_message,
     now_ms,
+    parse_chat_page,
     parse_members,
+    parse_room_detail,
     parse_room_list,
     parse_ts,
 )
@@ -128,6 +131,49 @@ class ParseListTests(unittest.TestCase):
         self.assertEqual(parse_members({"members": "bad"}), [])
 
 
+class ParseRoomDetailTests(unittest.TestCase):
+    def test_envelope_detail(self) -> None:
+        detail = parse_room_detail(
+            {
+                "code": 200,
+                "message": "OK",
+                "data": {
+                    "room": {"id": "r1", "code": "ab12c", "name": "开黑房", "member_count": 2},
+                    "members": [
+                        {"id": "1", "username": "alice", "online": True},
+                        {"id": "2", "username": "bob", "online": False},
+                    ],
+                },
+            }
+        )
+        self.assertIsNotNone(detail)
+        assert detail is not None
+        self.assertEqual(detail.room.code, "AB12C")
+        self.assertEqual(len(detail.members), 2)
+        self.assertTrue(detail.members[0].online)
+        self.assertFalse(detail.members[1].online)
+        self.assertEqual(detail.member_names, ("alice", "bob"))
+
+    def test_bare_detail_and_room_members_fallback(self) -> None:
+        detail = parse_room_detail(
+            {
+                "room": {
+                    "code": "AB12C",
+                    "members": [{"id": "1", "username": "alice"}],
+                },
+                "members": [],
+            }
+        )
+        self.assertIsNotNone(detail)
+        assert detail is not None
+        self.assertEqual([m.username for m in detail.members], ["alice"])
+
+    def test_invalid_payload(self) -> None:
+        self.assertIsNone(parse_room_detail(None))
+        self.assertIsNone(parse_room_detail("junk"))
+        self.assertIsNone(parse_room_detail([]))
+
+
 class ChatMessageTests(unittest.TestCase):
     def test_from_ws(self) -> None:
         message = ChatMessage.from_ws(
@@ -155,6 +201,69 @@ class ChatMessageTests(unittest.TestCase):
         message = make_system_message("已加入房间")
         self.assertTrue(message.system)
         self.assertEqual(message.display_text(), "— 已加入房间 —")
+
+    def test_c_final_contract_fields(self) -> None:
+        message = ChatMessage.from_ws(
+            {
+                "type": "chat_message",
+                "id": "9f2c",
+                "room_id": "room-1",
+                "user": {"id": "1", "username": "alice"},
+                "content": "大家好",
+                "client_msg_id": "m-001",
+                "created_at": 1750000001500,
+            }
+        )
+        self.assertEqual(message.message_id, "9f2c")
+        self.assertEqual(message.room_id, "room-1")
+        self.assertEqual(message.sender_id, "1")
+        self.assertEqual(message.sender_name, "alice")
+        self.assertEqual(message.created_at, 1750000001500)
+        self.assertEqual(message.ts, 1750000001500)  # 兼容旧属性名
+        self.assertEqual(message.client_msg_id, "m-001")
+
+
+class ChatPageTests(unittest.TestCase):
+    def test_parse_envelope(self) -> None:
+        page = parse_chat_page(
+            {
+                "code": 200,
+                "data": {
+                    "items": [
+                        {
+                            "id": "m-2",
+                            "room_id": "room-1",
+                            "user": {"id": "2", "username": "bob"},
+                            "content": "second",
+                            "client_msg_id": None,
+                            "created_at": 1750000002000,
+                        },
+                        {
+                            "id": "m-1",
+                            "room_id": "room-1",
+                            "user": {"id": "1", "username": "alice"},
+                            "content": "first",
+                            "client_msg_id": "c-1",
+                            "created_at": 1750000001000,
+                        },
+                    ],
+                    "has_more": True,
+                    "next_before": "m-1",
+                },
+            }
+        )
+        self.assertEqual(2, len(page.messages))
+        self.assertEqual(["m-2", "m-1"], [message.message_id for message in page.messages])
+        self.assertTrue(page.has_more)
+        self.assertEqual("m-1", page.next_before)
+        self.assertEqual("bob", page.messages[0].sender_name)
+
+    def test_parse_bare_and_invalid(self) -> None:
+        page = parse_chat_page({"items": [{"content": "hi"}], "has_more": False, "next_before": None})
+        self.assertEqual(1, len(page.messages))
+        self.assertIsNone(page.next_before)
+        self.assertEqual(ChatPage(), parse_chat_page(None))
+        self.assertEqual(ChatPage(), parse_chat_page("junk"))
 
 
 if __name__ == "__main__":

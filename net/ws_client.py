@@ -3,7 +3,8 @@
 按 PROTOCOL.md §6 实现：
 - 连接后第一条业务消息为 ``{"type":"auth","token":...}``；
 - 收到 ``auth_ok`` 视为连接成功（退避计数清零）；
-- 心跳：服务端 15s 下发 heartbeat；客户端 20s 主动 ping，45s 无消息判定失联并重连；
+- 心跳：PROTOCOL PR#9 §6.1 服务端每 30s 下发 heartbeat，客户端 25s 主动 ping，
+  90s 无任何消息判定失联并重连；
 - 指数退避：1s/2s/4s… 上限 30s（:mod:`core.backoff`）；
 - 未知消息类型原样交给回调，由 UI 忽略（协议要求客户端不因新增消息崩溃）。
 """
@@ -41,8 +42,8 @@ class WsClient:
         *,
         on_message: MessageCallback | None = None,
         on_state: StateCallback | None = None,
-        heartbeat_interval: float = 20.0,
-        heartbeat_timeout: float = 45.0,
+        heartbeat_interval: float = 25.0,
+        heartbeat_timeout: float = 90.0,
         connect_timeout: float = 10.0,
         backoff: ReconnectBackoff | None = None,
         connect_factory: Callable[[str], Awaitable[Any]] | None = None,
@@ -61,6 +62,7 @@ class WsClient:
         self._state = "idle"
         self._last_rx = 0.0
         self._stop_event = asyncio.Event()
+        self._canvas_save_waiters: list[asyncio.Future] = []
 
     # ---------- 状态 ----------
     @property
@@ -185,11 +187,14 @@ class WsClient:
                     text = str(message.get("message") or "认证失败，请重新登录")
                     self._set_state("auth_error", code=message.get("code"), message=text)
                     raise WsAuthError(text)
+                elif mtype == protocol.WS_CANVAS_SNAPSHOT_SAVED:
+                    self._resolve_save_waiters(message)
                 self._emit(message)
         finally:
             for task in (heartbeat, watchdog):
                 task.cancel()
             await asyncio.gather(heartbeat, watchdog, return_exceptions=True)
+            self._resolve_save_waiters(None)
 
     async def _heartbeat_loop(self, ws: Any) -> None:
         while True:
@@ -229,19 +234,61 @@ class WsClient:
     async def leave_room(self, room_id_or_code: str) -> bool:
         return await self._send(protocol.leave_room_message(room_id_or_code))
 
-    async def send_chat(self, content: str, client_msg_id: str | None = None) -> str | None:
+    async def send_chat(
+        self,
+        content: str,
+        client_msg_id: str | None = None,
+        room_id: str | None = None,
+    ) -> str | None:
         """发送聊天消息，返回 ``client_msg_id``（发送失败返回 None）。
 
-        允许调用方预先提供 id，以便在发送前登记到去重集合，避免服务端回显先于
-        本地登记造成重复展示。
+        - ``client_msg_id`` 由调用方预先提供并登记，服务端广播会原样回传，
+          客户端据此把「发送中」更新为「已发送」，不重复插入；
+        - ``room_id`` 服务端不读取（用会话房间），仅用于联调日志/扩展。
         """
         client_msg_id = client_msg_id or protocol.make_client_msg_id()
-        sent = await self._send(protocol.chat_send_message(content, client_msg_id))
+        sent = await self._send(protocol.chat_send_message(content, client_msg_id, room_id))
         return client_msg_id if sent else None
+
+    async def send_canvas_op(self, op: dict[str, Any], rev: int, room_id: str) -> bool:
+        """发送一条画板增量；``rev`` 由调用方保证每连接单调递增。"""
+        return await self._send(protocol.canvas_op_message(room_id, rev, op))
+
+    async def save_canvas_snapshot(
+        self,
+        strokes: list[dict[str, Any]],
+        rev: int,
+        room_id: str,
+        timeout: float = 3.0,
+    ) -> dict[str, Any] | None:
+        """发送全量画板快照并等待 ``canvas_snapshot_saved`` ack；超时返回 None。"""
+        loop = asyncio.get_running_loop()
+        waiter = loop.create_future()
+        self._canvas_save_waiters.append(waiter)
+        sent = await self._send(
+            protocol.canvas_snapshot_save_message(room_id, rev, strokes)
+        )
+        if not sent:
+            self._canvas_save_waiters.remove(waiter)
+            return None
+        try:
+            return await asyncio.wait_for(waiter, timeout=timeout)
+        except asyncio.TimeoutError:
+            return None
+        finally:
+            if waiter in self._canvas_save_waiters:
+                self._canvas_save_waiters.remove(waiter)
+
+    def _resolve_save_waiters(self, payload: dict[str, Any] | None = None) -> None:
+        for waiter in list(self._canvas_save_waiters):
+            if not waiter.done():
+                waiter.set_result(payload)
+        self._canvas_save_waiters.clear()
 
     async def close(self) -> None:
         """停止重连并关闭当前连接（可重复调用）。"""
         self._stopped = True
+        self._resolve_save_waiters(None)
         try:
             self._stop_event.set()
         except RuntimeError:

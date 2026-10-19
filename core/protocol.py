@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 from urllib.parse import quote, urlsplit, urlunsplit
 
 #: 协议版本（PROTOCOL.md §10，A=1）
@@ -18,6 +18,7 @@ CLIENT_VERSION = "1.0.0"
 
 #: HTTP 路径（目标契约 /api/v1，B 阶段落地）
 API_V1_LOGIN = "/api/v1/auth/login"
+API_V1_REGISTER = "/api/v1/auth/register"
 API_V1_ME = "/api/v1/users/me"
 API_V1_ROOMS = "/api/v1/rooms"
 API_HEALTH = "/health"
@@ -35,13 +36,15 @@ WS_JOIN_ROOM = "join_room"
 WS_LEAVE_ROOM = "leave_room"
 WS_CHAT_SEND = "chat_send"
 WS_CANVAS_OP = "canvas_op"
+WS_CANVAS_SNAPSHOT = "canvas_snapshot"
+WS_CANVAS_SNAPSHOT_SAVE = "canvas_snapshot_save"
+WS_CANVAS_SNAPSHOT_SAVED = "canvas_snapshot_saved"
 WS_SKILL_REPORT = "skill_report"
 WS_PING = "ping"
 WS_ROOM_JOINED = "room_joined"
 WS_USER_JOINED = "user_joined"
 WS_USER_LEFT = "user_left"
 WS_CHAT_MESSAGE = "chat_message"
-WS_CANVAS_SNAPSHOT = "canvas_snapshot"
 WS_SKILL_STATE = "skill_state"
 WS_HEARTBEAT = "heartbeat"
 WS_PONG = "pong"
@@ -64,6 +67,33 @@ def room_leave_path(room_code: str) -> str:
 
 def room_detail_path(room_code: str) -> str:
     return f"{API_V1_ROOMS}/{quote(str(room_code), safe='')}"
+
+
+def room_messages_path(room_id_or_code: str) -> str:
+    """聊天历史：``GET /api/v1/rooms/{room_id_or_code}/messages``（C）。"""
+    return f"{API_V1_ROOMS}/{quote(str(room_id_or_code), safe='')}/messages"
+
+
+def room_canvas_path(room_id_or_code: str) -> str:
+    """画板快照：``GET /api/v1/rooms/{room_id_or_code}/canvas``（D）。"""
+    return f"{API_V1_ROOMS}/{quote(str(room_id_or_code), safe='')}/canvas"
+
+
+def canvas_op_message(room_id: str, rev: int, op: Mapping[str, Any]) -> dict[str, Any]:
+    """WS ``canvas_op``（PROTOCOL §6.7）：rev 每连接每房间从 0 单调递增。"""
+    return {"type": WS_CANVAS_OP, "room_id": str(room_id), "rev": int(rev), "op": dict(op)}
+
+
+def canvas_snapshot_save_message(
+    room_id: str, rev: int, strokes: Sequence[Mapping[str, Any]]
+) -> dict[str, Any]:
+    """WS ``canvas_snapshot_save``（离开/关窗前全量落库）。"""
+    return {
+        "type": WS_CANVAS_SNAPSHOT_SAVE,
+        "room_id": str(room_id),
+        "rev": int(rev),
+        "strokes": [dict(op) for op in strokes],
+    }
 
 
 def ws_url_for(server_url: str, ws_path: str = "/ws") -> str:
@@ -98,7 +128,18 @@ def auth_message(token: str, protocol_version: int = PROTOCOL_VERSION) -> dict[s
 def join_room_message(
     room_code: str, password: str | None = None, request_id: str | None = None
 ) -> dict[str, Any]:
-    message: dict[str, Any] = {"type": WS_JOIN_ROOM, "room_code": str(room_code)}
+    """WS ``join_room``（PROTOCOL PR#9 §6.3）。
+
+    新字段 ``room_id_or_code`` 同时接受 5 位 code 与内部 id；同时保留旧字段
+    ``room_code`` 以兼容 B2b（服务端忽略未知字段）。前置条件：必须先通过
+    HTTP ``POST /rooms/{room_id_or_code}/join`` 成为成员，否则回 ``NOT_ROOM_MEMBER``。
+    ``password`` 在 C 起被服务端忽略（HTTP 已校验），保留仅用于旧服务端兼容。
+    """
+    message: dict[str, Any] = {
+        "type": WS_JOIN_ROOM,
+        "room_id_or_code": str(room_code),
+        "room_code": str(room_code),
+    }
     if password:
         message["password"] = password
     if request_id:
@@ -106,17 +147,36 @@ def join_room_message(
     return message
 
 
-def leave_room_message(room_id_or_code: str) -> dict[str, Any]:
-    return {"type": WS_LEAVE_ROOM, "room_id": str(room_id_or_code)}
+def leave_room_message(room_id_or_code: str | None = None) -> dict[str, Any]:
+    """WS ``leave_room``；PR#9 起服务端忽略房间参数（退出当前频道）。"""
+    message: dict[str, Any] = {"type": WS_LEAVE_ROOM}
+    if room_id_or_code:
+        # 旧字段+新字段都带，B2b 之前实现会读取
+        message["room_id"] = str(room_id_or_code)
+        message["room_id_or_code"] = str(room_id_or_code)
+    return message
 
 
-def chat_send_message(content: str, client_msg_id: str) -> dict[str, Any]:
-    return {
+def chat_send_message(
+    content: str,
+    client_msg_id: str,
+    room_id: str | None = None,
+    content_type: str = "text",
+) -> dict[str, Any]:
+    """WS ``chat_send``（PROTOCOL C 定稿）。
+
+    服务端用会话房间（不读 ``room_id``），但按联调约定仍带上房间引用，
+    便于服务端日志/未来多房间扩展；``client_msg_id`` 用于回显认领与重试。
+    """
+    message: dict[str, Any] = {
         "type": WS_CHAT_SEND,
         "client_msg_id": client_msg_id,
         "content": content,
-        "content_type": "text",
+        "content_type": content_type,
     }
+    if room_id:
+        message["room_id"] = str(room_id)
+    return message
 
 
 def ping_message(ts_ms: int) -> dict[str, Any]:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -206,7 +206,9 @@ class JoinRoomDialog(QDialog):
 
 
 class SettingsDialog(QDialog):
-    """连接设置：服务器地址 / WS 地址 / Mock 开关 / token 是否落盘。"""
+    """连接设置：服务器地址 / WS 地址 / Mock 开关 / token 是否落盘 / 连通性测试。"""
+
+    test_requested = Signal(str, str)  # (server_url 文本, ws_url 文本)
 
     def __init__(self, config: AppConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -245,9 +247,22 @@ class SettingsDialog(QDialog):
         self.save_token_check.setChecked(self._config.persist_token)
         root.addWidget(self.save_token_check)
 
+        test_row = QHBoxLayout()
+        self.test_button = QPushButton("测试连接")
+        self.test_button.clicked.connect(self._on_test_clicked)
+        test_row.addWidget(self.test_button)
+        test_row.addStretch(1)
+        root.addLayout(test_row)
+
+        self.test_result_label = QLabel()
+        self.test_result_label.setObjectName("Hint")
+        self.test_result_label.setWordWrap(True)
+        self.test_result_label.hide()
+        root.addWidget(self.test_result_label)
+
         hint = QLabel(
-            "提示：PROTOCOL B 阶段后端使用 wss://<host>/ws；A 现状后端 WS 在 8765 端口，"
-            "请显式填写 ws://<host>:8765。"
+            "提示：B2b 起 WS 与 HTTP 同端口（ws://<host>:8000/ws）；留空即可自动推导。"
+            "「测试连接」会请求 /health 与 /api/v1/rooms?page=1，并用当前登录 token 验证鉴权。"
         )
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
@@ -255,6 +270,28 @@ class SettingsDialog(QDialog):
 
         self.error_label = _error_label(root)
         _add_buttons(self, root, "保存")
+
+    def _on_test_clicked(self) -> None:
+        self.test_requested.emit(self.server_edit.text().strip(), self.ws_edit.text().strip())
+
+    def set_testing(self, testing: bool) -> None:
+        self.test_button.setEnabled(not testing)
+        self.test_button.setText("测试中…" if testing else "测试连接")
+        if testing:
+            self.test_result_label.setStyleSheet("")
+            self.test_result_label.setText("正在测试 /health 与 /api/v1/rooms?page=1 …")
+            self.test_result_label.show()
+
+    def set_test_result(self, text: str, ok: bool | None = None) -> None:
+        self.set_testing(False)
+        self.test_result_label.setText(str(text))
+        if ok is True:
+            self.test_result_label.setStyleSheet("color: #8be3a8;")
+        elif ok is False:
+            self.test_result_label.setStyleSheet("color: #ff9b8f;")
+        else:
+            self.test_result_label.setStyleSheet("")
+        self.test_result_label.show()
 
     def accept(self) -> None:  # noqa: D401 - Qt 覆盖
         self.error_label.hide()
