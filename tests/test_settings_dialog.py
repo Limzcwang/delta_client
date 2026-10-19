@@ -46,7 +46,7 @@ class SettingsOperatorTests(unittest.TestCase):
 
     def test_dropdown_has_16_operators_and_selects_saved(self) -> None:
         dialog = self._dialog("weilong")
-        self.assertEqual(4, dialog.tabs.count())
+        self.assertEqual(5, dialog.tabs.count())
         self.assertEqual(17, dialog.operator_combo.count())
         self.assertEqual("weilong", dialog.operator_combo.currentData())
         self.assertIn("威龙", dialog.operator_combo.currentText())
@@ -56,6 +56,22 @@ class SettingsOperatorTests(unittest.TestCase):
         self.assertTrue(
             any("版本 v0.1.3" in label.text() for label in dialog.findChildren(QLabel))
         )
+
+    def test_hud_tab_has_calibration_detection_and_auto_operator(self) -> None:
+        dialog = self._dialog("weilong")
+        labels = [dialog.tabs.tabText(index) for index in range(dialog.tabs.count())]
+        self.assertEqual(["连接", "HUD / 采屏", "干员", "悬浮窗", "个人资料"], labels)
+        self.assertEqual(dialog.tabs.widget(1), dialog.calibration_button.parent())
+        self.assertIsNotNone(dialog.calibration_button)
+        self.assertIsNotNone(dialog.detect_window_button)
+        self.assertTrue(dialog.auto_operator_check.isChecked())
+        self.assertAlmostEqual(0.70, dialog.operator_threshold_spin.value())
+        dialog.auto_operator_check.setChecked(False)
+        dialog.operator_threshold_spin.setValue(0.83)
+        dialog.accept()
+        result = dialog.config_result()
+        self.assertFalse(result.auto_operator_enabled)
+        self.assertAlmostEqual(0.83, result.operator_recognition_threshold)
 
     def test_config_center_labels_and_check_button(self) -> None:
         from types import SimpleNamespace
@@ -122,6 +138,11 @@ class SettingsOperatorTests(unittest.TestCase):
         result = dialog.config_result()
         self.assertEqual("DeltaForceClient-Win64-Shipping.exe", result.capture_window_process)
         self.assertEqual("三角洲行动", result.capture_window_title)
+
+    def test_operator_recognition_status(self) -> None:
+        dialog = self._dialog("weilong")
+        dialog.set_operator_recognition_status("当前识别：红狼（置信度 0.83）")
+        self.assertIn("红狼", dialog.operator_recognition_label.text())
 
     def test_overlay_shortcut_conflict_rejected(self) -> None:
         dialog = self._dialog("honglang")

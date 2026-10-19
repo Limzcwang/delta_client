@@ -308,6 +308,7 @@ class SettingsDialog(QDialog):
     nickname_save_requested = Signal(str)
     password_change_requested = Signal(str, str)  # (旧密码, 新密码)
     config_check_requested = Signal()
+    operator_recognition_requested = Signal()
 
     def __init__(
         self,
@@ -345,9 +346,10 @@ class SettingsDialog(QDialog):
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_connection_tab(), "连接")
-        self.tabs.addTab(self._build_profile_tab(), "个人资料")
+        self.tabs.addTab(self._build_hud_tab(), "HUD / 采屏")
         self.tabs.addTab(self._build_operator_tab(), "干员")
         self.tabs.addTab(self._build_overlay_tab(), "悬浮窗")
+        self.tabs.addTab(self._build_profile_tab(), "个人资料")
         root.addWidget(self.tabs, stretch=1)
 
         self.error_label = _error_label(root)
@@ -406,13 +408,101 @@ class SettingsDialog(QDialog):
         layout.addStretch(1)
         return page
 
+    def _build_hud_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(4, 10, 4, 4)
+        layout.setSpacing(8)
+
+        self.auto_capture_check = QCheckBox("允许截图采集（仅内存，不落盘/不上传）")
+        self.auto_capture_check.setChecked(self._config.auto_capture_enabled)
+        layout.addWidget(self.auto_capture_check)
+        self.auto_loop_check = QCheckBox("自动识别并共享（按采样间隔抓帧；变化才上报）")
+        self.auto_loop_check.setChecked(self._config.auto_loop_enabled)
+        layout.addWidget(self.auto_loop_check)
+        interval_row = QHBoxLayout()
+        interval_row.addWidget(QLabel("采样间隔"))
+        self.auto_interval_combo = QComboBox()
+        for value in (1000, 2000, 3000):
+            self.auto_interval_combo.addItem(f"{value} ms", value)
+        index = self.auto_interval_combo.findData(int(self._config.auto_sample_ms))
+        self.auto_interval_combo.setCurrentIndex(max(0, index))
+        interval_row.addWidget(self.auto_interval_combo)
+        interval_row.addStretch(1)
+        layout.addLayout(interval_row)
+
+        self.auto_operator_check = QCheckBox("自动识别干员（命中后覆盖手动选择并持久化）")
+        self.auto_operator_check.setChecked(bool(self._config.auto_operator_enabled))
+        layout.addWidget(self.auto_operator_check)
+        threshold_row = QHBoxLayout()
+        threshold_row.addWidget(QLabel("识别信心阈值"))
+        self.operator_threshold_spin = QDoubleSpinBox()
+        self.operator_threshold_spin.setRange(0.50, 0.95)
+        self.operator_threshold_spin.setSingleStep(0.01)
+        self.operator_threshold_spin.setValue(float(self._config.operator_recognition_threshold))
+        threshold_row.addWidget(self.operator_threshold_spin)
+        threshold_row.addStretch(1)
+        layout.addLayout(threshold_row)
+        rec_row = QHBoxLayout()
+        self.operator_recognition_label = QLabel("当前识别：-")
+        self.operator_recognition_label.setObjectName("Hint")
+        self.operator_recheck_button = QPushButton("重新识别")
+        self.operator_recheck_button.clicked.connect(self.operator_recognition_requested.emit)
+        rec_row.addWidget(self.operator_recognition_label, stretch=1)
+        rec_row.addWidget(self.operator_recheck_button)
+        layout.addLayout(rec_row)
+
+        layout.addWidget(QLabel("游戏窗口 / 采屏诊断"))
+        row = QHBoxLayout()
+        self.capture_window_button = QPushButton("选择游戏窗口")
+        self.capture_window_button.clicked.connect(self._open_window_picker)
+        self.detect_window_button = QPushButton("检测窗口")
+        self.detect_window_button.clicked.connect(self._detect_game_window)
+        self.refresh_frame_button = QPushButton("重新抓帧")
+        self.refresh_frame_button.clicked.connect(self._detect_game_window)
+        row.addWidget(self.capture_window_button)
+        row.addWidget(self.detect_window_button)
+        row.addWidget(self.refresh_frame_button)
+        layout.addLayout(row)
+        self.capture_window_status = QLabel(self._capture_target_text())
+        self.capture_window_status.setObjectName("Hint")
+        self.capture_window_status.setWordWrap(True)
+        layout.addWidget(self.capture_window_status)
+        self.capture_method_label = QLabel("采集方式：mss（默认；WGC 仅独占全屏可选）")
+        self.capture_method_label.setObjectName("Hint")
+        layout.addWidget(self.capture_method_label)
+        self.capture_stats_label = QLabel("帧尺寸/均值：-；最后错误：-")
+        self.capture_stats_label.setObjectName("Hint")
+        self.capture_stats_label.setWordWrap(True)
+        layout.addWidget(self.capture_stats_label)
+
+        calibration_row = QHBoxLayout()
+        self.calibration_button = QPushButton("HUD 标定…")
+        self.calibration_button.clicked.connect(self._open_calibration)
+        self.hud_status_label = QLabel("未标定：识别前请框选技能栏" if not self._hud_profile else "已保存 HUD 标定")
+        self.hud_status_label.setObjectName("Hint")
+        calibration_row.addWidget(self.calibration_button)
+        calibration_row.addWidget(self.hud_status_label, stretch=1)
+        layout.addLayout(calibration_row)
+
+        hint = QLabel(
+            "默认 HUD 配置为 2560×1440（技能栏 + 底部干员头像 ROI）；其他分辨率会按窗口客户区自动缩放。"
+            "自动识别命中后立即刷新面板/悬浮窗/上报。"
+            "标定/检测/重新抓帧时会临时隐藏设置窗口；若预览仍不是游戏画面，请把客户端移到副屏或最小化后重试。"
+        )
+        hint.setObjectName("Hint")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        layout.addStretch(1)
+        return page
+
     def _build_operator_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(4, 10, 4, 4)
         layout.setSpacing(8)
 
-        layout.addWidget(QLabel("我的干员（用于技能面板与上报；E3b 识别结果会覆盖）"))
+        layout.addWidget(QLabel("我的干员（手动选择；自动识别命中后会覆盖）"))
         self.operator_combo = QComboBox()
         for operator in self._catalog:
             self.operator_combo.addItem(operator.display_name, operator.id)
@@ -451,38 +541,9 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.config_check_result)
         self.refresh_operator_config_info(self._config_manager)
 
-        calibration_row = QHBoxLayout()
-        self.capture_window_button = QPushButton("选择游戏窗口")
-        self.capture_window_button.clicked.connect(self._open_window_picker)
-        self.detect_window_button = QPushButton("检测窗口")
-        self.detect_window_button.clicked.connect(self._detect_game_window)
-        calibration_row.addWidget(self.capture_window_button)
-        calibration_row.addWidget(self.detect_window_button)
-        layout.addLayout(calibration_row)
-        self.capture_window_status = QLabel(self._capture_target_text())
-        self.capture_window_status.setObjectName("Hint")
-        self.capture_window_status.setWordWrap(True)
-        layout.addWidget(self.capture_window_status)
-        self.capture_method_label = QLabel("采集方式：mss（默认；WGC 仅独占全屏可选）")
-        self.capture_method_label.setObjectName("Hint")
-        layout.addWidget(self.capture_method_label)
-        self.capture_stats_label = QLabel("帧尺寸/均值：-；最后错误：-")
-        self.capture_stats_label.setObjectName("Hint")
-        self.capture_stats_label.setWordWrap(True)
-        layout.addWidget(self.capture_stats_label)
-
-        calibration_row = QHBoxLayout()
-        self.calibration_button = QPushButton("HUD 标定…")
-        self.calibration_button.clicked.connect(self._open_calibration)
-        self.hud_status_label = QLabel("未标定：识别前请框选技能栏" if not self._hud_profile else "已保存 HUD 标定")
-        self.hud_status_label.setObjectName("Hint")
-        calibration_row.addWidget(self.calibration_button)
-        calibration_row.addWidget(self.hud_status_label, stretch=1)
-        layout.addLayout(calibration_row)
-
         hint = QLabel(
-            "干员配置来自 assets/operators.json；无秒数的槽位会显示「CD未知」，不参与倒计时与上报。"
-            "头像模板缺失时使用首字母占位。"
+            "干员配置来自配置中心/本地缓存/内置 assets/operators.json；无秒数的槽位显示「CD未知」。"
+            "HUD 标定与窗口选择已移至「HUD / 采屏」tab。"
         )
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
@@ -571,6 +632,7 @@ class SettingsDialog(QDialog):
         try:
             from capture.sources import open_source, validate_frame
             from capture.window import find_game_window
+            from ui.capture_utils import grab_frame_hidden
 
             keywords = (self._capture_title,) if self._capture_title else None
             kwargs = {"title_keywords": keywords} if keywords else {}
@@ -590,7 +652,7 @@ class SettingsDialog(QDialog):
                 self.capture_stats_label.setText(f"帧尺寸/均值：-；最后错误：{method}")
                 return
             try:
-                frame = source.grab()
+                frame = grab_frame_hidden(self, source)
                 error = str(getattr(source, "last_error", "") or "")
             finally:
                 source.close()
@@ -614,37 +676,42 @@ class SettingsDialog(QDialog):
             from capture.sources import open_source
             from core.hud_profile import HudProfile
             from ui.calibration_dialog import HudCalibrationDialog
+            from ui.capture_utils import grab_frame_hidden
 
-            source, message = open_source(
-                process_name=self._capture_process,
-                title_keyword=self._capture_title,
-            )
-            self.capture_method_label.setText(f"采集方式：{message}")
-            if source is None:
-                self.capture_stats_label.setText(f"帧尺寸/均值：-；最后错误：{message}")
-                QMessageBox.warning(self, "HUD 标定", message)
-                return
-            try:
-                frame = source.grab()
-                last_error = str(getattr(source, "last_error", "") or "")
-            finally:
-                source.close()
-            if frame is None:
-                self.capture_stats_label.setText(f"帧尺寸/均值：-；最后错误：{last_error or message}")
-                QMessageBox.warning(self, "HUD 标定", last_error or "未取到有效画面")
-                return
-            self.capture_stats_label.setText(
-                f"帧尺寸/均值：{frame.width}×{frame.height}（{message}）；最后错误：-"
-            )
-            dialog = HudCalibrationDialog(
-                frame.image, HudProfile.from_dict(self._hud_profile or {}), self
-            )
-            if dialog.exec() == QDialog.DialogCode.Accepted:
-                profile = dialog.result_profile()
-                self._hud_profile = profile.to_dict()
-                self.hud_status_label.setText(
-                    f"已标定：技能栏 {profile.skill_bar.width}×{profile.skill_bar.height}"
+            while True:
+                source, message = open_source(
+                    process_name=self._capture_process,
+                    title_keyword=self._capture_title,
                 )
+                self.capture_method_label.setText(f"采集方式：{message}")
+                if source is None:
+                    self.capture_stats_label.setText(f"帧尺寸/均值：-；最后错误：{message}")
+                    QMessageBox.warning(self, "HUD 标定", message)
+                    return
+                try:
+                    frame = grab_frame_hidden(self, source)
+                    last_error = str(getattr(source, "last_error", "") or "")
+                finally:
+                    source.close()
+                if frame is None:
+                    self.capture_stats_label.setText(f"帧尺寸/均值：-；最后错误：{last_error or message}")
+                    QMessageBox.warning(self, "HUD 标定", last_error or "未取到有效画面")
+                    return
+                self.capture_stats_label.setText(
+                    f"帧尺寸/均值：{frame.width}×{frame.height}（{message}）；最后错误：-"
+                )
+                dialog = HudCalibrationDialog(
+                    frame.image, HudProfile.from_dict(self._hud_profile or {}), self
+                )
+                if dialog.exec() == QDialog.DialogCode.Accepted:
+                    profile = dialog.result_profile()
+                    self._hud_profile = profile.to_dict()
+                    self.hud_status_label.setText(
+                        f"已标定：技能栏 {profile.skill_bar.width}×{profile.skill_bar.height}"
+                    )
+                    return
+                if not dialog.refresh_requested:
+                    return
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "HUD 标定失败", str(exc))
 
@@ -656,23 +723,6 @@ class SettingsDialog(QDialog):
         self.overlay_enabled_check = QCheckBox("启用技能 CD 悬浮窗（默认关闭；仅无边框窗口模式）")
         self.overlay_enabled_check.setChecked(self._config.overlay_enabled)
         layout.addWidget(self.overlay_enabled_check)
-
-        self.auto_capture_check = QCheckBox("允许截图采集（E3b，仅内存，不落盘/不上传）")
-        self.auto_capture_check.setChecked(self._config.auto_capture_enabled)
-        layout.addWidget(self.auto_capture_check)
-        self.auto_loop_check = QCheckBox("自动识别并共享（每 2s 抓帧；变化才上报）")
-        self.auto_loop_check.setChecked(self._config.auto_loop_enabled)
-        layout.addWidget(self.auto_loop_check)
-        interval_row = QHBoxLayout()
-        interval_row.addWidget(QLabel("采样间隔"))
-        self.auto_interval_combo = QComboBox()
-        for value in (1000, 2000, 3000):
-            self.auto_interval_combo.addItem(f"{value} ms", value)
-        index = self.auto_interval_combo.findData(int(self._config.auto_sample_ms))
-        self.auto_interval_combo.setCurrentIndex(max(0, index))
-        interval_row.addWidget(self.auto_interval_combo)
-        interval_row.addStretch(1)
-        layout.addLayout(interval_row)
 
         row = QHBoxLayout()
         row.addWidget(QLabel("透明度（%）"))
@@ -722,6 +772,9 @@ class SettingsDialog(QDialog):
 
     def set_overlay_status(self, text: str) -> None:
         self.overlay_status_label.setText(f"当前状态：{text}")
+
+    def set_operator_recognition_status(self, text: str) -> None:
+        self.operator_recognition_label.setText(text)
 
     def set_server_migrated(self, migrated: bool) -> None:
         self.server_migrated_label.setVisible(bool(migrated))
@@ -904,6 +957,8 @@ class SettingsDialog(QDialog):
             auto_sample_ms=int(self.auto_interval_combo.currentData() or 2000),
             capture_window_process=self._capture_process,
             capture_window_title=self._capture_title,
+            auto_operator_enabled=self.auto_operator_check.isChecked(),
+            operator_recognition_threshold=float(self.operator_threshold_spin.value()),
             source="file",
         )
         super().accept()

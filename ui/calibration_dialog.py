@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -20,9 +21,11 @@ from PySide6.QtWidgets import (
 
 from core.hud_profile import HudProfile, Roi
 
+logger = logging.getLogger(__name__)
+
 
 def qimage_from_frame(frame: Any) -> QImage:
-    """numpy BGR/BGRA 或 QImage -> QImage（深拷贝，帧可释放）。"""
+    """numpy BGR/BGRA 或 QImage -> QImage；失败记录日志而不是静默空图。"""
     if isinstance(frame, QImage):
         return frame.copy()
     try:
@@ -30,19 +33,26 @@ def qimage_from_frame(frame: Any) -> QImage:
 
         array = np.asarray(frame)
         if array.ndim == 2:
+            arr = np.ascontiguousarray(array, dtype=np.uint8)
             return QImage(
-                array.data, array.shape[1], array.shape[0], int(array.strides[0]), QImage.Format.Format_Grayscale8
+                arr.tobytes(),
+                int(arr.shape[1]),
+                int(arr.shape[0]),
+                int(arr.strides[0]),
+                QImage.Format.Format_Grayscale8,
             ).copy()
         if array.ndim == 3 and array.shape[2] >= 3:
+            arr = np.ascontiguousarray(array[:, :, :3], dtype=np.uint8)
             return QImage(
-                array.data,
-                array.shape[1],
-                array.shape[0],
-                int(array.strides[0]),
+                arr.tobytes(),
+                int(arr.shape[1]),
+                int(arr.shape[0]),
+                int(arr.strides[0]),
                 QImage.Format.Format_BGR888,
             ).copy()
-    except Exception:  # noqa: BLE001
-        pass
+        logger.warning("预览帧转换失败：不支持的数组形状 %s", getattr(array, "shape", None))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("预览帧转换失败：%s", exc, exc_info=True)
     return QImage()
 
 
@@ -171,6 +181,8 @@ class HudCalibrationDialog(QDialog):
         image = qimage_from_frame(frame)
         if image.isNull() and isinstance(frame, (str, Path)):
             image = QImage(str(frame))
+        self.refresh_requested = False
+        self._preview_error = "预览生成失败：无法把抓取帧转换为图像。请重新抓帧；若仍失败请把客户端移到副屏或最小化后重试。"
         self._build(image)
 
     def _build(self, image: QImage) -> None:
@@ -180,6 +192,12 @@ class HudCalibrationDialog(QDialog):
         title = QLabel("在截图上框选「技能栏整体」，自动等分为 3 槽（大招/技能/投掷物）")
         title.setWordWrap(True)
         root.addWidget(title)
+        if image.isNull():
+            error = QLabel(self._preview_error)
+            error.setObjectName("Error")
+            error.setWordWrap(True)
+            error.setStyleSheet("color:#ff9b8f;")
+            root.addWidget(error)
 
         self.preview = PreviewWidget(image, self.profile)
         self.preview.selection_changed.connect(self._on_selection)
@@ -194,6 +212,8 @@ class HudCalibrationDialog(QDialog):
         self.save_button = QPushButton("使用此标定")
         self.save_button.setObjectName("Primary")
         self.save_button.clicked.connect(self.accept)
+        self.refresh_button = QPushButton("重新抓帧")
+        self.refresh_button.clicked.connect(self._request_refresh)
         self.export_button = QPushButton("导出 JSON")
         self.export_button.clicked.connect(self._export)
         self.import_button = QPushButton("导入 JSON")
@@ -202,10 +222,15 @@ class HudCalibrationDialog(QDialog):
         cancel.clicked.connect(self.reject)
         row.addWidget(self.import_button)
         row.addWidget(self.export_button)
+        row.addWidget(self.refresh_button)
         row.addStretch(1)
         row.addWidget(cancel)
         row.addWidget(self.save_button)
         root.addLayout(row)
+
+    def _request_refresh(self) -> None:
+        self.refresh_requested = True
+        self.reject()
 
     def _on_selection(self, roi: Roi) -> None:
         self.profile.skill_bar = roi

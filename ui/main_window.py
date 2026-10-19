@@ -151,6 +151,12 @@ class MainWindow(QMainWindow):
         self._self_skill_state: SkillState | None = None
         self.operator_config = OperatorConfigManager()
         self.operator_catalog: OperatorCatalog = self.operator_config.catalog
+        self._recognized_operator_id = ""
+        self._recognized_operator_score = 0.0
+        self._operator_recognized_at = 0.0
+        self._operator_scan_at = 0.0
+        self._operator_recognition_text = "当前识别：-"
+        self.settings_dialog = None
         # F-c5：历史窗口文案（room_joined / 历史接口可选字段）
         self._history_window_days: int | None = None
 
@@ -1168,6 +1174,8 @@ class MainWindow(QMainWindow):
         self.operator_catalog = self.operator_config.catalog
         self.room_view.skill_panel.set_operator_catalog(self.operator_catalog)
         self.overlay.catalog = self.operator_catalog
+        self._recognized_operator_id = ""
+        self._operator_recognized_at = 0.0
         self._sync_overlay_states()
         self._on_operator_changed()
 
@@ -1187,7 +1195,10 @@ class MainWindow(QMainWindow):
         from core.hud_pipeline import recognize_frame
         from core.hud_profile import HudProfile
 
+        self._recognize_operator_frame(frame.image)
         profile = HudProfile.from_dict(self.config.hud_profile or {})
+        if frame.width and frame.height:
+            profile = profile.scaled(frame.width, frame.height)
         return recognize_frame(frame.image, profile, operator=self._selected_operator())
 
     def _apply_auto_config(self) -> None:
@@ -1228,6 +1239,86 @@ class MainWindow(QMainWindow):
         self._sync_overlay_states()
         if self._skill_share_enabled:
             self._send_skill_state(state)
+
+    def _recognize_operator_frame(self, image, force: bool = False):
+        """头像模板匹配；命中后持久化 operator_id 并刷新面板/悬浮窗。"""
+        if not self.config.auto_operator_enabled and not force:
+            return None
+        now = time.monotonic()
+        if (
+            not force
+            and self._recognized_operator_id
+            and now - self._operator_recognized_at < 30.0
+        ):
+            return self.operator_catalog.get(self._recognized_operator_id)
+        try:
+            from core.hud_profile import HudProfile
+            from core.operator_match import recognize_operator
+
+            profile = HudProfile.from_dict(self.config.hud_profile or {})
+            if image is not None and getattr(image, "shape", None):
+                height, width = int(image.shape[0]), int(image.shape[1])
+                profile = profile.scaled(width, height)
+            operator_id, score = recognize_operator(
+                image,
+                profile.avatar_roi,
+                self.operator_catalog,
+                float(self.config.operator_recognition_threshold),
+            )
+            self._operator_scan_at = now
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("干员头像识别失败：%s", exc)
+            return None
+        if not operator_id:
+            if force:
+                self._update_operator_recognition_status(None, score)
+            return None
+        operator = self.operator_catalog.get(operator_id)
+        if operator is None:
+            return None
+        changed = operator.id != self.config.operator_id
+        self.config = replace(self.config, operator_id=operator.id)
+        try:
+            save_config(self.config)
+        except OSError:
+            pass
+        self._recognized_operator_id = operator.id
+        self._recognized_operator_score = float(score)
+        self._operator_recognized_at = now
+        self._apply_operator_identity(operator, float(score))
+        if changed:
+            logger.info("自动识别干员：%s（%.2f）", operator.display_name, score)
+        return operator
+
+    def _apply_operator_identity(self, operator: Operator, score: float) -> None:
+        state = self._self_skill_state
+        if state is not None:
+            state = replace(
+                state,
+                operator_id=operator.id,
+                operator=operator.display_name,
+            )
+            self._self_skill_state = state
+            self._skills.update(state)
+            self.room_view.skill_panel.upsert(state)
+            self._sync_overlay_states()
+            if self._skill_share_enabled:
+                self._send_skill_state(state)
+        self._update_operator_recognition_status(operator, score)
+        if hasattr(self, "settings_dialog") and self.settings_dialog is not None:
+            self.settings_dialog.refresh_operator_catalog(self.operator_catalog)
+            self.settings_dialog.set_operator_recognition_status(
+                f"当前识别：{operator.display_name}（置信度 {score:.2f}）"
+            )
+
+    def _update_operator_recognition_status(self, operator: Operator | None, score: float) -> None:
+        if operator is None:
+            text = f"当前识别：未命中（最高 {score:.2f}），使用手动选择"
+        else:
+            text = f"当前识别：{operator.display_name}（置信度 {score:.2f}）"
+        self._operator_recognition_text = text
+        if hasattr(self, "settings_dialog") and self.settings_dialog is not None:
+            self.settings_dialog.set_operator_recognition_status(text)
 
     def _find_game_window(self):
         try:
@@ -1354,6 +1445,37 @@ class MainWindow(QMainWindow):
         else:
             self.room_view.set_status("已模拟本地技能状态（技能共享未开启，未上报）")
 
+    def _on_manual_operator_recognition(self, dialog: SettingsDialog) -> None:
+        try:
+            from capture.sources import open_source
+            from ui.capture_utils import grab_frame_hidden
+
+            source, message = open_source(
+                process_name=self.config.capture_window_process,
+                title_keyword=self.config.capture_window_title,
+            )
+            if source is None:
+                dialog.set_operator_recognition_status(f"识别失败：{message}")
+                return
+            try:
+                frame = grab_frame_hidden(self, source)
+            finally:
+                source.close()
+            if frame is None:
+                dialog.set_operator_recognition_status("识别失败：未取到游戏画面")
+                return
+            operator = self._recognize_operator_frame(frame.image, force=True)
+            if operator is None:
+                dialog.set_operator_recognition_status(
+                    "当前识别：未命中，使用手动选择"
+                )
+            else:
+                dialog.set_operator_recognition_status(
+                    f"当前识别：{operator.display_name}（置信度 {self._recognized_operator_score:.2f}）"
+                )
+        except Exception as exc:  # noqa: BLE001
+            dialog.set_operator_recognition_status(f"识别失败：{exc}")
+
     def _selected_operator(self) -> Operator | None:
         operator = self.operator_catalog.get(self.config.operator_id)
         if operator is not None:
@@ -1449,6 +1571,7 @@ class MainWindow(QMainWindow):
             from capture.sources import open_source
             from core.hud_pipeline import recognize_frame, to_skill_state
             from core.hud_profile import HudProfile
+            from ui.capture_utils import grab_frame_hidden
 
             source, message = open_source(
                 process_name=self.config.capture_window_process,
@@ -1458,7 +1581,7 @@ class MainWindow(QMainWindow):
                 self.room_view.set_status(f"HUD 识别不可用：{message}", error=True)
                 return
             try:
-                frame = source.grab()
+                frame = grab_frame_hidden(self, source, only_if_active=True)
             finally:
                 last_error = str(getattr(source, "last_error", "") or "")
                 source.close()
@@ -1469,7 +1592,10 @@ class MainWindow(QMainWindow):
                 self.room_view.set_status(f"HUD 识别失败：{reason}", error=True)
                 logger.warning("HUD 抓帧失败：%s", reason)
                 return
+            self._recognize_operator_frame(frame.image)
             profile = HudProfile.from_dict(self.config.hud_profile or {})
+            if frame.width and frame.height:
+                profile = profile.scaled(frame.width, frame.height)
             operator = self._selected_operator()
             recognized = recognize_frame(frame.image, profile, operator=operator)
             state = to_skill_state(
@@ -1603,7 +1729,7 @@ class MainWindow(QMainWindow):
 
     # ---------- 设置（含个人资料） ----------
     def _on_profile(self) -> None:
-        self._open_settings(start_tab=1)
+        self._open_settings(start_tab=4)
 
     def _on_nickname_save(self, dialog: SettingsDialog, nickname: str) -> None:
         self._safe_submit(
@@ -1972,6 +2098,8 @@ class MainWindow(QMainWindow):
     # ---------- 设置 ----------
     def _on_operator_changed(self) -> None:
         """设置页切换干员后：刷新自己的模拟状态；开启共享时立即按新干员上报。"""
+        self._recognized_operator_id = ""
+        self._operator_recognized_at = 0.0
         self._self_skill_state = None
         if self._current_room is None:
             return
@@ -1990,8 +2118,12 @@ class MainWindow(QMainWindow):
 
     def _open_settings(self, start_tab: int = 0) -> None:
         dialog = SettingsDialog(self.config, self, self.operator_catalog, self.operator_config)
+        self.settings_dialog = dialog
         dialog.config_check_requested.connect(
             lambda: self._refresh_operator_config(silent=False, dialog=dialog)
+        )
+        dialog.operator_recognition_requested.connect(
+            lambda: self._on_manual_operator_recognition(dialog)
         )
         dialog.test_requested.connect(
             lambda server_text, ws_text: self._on_test_connection(dialog, server_text, ws_text)
@@ -2008,8 +2140,11 @@ class MainWindow(QMainWindow):
         dialog.set_nickname(self.session.nickname or self.session.username)
         dialog.set_overlay_status(self.overlay_controller.last_reason or "未附加")
         dialog.set_server_migrated(self.config.server_migrated)
-        dialog.tabs.setCurrentIndex(0 if start_tab <= 0 else 1)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+        dialog.set_operator_recognition_status(self._operator_recognition_text)
+        dialog.tabs.setCurrentIndex(max(0, min(int(start_tab), dialog.tabs.count() - 1)))
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        self.settings_dialog = None
+        if not accepted:
             return
         new_config = dialog.config_result()
         old_operator_id = self.config.operator_id
