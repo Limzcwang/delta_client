@@ -131,6 +131,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.check:
         return _check_dependencies(config)
 
+    if sys.platform == "win32":
+        try:
+            from capture.window import ensure_dpi_aware
+
+            ensure_dpi_aware()
+        except Exception:  # noqa: BLE001
+            pass
+
     try:
         from PySide6.QtGui import QIcon
         from PySide6.QtWidgets import QApplication, QMessageBox

@@ -19,7 +19,7 @@ from typing import Any, Awaitable, Callable, Mapping
 from core import protocol
 from core.backoff import ReconnectBackoff
 from core.models import now_ms
-from core.ws_close import AUTH_ERROR, REPLACED, RESTARTING, classify_close
+from core.ws_close import AUTH_FAILED, REPLACED, RESTARTING, classify_close, classify_open_error
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +137,7 @@ class WsClient:
                 ws = await self._open()
                 await self._serve(ws)
             except WsAuthError as exc:
-                self._set_state("auth_error", message=str(exc))
+                self._set_state("auth_failed", message=str(exc))
                 return
             except asyncio.CancelledError:
                 raise
@@ -145,6 +145,11 @@ class WsClient:
                 self._set_state("error", message=str(exc))
                 return
             except Exception as exc:
+                action = classify_open_error(exc)
+                if action == AUTH_FAILED:
+                    logger.info("WebSocket 握手认证失败：%s", exc)
+                    self._set_state("auth_failed", message="登录已失效")
+                    return
                 logger.info("WebSocket 连接中断：%s", exc)
                 self._set_state("reconnecting", error=str(exc))
             finally:
@@ -164,8 +169,8 @@ class WsClient:
             if action == REPLACED:
                 self._set_state("replaced", message="账号已在其他设备登录")
                 return
-            if action == AUTH_ERROR:
-                self._set_state("auth_error", message="认证失效")
+            if action == AUTH_FAILED:
+                self._set_state("auth_failed", message="登录已失效")
                 return
             if action == RESTARTING:
                 self._set_state("server_restarting", message="服务器更新中，正在重连")

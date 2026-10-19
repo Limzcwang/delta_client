@@ -14,6 +14,13 @@ DEFAULT_PROCESS_NAME = "DeltaForceClient-Win64-Shipping"
 DEFAULT_TITLE_KEYWORDS = ("三角洲", "Delta Force", "DeltaForce")
 MIN_CLIENT_WIDTH = 800
 MIN_CLIENT_HEIGHT = 600
+_OWN_PROCESS_NAMES = {"python", "pythonw", "deltaclient"}
+
+
+def _is_own_client(candidate: "WindowCandidate") -> bool:
+    if normalize_process_name(candidate.process_name) in _OWN_PROCESS_NAMES:
+        return True
+    return candidate.title.strip().lower().startswith("delta client")
 
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -37,6 +44,23 @@ _kernel32.QueryFullProcessImageNameW.argtypes = (
 )
 
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_DPI_READY = False
+
+
+def ensure_dpi_aware() -> None:
+    """让 GetClientRect 与 mss 截图都使用物理像素，避免 DPI 缩放错位。"""
+    global _DPI_READY
+    if _DPI_READY:
+        return
+    try:
+        # PER_MONITOR_AWARE_V2；已设置过会失败，忽略即可
+        _user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+    except Exception:  # noqa: BLE001
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception:  # noqa: BLE001
+            pass
+    _DPI_READY = True
 
 
 def normalize_process_name(name: str) -> str:
@@ -179,12 +203,18 @@ def _match_method(
     process_name: str,
     title_keywords: tuple[str, ...],
     min_size: tuple[int, int],
+    *,
+    allow_title: bool = True,
 ) -> str:
+    if _is_own_client(candidate):
+        return ""
     if candidate.client_width < min_size[0] or candidate.client_height < min_size[1]:
         return ""
     wanted = normalize_process_name(process_name)
     if wanted and normalize_process_name(candidate.process_name) == wanted:
         return "process"
+    if not allow_title:
+        return ""
     title_lower = candidate.title.lower()
     for keyword in title_keywords:
         if keyword and str(keyword).lower() in title_lower:
@@ -202,10 +232,14 @@ def find_game_window(
     """按进程名（忽略 .exe/大小写）-> 标题关键词兜底，要求可见且客户区足够大。"""
     all_candidates = list(candidates) if candidates is not None else _enumerate_candidates()
     best: tuple[str, WindowCandidate] | None = None
-    for candidate in all_candidates:
-        method = _match_method(candidate, process_name, title_keywords, min_size)
-        if method:
-            best = (method, candidate)
+    # 先按进程名匹配（最可靠），再按标题兜底，避免先枚举到同标题的客户端窗口。
+    for allow_title in (False, True):
+        for candidate in all_candidates:
+            method = _match_method(candidate, process_name, title_keywords, min_size, allow_title=allow_title)
+            if method:
+                best = (method, candidate)
+                break
+        if best is not None:
             break
     if best is None:
         if all_candidates:

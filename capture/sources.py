@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -14,7 +16,48 @@ from capture.window import (
     find_game_window,
 )
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_FPS = 2.0
+MIN_FRAME_MEAN = 5.0
+
+
+@dataclass(frozen=True)
+class FrameStats:
+    width: int
+    height: int
+    mean: float
+    source: str = ""
+
+    def label(self) -> str:
+        return f"{self.width}×{self.height} 均值 {self.mean:.1f}（{self.source}）"
+
+
+def frame_stats(image: Any, source: str = "") -> FrameStats | None:
+    try:
+        height, width = int(image.shape[0]), int(image.shape[1])
+        try:
+            import numpy as np  # type: ignore[import-not-found]
+
+            mean = float(np.asarray(image, dtype=np.float32).mean())
+        except ImportError:
+            mean = float(image.mean())
+        except Exception:
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+    return FrameStats(width=width, height=height, mean=mean, source=source)
+
+
+def validate_frame(image: Any, source: str = "") -> tuple[bool, str, FrameStats | None]:
+    stats = frame_stats(image, source)
+    if stats is None:
+        return False, "帧格式无效（无法读取宽高/像素）", None
+    if stats.width <= 0 or stats.height <= 0:
+        return False, f"帧尺寸无效：{stats.width}×{stats.height}", stats
+    if stats.mean < MIN_FRAME_MEAN:
+        return False, f"画面全黑/无内容：{stats.label()}", stats
+    return True, "", stats
 
 
 @dataclass
@@ -44,29 +87,52 @@ class MssSource:
         self.window = window
         self._sct = None
         self._mss = None
+        self.last_error = ""
 
     def grab(self) -> Frame | None:
+        self.last_error = ""
         try:
+            if self.window.is_minimized:
+                self.last_error = "游戏窗口已最小化"
+                return None
             if self._mss is None:
                 import mss  # type: ignore[import-not-found]
 
                 self._mss = mss
                 self._sct = mss.mss()
-            if self.window.is_minimized:
-                return None
-            shot = self._sct.grab(
-                {
-                    "left": self.window.client_left,
-                    "top": self.window.client_top,
-                    "width": self.window.client_width,
-                    "height": self.window.client_height,
-                }
-            )
+            left = int(self.window.client_left)
+            top = int(self.window.client_top)
+            width = int(self.window.client_width)
+            height = int(self.window.client_height)
             import numpy as np  # type: ignore[import-not-found]
 
-            image = np.asarray(shot, dtype=np.uint8)[:, :, :3]  # BGRA -> BGR
+            monitor = self._sct.monitors[0]
+            outside = (
+                left < monitor["left"]
+                or top < monitor["top"]
+                or left + width > monitor["left"] + monitor["width"]
+                or top + height > monitor["top"] + monitor["height"]
+            )
+            if outside:
+                shot = self._sct.grab(monitor)
+                image = np.asarray(shot, dtype=np.uint8)[:, :, :3]
+                x0 = max(0, left - monitor["left"])
+                y0 = max(0, top - monitor["top"])
+                image = image[y0 : y0 + height, x0 : x0 + width]
+            else:
+                shot = self._sct.grab(
+                    {"left": left, "top": top, "width": width, "height": height}
+                )
+                image = np.asarray(shot, dtype=np.uint8)[:, :, :3]  # BGRA -> BGR
+            valid, reason, stats = validate_frame(image, "mss")
+            if not valid:
+                self.last_error = reason
+                logger.warning("mss 帧无效：%s", reason)
+                return None
             return Frame(image=image, timestamp=time.time(), source="mss")
-        except Exception:  # noqa: BLE001 - 采集失败返回 None，由上层回退/暂停
+        except Exception as exc:  # noqa: BLE001 - 记录异常并让上层显示原因
+            self.last_error = f"mss 异常 {type(exc).__name__}: {exc}"
+            logger.warning("mss 抓帧异常：%s", exc, exc_info=True)
             return None
 
     def close(self) -> None:
@@ -89,6 +155,7 @@ class WgcSource:
         self._control = None
         self._capture = None
         self._closed = False
+        self.last_error = ""
         self._start()
 
     def _start(self) -> None:
@@ -105,10 +172,17 @@ class WgcSource:
         def on_frame_arrived(frame, _control) -> None:  # noqa: ANN001
             try:
                 image = frame.frame_buffer[:, :, :3].copy()
+                valid, reason, _stats = validate_frame(image, "wgc")
+                if not valid:
+                    self.last_error = reason
+                    logger.warning("WGC 帧无效：%s", reason)
+                    return
                 with self._condition:
                     self._latest = Frame(image=image, timestamp=time.time(), source="wgc")
                     self._condition.notify_all()
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                self.last_error = f"WGC 帧处理异常 {type(exc).__name__}: {exc}"
+                logger.warning("WGC 帧处理异常：%s", exc)
                 return
 
         @capture.event
@@ -120,13 +194,17 @@ class WgcSource:
         self._control = capture.start_free_threaded()
 
     def grab(self) -> Frame | None:
+        self.last_error = ""
         if self.window.is_minimized:
+            self.last_error = "游戏窗口已最小化"
             return None
         with self._condition:
             if self._latest is None and not self._closed:
                 self._condition.wait(timeout=self.timeout)
             frame = self._latest
             self._latest = None
+            if frame is None and not self.last_error:
+                self.last_error = "WGC 未收到帧"
             return frame
 
     def close(self) -> None:
@@ -148,8 +226,9 @@ def open_source(
     process_name: str = "",
     *,
     title_keyword: str = "",
+    prefer_wgc: bool | None = None,
 ) -> tuple[FrameSource | None, str]:
-    """优先 WGC，失败回退 mss；返回 (source, error/status)。"""
+    """默认 mss；仅显式 DELTA_CAPTURE_WGC=1 时先试 WGC（无边框窗口 WGC 常失败）。"""
     if window is None:
         keywords = (title_keyword,) if title_keyword else DEFAULT_TITLE_KEYWORDS
         result = find_game_window(process_name or DEFAULT_PROCESS_NAME, title_keywords=keywords)
@@ -158,14 +237,17 @@ def open_source(
             return None, result.reason
     if window.is_minimized:
         return None, "游戏窗口已最小化"
+    if prefer_wgc is None:
+        prefer_wgc = os.environ.get("DELTA_CAPTURE_WGC", "").strip().lower() in ("1", "true", "yes")
+    if prefer_wgc:
+        try:
+            return WgcSource(window), "wgc"
+        except Exception as exc:  # noqa: BLE001 - WGC 仅独占全屏可用
+            logger.warning("WGC 采集失败，回退 mss：%s", exc)
     try:
-        return WgcSource(window), "wgc"
-    except Exception as exc:  # noqa: BLE001 - WGC 不可用时回退
-        wgc_error = str(exc)
-    try:
-        return MssSource(window), f"mss (WGC 不可用: {wgc_error})"
+        return MssSource(window), "mss"
     except Exception as exc:  # noqa: BLE001
-        return None, f"WGC/mss 均不可用: {wgc_error}; {exc}"
+        return None, f"mss 不可用: {exc}"
 
 
 class CaptureWorker:
@@ -187,6 +269,7 @@ class CaptureWorker:
         self.frames = 0
         self.errors = 0
         self.paused = False
+        self.last_error = ""
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -208,10 +291,14 @@ class CaptureWorker:
                 self.paused = getattr(getattr(self.source, "window", None), "is_minimized", False)
                 if self.paused:
                     frame = None
+                    self.last_error = "游戏窗口已最小化"
                 else:
                     frame = self.source.grab()
+                    if frame is None:
+                        self.last_error = getattr(self.source, "last_error", "") or "未取到有效画面"
                 if frame is not None:
                     self.frames += 1
+                    self.last_error = ""
                     self.on_frame(frame)
             except Exception as exc:  # noqa: BLE001
                 self.errors += 1

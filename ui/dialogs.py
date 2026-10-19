@@ -463,6 +463,13 @@ class SettingsDialog(QDialog):
         self.capture_window_status.setObjectName("Hint")
         self.capture_window_status.setWordWrap(True)
         layout.addWidget(self.capture_window_status)
+        self.capture_method_label = QLabel("采集方式：mss（默认；WGC 仅独占全屏可选）")
+        self.capture_method_label.setObjectName("Hint")
+        layout.addWidget(self.capture_method_label)
+        self.capture_stats_label = QLabel("帧尺寸/均值：-；最后错误：-")
+        self.capture_stats_label.setObjectName("Hint")
+        self.capture_stats_label.setWordWrap(True)
+        layout.addWidget(self.capture_stats_label)
 
         calibration_row = QHBoxLayout()
         self.calibration_button = QPushButton("HUD 标定…")
@@ -562,6 +569,7 @@ class SettingsDialog(QDialog):
 
     def _detect_game_window(self) -> None:
         try:
+            from capture.sources import open_source, validate_frame
             from capture.window import find_game_window
 
             keywords = (self._capture_title,) if self._capture_title else None
@@ -569,14 +577,37 @@ class SettingsDialog(QDialog):
             result = find_game_window(self._capture_process, **kwargs)
             if result.window is None:
                 self.capture_window_status.setText(f"未找到：{result.reason}")
+                self.capture_stats_label.setText("帧尺寸/均值：-；最后错误：未找到游戏窗口")
+                return
+            window = result.window
+            self.capture_window_status.setText(
+                f"已找到（{result.reason}）：PID {window.pid} · {window.title} · "
+                f"{window.client_width}×{window.client_height}"
+            )
+            source, method = open_source(window=window)
+            if source is None:
+                self.capture_method_label.setText(f"采集方式：{method}")
+                self.capture_stats_label.setText(f"帧尺寸/均值：-；最后错误：{method}")
+                return
+            try:
+                frame = source.grab()
+                error = str(getattr(source, "last_error", "") or "")
+            finally:
+                source.close()
+            self.capture_method_label.setText(f"采集方式：{method}")
+            if frame is None:
+                self.capture_stats_label.setText(f"帧尺寸/均值：-；最后错误：{error or '未取到有效帧'}")
             else:
-                window = result.window
-                self.capture_window_status.setText(
-                    f"已找到（{result.reason}）：PID {window.pid} · {window.title} · "
-                    f"{window.client_width}×{window.client_height}"
-                )
+                _ok, reason, stats = validate_frame(frame.image, method)
+                if stats is None:
+                    self.capture_stats_label.setText(f"帧尺寸/均值：-；最后错误：{reason}")
+                else:
+                    self.capture_stats_label.setText(
+                        f"帧尺寸/均值：{stats.label()}；最后错误：-"
+                    )
         except Exception as exc:  # noqa: BLE001
             self.capture_window_status.setText(f"检测失败：{exc}")
+            self.capture_stats_label.setText(f"帧尺寸/均值：-；最后错误：{exc}")
 
     def _open_calibration(self) -> None:
         try:
@@ -588,16 +619,23 @@ class SettingsDialog(QDialog):
                 process_name=self._capture_process,
                 title_keyword=self._capture_title,
             )
+            self.capture_method_label.setText(f"采集方式：{message}")
             if source is None:
+                self.capture_stats_label.setText(f"帧尺寸/均值：-；最后错误：{message}")
                 QMessageBox.warning(self, "HUD 标定", message)
                 return
             try:
                 frame = source.grab()
+                last_error = str(getattr(source, "last_error", "") or "")
             finally:
                 source.close()
             if frame is None:
-                QMessageBox.warning(self, "HUD 标定", "未取到游戏画面：请确认游戏未最小化、未被遮挡。")
+                self.capture_stats_label.setText(f"帧尺寸/均值：-；最后错误：{last_error or message}")
+                QMessageBox.warning(self, "HUD 标定", last_error or "未取到有效画面")
                 return
+            self.capture_stats_label.setText(
+                f"帧尺寸/均值：{frame.width}×{frame.height}（{message}）；最后错误：-"
+            )
             dialog = HudCalibrationDialog(
                 frame.image, HudProfile.from_dict(self._hud_profile or {}), self
             )
