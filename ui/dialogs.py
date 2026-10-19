@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QPushButton,
     QRadioButton,
     QTabWidget,
@@ -22,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from config import AppConfig, ConfigError, normalize_server_url, normalize_ws_url
+from config import APP_VERSION, AppConfig, ConfigError, normalize_server_url, normalize_ws_url
 from core.models import Room
 from core.operators import OperatorCatalog, load_operator_catalog
 from state.saved_logins import SavedLoginInfo
@@ -314,6 +315,7 @@ class SettingsDialog(QDialog):
         self._config = config
         self._result: AppConfig | None = None
         self._catalog = catalog if catalog is not None else load_operator_catalog()
+        self._hud_profile: dict = dict(config.hud_profile or {})
         self._build()
 
     def _build(self) -> None:
@@ -322,11 +324,14 @@ class SettingsDialog(QDialog):
         root.setSpacing(10)
         heading = QLabel("设置")
         heading.setObjectName("PageTitle")
-        sub = QLabel("连接配置保存到 ~/.delta_client.json；个人资料修改成功后保持登录")
+        sub = QLabel("连接配置保存到 %APPDATA%\\DeltaClient\\config.json；个人资料修改成功后保持登录")
         sub.setObjectName("PageSubtitle")
         sub.setWordWrap(True)
         root.addWidget(heading)
         root.addWidget(sub)
+        version_label = QLabel(f"版本 v{APP_VERSION}")
+        version_label.setObjectName("Hint")
+        root.addWidget(version_label)
         root.addSpacing(6)
 
         self.tabs = QTabWidget()
@@ -409,6 +414,15 @@ class SettingsDialog(QDialog):
         self.operator_combo.currentIndexChanged.connect(self._refresh_operator_detail)
         self._refresh_operator_detail()
 
+        calibration_row = QHBoxLayout()
+        self.calibration_button = QPushButton("HUD 标定…")
+        self.calibration_button.clicked.connect(self._open_calibration)
+        self.hud_status_label = QLabel("未标定：识别前请框选技能栏" if not self._hud_profile else "已保存 HUD 标定")
+        self.hud_status_label.setObjectName("Hint")
+        calibration_row.addWidget(self.calibration_button)
+        calibration_row.addWidget(self.hud_status_label, stretch=1)
+        layout.addLayout(calibration_row)
+
         hint = QLabel(
             "干员配置来自 assets/operators.json；无秒数的槽位会显示「CD未知」，不参与倒计时与上报。"
             "头像模板缺失时使用首字母占位。"
@@ -434,6 +448,35 @@ class SettingsDialog(QDialog):
             else:
                 lines.append(f"{skill.slot_name}：{skill.name or '-'}，CD未知")
         self.operator_detail_label.setText("\n".join(lines))
+
+    def _open_calibration(self) -> None:
+        try:
+            from capture.sources import open_source
+            from core.hud_profile import HudProfile
+            from ui.calibration_dialog import HudCalibrationDialog
+
+            source, message = open_source()
+            if source is None:
+                QMessageBox.warning(self, "HUD 标定", message)
+                return
+            try:
+                frame = source.grab()
+            finally:
+                source.close()
+            if frame is None:
+                QMessageBox.warning(self, "HUD 标定", "未取到游戏画面：请确认游戏未最小化、未被遮挡。")
+                return
+            dialog = HudCalibrationDialog(
+                frame.image, HudProfile.from_dict(self._hud_profile or {}), self
+            )
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                profile = dialog.result_profile()
+                self._hud_profile = profile.to_dict()
+                self.hud_status_label.setText(
+                    f"已标定：技能栏 {profile.skill_bar.width}×{profile.skill_bar.height}"
+                )
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "HUD 标定失败", str(exc))
 
     def _build_profile_tab(self) -> QWidget:
         page = QWidget()
@@ -594,6 +637,7 @@ class SettingsDialog(QDialog):
             use_mock=self.mock_check.isChecked(),
             persist_token=self.save_token_check.isChecked(),
             operator_id=str(self.operator_combo.currentData() or ""),
+            hud_profile=self._hud_profile or None,
             source="file",
         )
         super().accept()

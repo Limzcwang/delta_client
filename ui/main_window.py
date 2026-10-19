@@ -201,6 +201,7 @@ class MainWindow(QMainWindow):
         self.room_view.kick_requested.connect(self._on_kick_requested)
         self.room_view.skill_panel.sharing_toggled.connect(self._on_skill_sharing_toggled)
         self.room_view.skill_panel.simulate_requested.connect(self._on_simulate_skill)
+        self.room_view.skill_panel.capture_requested.connect(self._on_hud_capture)
         self.room_view.canvas.stroke_finished.connect(self._on_canvas_strokes)
         self.room_view.canvas.clear_requested.connect(self._on_canvas_clear_requested)
 
@@ -1195,6 +1196,48 @@ class MainWindow(QMainWindow):
                 "skills": skills,
             }
         )
+
+    def _on_hud_capture(self) -> None:
+        """E3b：一次性抓取游戏窗口 + 识别技能栏，更新自己的状态/上报。"""
+        if self._current_room is None:
+            return
+        try:
+            from capture.sources import open_source
+            from core.hud_pipeline import recognize_frame, to_skill_state
+            from core.hud_profile import HudProfile
+
+            source, message = open_source()
+            if source is None:
+                self.room_view.set_status(f"HUD 识别不可用：{message}", error=True)
+                return
+            try:
+                frame = source.grab()
+            finally:
+                source.close()
+            if frame is None:
+                self.room_view.set_status("HUD 识别失败：未取到游戏画面（最小化/遮挡？）", error=True)
+                return
+            profile = HudProfile.from_dict(self.config.hud_profile or {})
+            operator = self._selected_operator()
+            recognized = recognize_frame(frame.image, profile, operator=operator)
+            state = to_skill_state(
+                recognized,
+                user_id=self._user_id(),
+                nickname=self._username(),
+                captured_at=self._server_now_ms(),
+                operator_id=operator.id if operator is not None else "",
+                operator_name=operator.display_name if operator is not None else "",
+            )
+            self._self_skill_state = state
+            self._skills.update(state)
+            self.room_view.skill_panel.upsert(state)
+            if self._skill_share_enabled:
+                self._send_skill_state(state)
+            count = sum(1 for slot in state.slots.values() if slot.state != "unknown")
+            self.room_view.set_status(f"HUD 识别完成：{count}/3 槽有结果")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("HUD 识别失败", exc_info=True)
+            self.room_view.set_status(f"HUD 识别失败：{exc}", error=True)
 
     def _on_skill_sharing_toggled(self, enabled: bool) -> None:
         self._skill_share_enabled = bool(enabled)

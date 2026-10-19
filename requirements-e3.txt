@@ -1,0 +1,10 @@
+# E3b HUD capture/OCR dependencies (Python 3.12 wheels)
+windows-capture==2.0.1
+mss==10.2.0
+rapidocr-onnxruntime==1.4.4
+opencv-python==5.0.0.93
+numpy==2.5.4
+shapely==2.2.0
+pyclipper==1.4.0
+onnxruntime==1.31.0
+Pillow==13.0.0

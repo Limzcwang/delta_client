@@ -25,7 +25,8 @@
       "https://wiki.biligame.com/deltaoperation2024/<干员名>（action=raw 原始 wikitext，2026-10 版）",
       "https://store.steampowered.com/news/app/2507950 （S11 公告与 2026-09-17 / 10-15 平衡补丁）",
       "18183 / 九游 / 3DM / 17173 / 游侠 等攻略站（大招 CD 交叉核对）"
-    ]
+    ],
+    "roster_note": "共 17 名干员；液氮（S10「裂变」工程干员）在 BWIKI 图鉴中被注释隐藏，按干员页补入"
   },
   "operators": [
     {
@@ -329,6 +330,31 @@
       ]
     },
     {
+      "id": "yedan",
+      "name": "液氮",
+      "avatar": "assets/operators/yedan.png",
+      "skills": [
+        {
+          "slot": 0,
+          "name": "连发冷凝榴弹",
+          "total_cd_ms": 110000,
+          "max_charges": 1
+        },
+        {
+          "slot": 1,
+          "name": "温感追踪震撼弹",
+          "total_cd_ms": 30000,
+          "max_charges": 2
+        },
+        {
+          "slot": 2,
+          "name": "杜瓦冷罐",
+          "total_cd_ms": 60000,
+          "max_charges": 2
+        }
+      ]
+    },
+    {
       "id": "luna",
       "name": "露娜",
       "avatar": "assets/operators/luna.png",
@@ -354,9 +380,9 @@
       ]
     },
     {
-      "id": "maixiaowen",
-      "name": "麦晓雯",
-      "avatar": "assets/operators/maixiaowen.png",
+      "id": "haizhua",
+      "name": "骇爪",
+      "avatar": "assets/operators/haizhua.png",
       "skills": [
         {
           "slot": 0,

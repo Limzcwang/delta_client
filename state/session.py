@@ -9,17 +9,15 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from core.validation import sanitize_user
+from state.paths import session_path
 
-SESSION_FILENAME = ".delta_client_session.json"
+SESSION_FILENAME = "session.json"
 SESSION_VERSION = 1
 
 
 def default_session_path() -> Path:
-    """会话文件默认路径：``~/.delta_client_session.json``。"""
-    override = str(os.environ.get("DELTA_SESSION_FILE", "") or "").strip()
-    if override:
-        return Path(override).expanduser()
-    return Path.home() / SESSION_FILENAME
+    """会话文件默认路径：``%APPDATA%\\DeltaClient\\session.json``。"""
+    return session_path()
 
 
 class Session:

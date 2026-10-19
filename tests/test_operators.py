@@ -19,8 +19,8 @@ from core.operators import (
 class OperatorConfigTests(unittest.TestCase):
     def test_real_config_has_16_operators(self) -> None:
         catalog = load_operator_catalog()
-        self.assertEqual(16, len(catalog))
-        self.assertEqual(16, len(catalog.ids()))
+        self.assertEqual(17, len(catalog))
+        self.assertEqual(17, len(catalog.ids()))
         self.assertIsNotNone(catalog.get("honglang"))
         self.assertIsNotNone(catalog.by_name("红狼"))
 
@@ -55,13 +55,15 @@ class OperatorConfigTests(unittest.TestCase):
         # 同干员的其它槽位仍正常
         self.assertTrue(catalog.get("wuming").cd_known(0))
 
-    def test_avatar_missing_uses_placeholder_signal(self) -> None:
+    def test_all_operator_avatars_present(self) -> None:
         catalog = load_operator_catalog()
-        honglang = catalog.get("honglang")
-        # 当前仓库没有 assets/operators/*.png：必须返回不可用而不是抛异常
-        self.assertFalse(honglang.avatar_available())
-        self.assertTrue(honglang.avatar_path().name.endswith(".png"))
-        self.assertFalse(catalog.get("no-such-operator") is not None)
+        self.assertEqual(17, len(catalog))
+        for operator in catalog:
+            with self.subTest(operator=operator.id):
+                self.assertTrue(operator.avatar_available(), f"{operator.id} 头像缺失")
+        # 不存在的干员仍应安全返回不可用
+        missing = Operator(id="no-such-operator", name="无")
+        self.assertFalse(missing.avatar_available())
 
     def test_missing_fields_tolerated(self) -> None:
         catalog = OperatorCatalog.from_payload(
@@ -128,3 +130,4 @@ class OperatorConfigTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
