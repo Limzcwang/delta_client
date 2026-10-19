@@ -74,14 +74,38 @@ class ChargeEventTests(unittest.TestCase):
     def test_charge_recovery_updates_state(self) -> None:
         tracker = SkillTransitionTracker()
         tracker.observe_charge(1, 1, 2, 35_000, 70_000, 1_000)
-        tracker.observe_charge(1, 2, 2, 35_000, 70_000, 2_000)
-        charges, ready_at, remaining, state, event = tracker.observe_charge(
-            1, 2, 2, 35_000, 70_000, 3_000
-        )
+        charges, ready_at, remaining, state, event = tracker.observe_charge(1, 2, 2, 35_000, 70_000, 2_000)
+        self.assertEqual("charging", state)
+        self.assertEqual(36_000, ready_at)
+        charges, ready_at, remaining, state, event = tracker.observe_charge(1, 2, 2, 35_000, 70_000, 3_000)
+        self.assertEqual("charging", state)  # 恢复确认帧仍保守 charging
+        self.assertEqual(38_000, ready_at)
+        charges, ready_at, remaining, state, event = tracker.observe_charge(1, 2, 2, 35_000, 70_000, 4_000)
         self.assertEqual(2, charges)
         self.assertEqual("ready", state)
         self.assertEqual(0, ready_at)
-        self.assertIn(event, ("recover", ""))
+        self.assertEqual("recover", event)
+
+    def test_charge_increase_not_max_keeps_charging(self) -> None:
+        tracker = SkillTransitionTracker()
+        tracker.observe_charge(1, 1, 3, 35_000, 70_000, 1_000)
+        tracker.observe_charge(1, 2, 3, 35_000, 70_000, 2_000)
+        charges, ready_at, remaining, state, event = tracker.observe_charge(1, 2, 3, 35_000, 70_000, 3_000)
+        self.assertEqual(2, charges)
+        self.assertEqual("charging", state)
+        self.assertGreater(ready_at, 3_000)
+        self.assertEqual(35_000, remaining)
+
+    def test_zero_seconds_marks_ready(self) -> None:
+        tracker = SkillTransitionTracker()
+        tracker.observe_charge(1, 0, 2, 35_000, 70_000, 1_000)
+        charges, ready_at, remaining, state, event = tracker.observe_charge(
+            1, 0, 2, 35_000, 70_000, 2_000, text_remaining_ms=0
+        )
+        self.assertEqual("ready", state)
+        self.assertEqual(0, remaining)
+        self.assertEqual(2_000, ready_at)
+        self.assertEqual("text-ready", event)
 
 
 class ChargeFixtureTests(unittest.TestCase):

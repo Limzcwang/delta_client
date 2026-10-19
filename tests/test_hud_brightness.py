@@ -120,6 +120,24 @@ class BrightnessTests(unittest.TestCase):
         self.assertEqual("ready", result.slots["ability"].state)
         self.assertEqual("ready", result.slots["throwable"].state)
 
+    def test_zero_seconds_text_marks_ready(self) -> None:
+        if not HAS_NUMPY:
+            self.skipTest("numpy 未安装")
+        profile = HudProfile(
+            client_width=400,
+            client_height=200,
+            slots=[Roi(0, 0, 84, 84).to_dict(), Roi(100, 0, 84, 84).to_dict(), Roi(200, 0, 84, 84).to_dict()],
+            text_row=Roi(0, 100, 300, 56),
+        )
+        frame = np.full((200, 400, 3), 60, dtype=np.uint8)
+        result = recognize_frame(
+            frame, profile, operator=_operator(), ocr=_Ocr([[], [], [], ["0秒"], [], []]),
+            tracker=SkillTransitionTracker(), server_now=5000,
+        )
+        self.assertEqual("ready", result.slots["ultimate"].state)
+        self.assertEqual(0, result.slots["ultimate"].remaining_ms)
+        self.assertEqual(5000, result.slots["ultimate"].ready_at)
+
     def test_text_seconds_priority_over_p90(self) -> None:
         if not HAS_NUMPY:
             self.skipTest("numpy 未安装")

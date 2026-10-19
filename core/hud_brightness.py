@@ -60,6 +60,7 @@ class SkillTransitionTracker:
     pending_state_count: dict[int, int] = field(default_factory=dict)
     pending_charge: dict[int, int] = field(default_factory=dict)
     pending_charge_count: dict[int, int] = field(default_factory=dict)
+    full_pending: dict[int, bool] = field(default_factory=dict)
 
     def reset(self) -> None:
         self.states.clear()
@@ -73,6 +74,7 @@ class SkillTransitionTracker:
         self.pending_state_count.clear()
         self.pending_charge.clear()
         self.pending_charge_count.clear()
+        self.full_pending.clear()
 
     def observe_brightness(
         self, slot: int, raw_state: str, total_cd_ms: int, server_now: int, debounce: int = 2
@@ -127,6 +129,10 @@ class SkillTransitionTracker:
             self.last_charges[slot] = raw
             self.charges[slot] = raw
             if text_remaining_ms is not None:
+                if int(text_remaining_ms) <= 0:
+                    self.states[slot] = "ready"
+                    self.ready_at[slot] = int(server_now)
+                    return raw, int(server_now), 0, "ready", "text-ready"
                 ready_at, remaining, transition = self.update_charge(
                     slot, raw, max_charges, charge_cd_ms, server_now, text_remaining_ms=text_remaining_ms
                 )
@@ -153,24 +159,39 @@ class SkillTransitionTracker:
         self.last_charges[slot] = raw
         self.charges[slot] = raw
         if text_remaining_ms is not None:
+            if int(text_remaining_ms) <= 0:
+                self.states[slot] = "ready"
+                self.ready_at[slot] = int(server_now)
+                self.full_pending[slot] = False
+                return raw, int(server_now), 0, "ready", "text-ready"
             ready_at, remaining, _transition = self.update_charge(
                 slot, raw, max_charges, charge_cd_ms, server_now, text_remaining_ms=text_remaining_ms
             )
             return raw, ready_at, remaining, "charging", "text"
-        if raw >= max_charges:
-            self.states[slot] = "ready"
-            self.ready_at[slot] = 0
-            return raw, 0, 0, "ready", "recover" if previous < raw else ""
         if raw < previous:
             duration = int(total_cd_ms) if raw == 0 else int(charge_cd_ms)
             self.charge_t0[slot] = int(server_now)
             self.ready_at[slot] = int(server_now) + max(0, duration)
             self.states[slot] = "charging"
+            self.full_pending[slot] = False
             return raw, self.ready_at[slot], max(0, duration), "charging", "cast"
         if raw > previous:
-            self.ready_at[slot] = 0
+            duration = int(charge_cd_ms)
+            self.charge_t0[slot] = int(server_now)
+            self.ready_at[slot] = int(server_now) + max(0, duration)
+            self.states[slot] = "charging"
+            # 1->2：先保守判 charging，下一帧仍保持 max 才 ready
+            self.full_pending[slot] = raw >= max_charges
+            return raw, self.ready_at[slot], max(0, duration), "charging", "recover"
+        if raw >= max_charges:
+            if self.full_pending.get(slot):
+                self.full_pending[slot] = False
+                self.states[slot] = "ready"
+                self.ready_at[slot] = 0
+                return raw, 0, 0, "ready", "recover"
             self.states[slot] = "ready"
-            return raw, 0, 0, "ready", "recover"
+            self.ready_at[slot] = 0
+            return raw, 0, 0, "ready", ""
         ready_at = int(self.ready_at.get(slot) or 0)
         state = self.states.get(slot, "charging")
         return raw, ready_at, max(0, ready_at - int(server_now)), state, ""
@@ -335,13 +356,13 @@ def recognize_frame_brightness(
         text_reason = ""
         if index == 0:
             if seconds is not None:
-                state = "charging"
-                remaining = int(seconds)
-                ready_at = int(server_now) + remaining
-                transition = "text-seconds"
-                tracker.states[0] = "charging"
-                tracker.ready_at[0] = ready_at
-                text_reason = "文字秒数"
+                remaining = max(0, int(seconds))
+                state = "ready" if remaining <= 0 else "charging"
+                ready_at = int(server_now) if state == "ready" else int(server_now) + remaining
+                transition = "text-ready" if state == "ready" else "text-seconds"
+                tracker.states[0] = state
+                tracker.ready_at[0] = 0 if state == "ready" else ready_at
+                text_reason = "文字0秒→就绪" if state == "ready" else "文字秒数"
             elif pct is not None:
                 if pct >= 100:
                     state, remaining, ready_at, transition = "ready", 0, 0, "pct-ready"
@@ -385,13 +406,13 @@ def recognize_frame_brightness(
                 text_reason = "充能数保持/估算"
         elif seconds is not None:
             charges = tracker.charges.get(index, 0)
-            state = "charging"
-            remaining = int(seconds)
-            ready_at = int(server_now) + remaining
-            transition = "text-seconds"
-            tracker.states[index] = "charging"
-            tracker.ready_at[index] = ready_at
-            text_reason = "文字秒数（charge未知）"
+            remaining = max(0, int(seconds))
+            state = "ready" if remaining <= 0 else "charging"
+            ready_at = int(server_now) if state == "ready" else int(server_now) + remaining
+            transition = "text-ready" if state == "ready" else "text-seconds"
+            tracker.states[index] = state
+            tracker.ready_at[index] = 0 if state == "ready" else ready_at
+            text_reason = "文字0秒→就绪" if state == "ready" else "文字秒数（charge未知）"
         else:
             raw_state = "ready" if p90 >= threshold else "charging"
             ready_at, remaining, state, event = tracker.observe_brightness(

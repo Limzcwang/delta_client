@@ -35,7 +35,7 @@
 | HUD 采集/识别（E3b） | 自动查找 DeltaForceClient-Win64-Shipping 窗口；WGC 优先、mss 回退；独立线程 2 FPS + 最小化暂停；HUD profile（2560×1440 默认/缩放/3 槽等分/JSON 导入导出）与「识别 HUD」按钮；RapidOCR 读百分比/秒数/充能，暗色遮罩比例算 CD，17 干员头像灰度多尺度模板匹配（遮左上编号，失败回退手动干员）；ult_pct_meaning=charged（16%=已充能16%）；识别失败槽 unknown；截图仅内存 |
 | 干员配置中心（E5） | 启动/登录后/进房前 `GET /api/v1/config/operators`（If-None-Match）：304 用缓存，200 校验后写 `%APPDATA%\DeltaClient\operators.json` 并热更新面板/识别/上报；损坏/缺失/非法回退内置 `assets/operators.json`；网络失败静默；设置页显示版本/来源/更新时间+手动检查 |
 | WS 重连保护 | 单实例文件锁（重复启动提示「Delta Client 已在运行」）；close 4001/replaced、认证失效停止自动重连并清会话回登录；401/403 握手认证失败不重连并清会话；1001/1012/网络错误继续指数退避 1→2→4→8→…→30s；server_restarting 提示服务器更新中 |
-| HUD / 采屏 + 干员识别 | 独立「HUD / 采屏」tab（识别全异步 QThreadPool/10s 超时；事件驱动（亮度/充能数跳变+2帧去抖）+ 文字NN秒优先 + ready_at 本地倒计时；左下角头像自动扫描（不依赖技能图标模板））（采集开关、窗口检测/选窗/帧统计、标定、自动识别干员/阈值/重新识别）；抓帧前仅隐藏与游戏 rect 相交的客户端窗口（grab_frame_hidden，副屏不闪）；标定预览用连续内存 tobytes 转 QImage，非黑屏；头像 ROI 模板匹配命中后持久化 operator_id 并刷新面板/悬浮窗/上报，30s 缓存 |
+| HUD / 采屏 + 干员识别 | 独立「HUD / 采屏」tab（识别全异步 QThreadPool/10s 超时；事件驱动（亮度/充能数跳变+2帧去抖）+ 文字NN秒优先 + ready_at 本地倒计时；只按状态/充能/ready_at重同步上报；左下角头像自动扫描（不依赖技能图标模板））（采集开关、窗口检测/选窗/帧统计、标定、自动识别干员/阈值/重新识别）；抓帧前仅隐藏与游戏 rect 相交的客户端窗口（grab_frame_hidden，副屏不闪）；标定预览用连续内存 tobytes 转 QImage，非黑屏；头像 ROI 模板匹配命中后持久化 operator_id 并刷新面板/悬浮窗/上报，30s 缓存 |
 | 崩溃可观测性 | `faulthandler` + `sys/threading.excepthook` + Qt message handler 写 `%APPDATA%\DeltaClient\logs\crash.log`；last_step 标记异常退出，下次启动提示并打开日志目录；关闭/切服时主动 close aiohttp session |
 | 窗口检测兜底 | 进程名忽略 `.exe`/大小写；标题「三角洲/Delta Force」+客户区 ≥800×600 兜底；设置页选择/检测窗口与匹配方式/失败原因；排除自身客户端窗口；候选窗口日志；默认 mss，WGC 可选；帧尺寸/均值/异常日志/全黑诊断 |
 | 悬浮窗（强制 topmost / 不预判独占全屏）/自动循环（E4） | 可选技能 CD 悬浮窗（默认关闭）：无边框/置顶/鼠标穿透/WS_EX_TOOLWINDOW；跟随游戏窗口 500ms，最小化隐藏、独占全屏回落提示；透明度默认 30%、缩放、位置重置、快捷键可自定义（录制+冲突）；自动识别 2s 采样+变化去抖+2 次/秒限频；房间面板原样保留 |
