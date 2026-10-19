@@ -61,12 +61,11 @@ class BandTests(unittest.TestCase):
         ready_template = np.full((84, 84, 3), 200, dtype=np.uint8)
         result = recognize_frame_brightness(
             frame, profile, operator=operator, ocr=_Ocr(), server_now=1000,
-            templates={1: ready_template}, use_band=True,
+            templates={1: ready_template},
         )
         self.assertEqual("charging", result.slots["ability"].state)
-        self.assertGreater(result.slots["ability"].remaining_ms, 0)
-        self.assertLessEqual(result.slots["ability"].remaining_ms, 10_000)
-        self.assertGreater(result.diagnostics[1].band_ratio, 0.4)
+        self.assertEqual(10_000, result.slots["ability"].remaining_ms)
+        self.assertEqual(11_000, result.slots["ability"].ready_at)
 
     def test_no_template_falls_back(self) -> None:
         profile = HudProfile(

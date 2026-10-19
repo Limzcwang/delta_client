@@ -40,6 +40,7 @@ class SlotDiagnostic:
     transition: str = ""
     text_texts: list[str] = field(default_factory=list)
     text_reason: str = ""
+    ready_at_source: str = ""
     state: str = "unknown"
     remaining_ms: int = 0
     reason: str = ""
@@ -59,6 +60,7 @@ class SlotDiagnostic:
             "transition": self.transition,
             "text_texts": list(self.text_texts),
             "text_reason": self.text_reason,
+            "ready_at_source": self.ready_at_source,
             "state": self.state,
             "remaining_ms": int(self.remaining_ms),
             "reason": self.reason,

@@ -6,6 +6,25 @@ from dataclasses import dataclass
 from typing import Any
 
 
+def bright_pixel_count(image: Any, threshold: int = 150) -> int:
+    """灰度 >150 亮像素数（就绪基准 B0 / 当前 B）。"""
+    if image is None:
+        return 0
+    try:
+        import cv2  # type: ignore[import-not-found]
+        import numpy as np  # type: ignore[import-not-found]
+
+        array = image
+        if not hasattr(array, "shape"):
+            array = np.asarray(array)
+        if array.size == 0:
+            return 0
+        gray = cv2.cvtColor(array, cv2.COLOR_BGR2GRAY) if array.ndim == 3 else array
+        return int((gray > int(threshold)).sum())
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 @dataclass(frozen=True)
 class BandStats:
     area_ratio: float
