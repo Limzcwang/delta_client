@@ -61,7 +61,7 @@ class BandTests(unittest.TestCase):
         ready_template = np.full((84, 84, 3), 200, dtype=np.uint8)
         result = recognize_frame_brightness(
             frame, profile, operator=operator, ocr=_Ocr(), server_now=1000,
-            templates={1: ready_template},
+            templates={1: ready_template}, use_band=True,
         )
         self.assertEqual("charging", result.slots["ability"].state)
         self.assertGreater(result.slots["ability"].remaining_ms, 0)
@@ -85,4 +85,5 @@ class BandTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 

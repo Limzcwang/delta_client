@@ -139,7 +139,7 @@ class BrightnessTests(unittest.TestCase):
         self.assertEqual(55_000, result.slots["ability"].remaining_ms)
         self.assertEqual(36_000, result.slots["throwable"].remaining_ms)
         self.assertEqual(56_000, result.slots["ability"].ready_at)
-        self.assertEqual("文字秒数", result.diagnostics[1].text_reason)
+        self.assertIn("文字秒数", result.diagnostics[1].text_reason)
 
     def test_real_text_layer_ocr_fixtures(self) -> None:
         if not HAS_NUMPY or cv2 is None:
@@ -189,5 +189,6 @@ class BrightnessTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 
 

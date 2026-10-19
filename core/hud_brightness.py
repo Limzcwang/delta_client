@@ -52,11 +52,63 @@ class SkillTransitionTracker:
     states: dict[int, str] = field(default_factory=dict)
     ready_at: dict[int, int] = field(default_factory=dict)
     charges: dict[int, int] = field(default_factory=dict)
+    charge_t0: dict[int, int] = field(default_factory=dict)
+    last_charges: dict[int, int] = field(default_factory=dict)
 
     def reset(self) -> None:
         self.states.clear()
         self.ready_at.clear()
         self.charges.clear()
+        self.charge_t0.clear()
+        self.last_charges.clear()
+
+    def update_charge(
+        self,
+        slot: int,
+        charges: int,
+        max_charges: int,
+        charge_cd_ms: int,
+        server_now: int,
+        *,
+        text_remaining_ms: int | None = None,
+    ) -> tuple[int, int, str]:
+        """充能技能：文字值重同步，否则 charges 变化/保持 t0 计时。"""
+        charges = max(0, min(int(max_charges), int(charges)))
+        previous = self.last_charges.get(slot)
+        now = int(server_now)
+        if text_remaining_ms is not None:
+            ready_at = now + max(0, int(text_remaining_ms))
+            self.charge_t0[slot] = now
+            self.last_charges[slot] = charges
+            self.charges[slot] = charges
+            self.states[slot] = "charging" if text_remaining_ms > 0 else "ready"
+            self.ready_at[slot] = 0 if text_remaining_ms <= 0 else ready_at
+            return self.ready_at[slot], max(0, int(text_remaining_ms)), "text-resync"
+        if charges >= max_charges:
+            self.last_charges[slot] = charges
+            self.charges[slot] = charges
+            self.states[slot] = "ready"
+            self.ready_at[slot] = 0
+            return 0, 0, "charge-full"
+        if previous is None:
+            self.charge_t0[slot] = now
+            transition = "charge-init"
+        elif charges < previous:
+            self.charge_t0[slot] = now
+            transition = "charge-decrease"
+        elif charges > previous:
+            self.charge_t0[slot] = now
+            transition = "charge-increase"
+        else:
+            transition = "charge-steady"
+        self.last_charges[slot] = charges
+        self.charges[slot] = charges
+        t0 = self.charge_t0.get(slot, now)
+        ready_at = t0 + max(0, int(charge_cd_ms))
+        remaining = max(0, ready_at - now)
+        self.states[slot] = "charging"
+        self.ready_at[slot] = ready_at
+        return ready_at, remaining, transition
 
     def update(self, slot: int, state: str, total_cd_ms: int, server_now: int) -> tuple[int, int, str]:
         """返回 (ready_at, remaining_ms, transition)。"""
@@ -88,6 +140,7 @@ def recognize_frame_brightness(
     tracker: SkillTransitionTracker | None = None,
     server_now: int = 0,
     templates: dict[int, Any] | None = None,
+    use_band: bool = False,
 ) -> Any:
     """按每槽 p90 亮度判 ready/charging，状态跳变生成 ready_at。"""
     from core.hud_ocr import read_skill_bar_texts, read_text_roi_texts
@@ -129,6 +182,7 @@ def recognize_frame_brightness(
         meta = _slot_config(operator, index)
         total_cd = int(meta.total_cd_ms or 0) if meta is not None else 0
         max_charges = max(1, min(9, int(meta.max_charges if meta is not None else 1)))
+        charge_cd = int(meta.effective_charge_cd_ms) if meta is not None else 0
         seconds = parse_duration_ms(row_texts)
         pct = parse_percent(row_texts) if index == 0 else None
         charge = parse_charge(texts)
@@ -163,35 +217,49 @@ def recognize_frame_brightness(
                 text_reason = "未读到文字，回退 p90"
             charges = 1 if state != "unknown" else 0
         else:
-            charges = max(0, min(max_charges, int(charge))) if charge is not None else tracker.charges.get(index, 0)
-            if seconds is not None:
+            if charge is not None:
+                charges = max(0, min(max_charges, int(charge)))
+                if seconds is not None:
+                    ready_at, remaining, transition = tracker.update_charge(
+                        index, charges, max_charges, charge_cd, server_now, text_remaining_ms=seconds
+                    )
+                    state = "charging" if seconds > 0 else "ready"
+                    text_reason = "0充能文字重同步"
+                elif charges < max_charges:
+                    band = measure_band_ratio(crop, ready_templates.get(index)) if use_band else None
+                    band_ratio_value = band.area_ratio if band is not None else 0.0
+                    if band is not None:
+                        remaining = charge_remaining_ms(band, total_cd, max_charges)
+                        ready_at = int(server_now) + remaining
+                        state = "charging"
+                        transition = "charge-band"
+                        text_reason = f"灰带充能 f={band_ratio_value:.2f}"
+                        tracker.states[index] = "charging"
+                        tracker.ready_at[index] = ready_at
+                        tracker.charges[index] = charges
+                        tracker.last_charges[index] = charges
+                        tracker.charge_t0[index] = int(server_now)
+                    else:
+                        ready_at, remaining, transition = tracker.update_charge(
+                            index, charges, max_charges, charge_cd, server_now
+                        )
+                        state = "charging"
+                        text_reason = "无文字，充能恢复估算"
+                else:
+                    ready_at, remaining, transition = tracker.update_charge(
+                        index, charges, max_charges, charge_cd, server_now
+                    )
+                    state = "ready"
+                    text_reason = "充能已满"
+            elif seconds is not None:
+                charges = tracker.charges.get(index, 0)
                 state = "charging"
                 remaining = int(seconds)
                 ready_at = int(server_now) + remaining
                 transition = "text-seconds"
                 tracker.states[index] = "charging"
                 tracker.ready_at[index] = ready_at
-                text_reason = "文字秒数"
-            elif charge is not None and charges < max_charges:
-                band = measure_band_ratio(crop, ready_templates.get(index))
-                band_ratio_value = band.area_ratio if band is not None else 0.0
-                if band is not None:
-                    state = "charging"
-                    remaining = charge_remaining_ms(band, total_cd, max_charges)
-                    ready_at = int(server_now) + remaining
-                    transition = "charge-band"
-                    text_reason = f"灰带充能 f={band_ratio_value:.2f}"
-                    tracker.states[index] = "charging"
-                    tracker.ready_at[index] = ready_at
-                else:
-                    state = "ready" if p90 >= threshold else "charging"
-                    ready_at, remaining, transition = tracker.update(index, state, total_cd, server_now)
-                    text_reason = "无就绪模板，回退 p90"
-            elif charge is not None and charges >= max_charges:
-                state, remaining, ready_at, transition = "ready", 0, 0, "charge-full"
-                tracker.states[index] = "ready"
-                tracker.ready_at[index] = 0
-                text_reason = "充能已满"
+                text_reason = "文字秒数（charge未知）"
             else:
                 state = "ready" if p90 >= threshold else "charging"
                 ready_at, remaining, transition = tracker.update(index, state, total_cd, server_now)
