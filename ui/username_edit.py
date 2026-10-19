@@ -11,7 +11,7 @@ class UsernameLineEdit(QLineEdit):
     """只允许账号合法字符的 QLineEdit。
 
     - ``mode="register"``：ASCII 字母/数字（≤20）；
-    - ``mode="login"``：字母/数字 + ``_ -``（≤32，兼容老账号）；
+    - ``mode="login"``：与注册一致，仅 ASCII 字母/数字（≤20，不再允许 ``_ -``）；
     - 中文输入法组合（preedit）期间跳过清洗，提交上屏后再过滤，避免打断输入法；
     - 过滤造成文本变化时按“光标前非法字符数”回退光标，而不是跳到末尾。
     """

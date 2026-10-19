@@ -201,7 +201,7 @@ class LoginView(QWidget):
         )
         self.username_edit.set_mode(self._mode)
         self.username_edit.setPlaceholderText(
-            "账号（字母/数字，6–20 位）" if is_register else "账号"
+            "账号（字母/数字，6–20 位）" if is_register else "账号（字母/数字）"
         )
         self.password_edit.setPlaceholderText("密码（8–64 位）" if is_register else "密码")
         self.password_hint.setVisible(is_register)

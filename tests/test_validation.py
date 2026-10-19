@@ -33,7 +33,8 @@ class UsernameTests(unittest.TestCase):
 
     def test_too_long(self) -> None:
         with self.assertRaises(ValidationError):
-            validate_username("x" * 33)
+            validate_username("x" * 21)
+        self.assertEqual("x" * 20, validate_username("x" * 20))
 
     def test_control_chars(self) -> None:
         with self.assertRaises(ValidationError):
@@ -144,25 +145,38 @@ class UsernameInputSanitizeTests(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertEqual(expected, sanitize_username_input(raw, "register"))
 
-    def test_login_allows_underscore_and_dash(self) -> None:
-        self.assertEqual("dsh_test2", sanitize_username_input("dsh_test2", "login"))
-        self.assertEqual("a-b_c", sanitize_username_input("a-b_c", "login"))
-        self.assertEqual("dsh_test", sanitize_username_input("dsh_test", "login"))
+    def test_login_same_as_register(self) -> None:
+        """G 变更：登录页也只允许字母/数字，不再兼容 dsh_test 下划线账号。"""
+        self.assertEqual("dshtest2", sanitize_username_input("dsh_test2", "login"))
+        self.assertEqual("dshtest", sanitize_username_input("dsh_test", "login"))
+        self.assertEqual("abc", sanitize_username_input("a-b_c", "login"))
         cases = {
             "abc中文": "abc",
             "a b": "ab",
             "a.b": "ab",
             "ＡＢＣ": "",
             "a/b": "ab",
+            "abc😀": "abc",
+            "abc１２３": "abc",
         }
         for raw, expected in cases.items():
             with self.subTest(raw=raw):
                 self.assertEqual(expected, sanitize_username_input(raw, "login"))
 
-    def test_mode_difference(self) -> None:
-        text = "dsh_test-2"
-        self.assertEqual("dshtest2", sanitize_username_input(text, "register"))
-        self.assertEqual("dsh_test-2", sanitize_username_input(text, "login"))
+    def test_mode_behaviour_identical(self) -> None:
+        for text in ("dsh_test-2", "abc中文", "ＡＢＣ", "a" * 30, "DeltaQA01"):
+            with self.subTest(text=text):
+                self.assertEqual(
+                    sanitize_username_input(text, "register"),
+                    sanitize_username_input(text, "login"),
+                )
+
+    def test_login_alnum_submits(self) -> None:
+        self.assertEqual(
+            ("DeltaQA01", "DeltaTest2026"),
+            validate_login_input("DeltaQA01", "DeltaTest2026"),
+        )
+        self.assertEqual("DeltaQA01", sanitize_username_input("DeltaQA01", "login"))
 
     def test_paste_keeps_legal_part(self) -> None:
         pasted = "abc中文123😀"
@@ -171,7 +185,8 @@ class UsernameInputSanitizeTests(unittest.TestCase):
 
     def test_truncation_limits(self) -> None:
         self.assertEqual(20, len(sanitize_username_input("a" * 25, "register")))
-        self.assertEqual(MAX_USERNAME_LENGTH, len(sanitize_username_input("a" * 40, "login")))
+        self.assertEqual(20, len(sanitize_username_input("a" * 40, "login")))
+        self.assertEqual(MAX_USERNAME_LENGTH, 20)
         # 中文不占长度：过滤后再截断
         self.assertEqual("a" * 20, sanitize_username_input("a" * 19 + "中" + "a", "register"))
 

@@ -7,7 +7,7 @@ from typing import Any, Mapping
 
 from core.rooms import ValidationError
 
-MAX_USERNAME_LENGTH = 32
+MAX_USERNAME_LENGTH = 20
 MAX_PASSWORD_LENGTH = 128
 
 #: 注册/改密统一密码规则（F 后端）：8–64 位；登录仍只校验非空
@@ -27,11 +27,10 @@ NICKNAME_MIN = 1
 NICKNAME_MAX = 20
 
 #: 账号输入框过滤（G）：输入时只保留合法字符（不 trim、不做全角转半角）
-#: - register：仅 ASCII 字母/数字，上限 20
-#: - login：额外允许 _ -（兼容 dsh_test 等老账号），上限 MAX_USERNAME_LENGTH
+#: - register / login：均仅 ASCII 字母/数字，上限 20（不再兼容 _ - 老账号）
 _USERNAME_INPUT_PATTERNS: dict[str, re.Pattern[str]] = {
     "register": re.compile(r"[^A-Za-z0-9]"),
-    "login": re.compile(r"[^A-Za-z0-9_-]"),
+    "login": re.compile(r"[^A-Za-z0-9]"),
 }
 _USERNAME_INPUT_LIMITS: dict[str, int] = {
     "register": REGISTER_USERNAME_MAX,
@@ -42,7 +41,7 @@ _SENSITIVE_KEY_PARTS = ("pass", "secret", "token", "credential")
 
 
 def validate_username(raw: Any) -> str:
-    """登录用用户名：去首尾空白、1-32 字符、不含控制字符（登录不套注册新规）。"""
+    """登录用用户名：去首尾空白、1-20 字符、不含控制字符（登录不套注册新规）。"""
     username = str(raw or "").strip()
     if not username:
         raise ValidationError("请输入用户名")
@@ -83,8 +82,8 @@ def sanitize_username_input(text: Any, mode: str = "register") -> str:
 
     - ``mode="register"``：仅 ASCII 字母和数字（中文、emoji、空格、全角字符、
       ``_ - .`` 等一律删除），长度截断到 20；
-    - ``mode="login"``：额外允许 ``_`` 和 ``-``（兼容老账号），截断到
-      ``MAX_USERNAME_LENGTH``；
+    - ``mode="login"``：与注册一致，仅 ASCII 字母和数字，截断到 20
+      （不再兼容 ``dsh_test`` 等下划线老账号）；
     - 不做全角转半角、不 strip（非法空白直接删除）；粘贴时返回过滤后的合法部分。
     """
     normalized = _username_input_mode(mode)

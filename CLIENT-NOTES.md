@@ -17,7 +17,7 @@
 
 - 本地工作副本：`.tmp/client-work`，当前分支 `feat/username-input`。
 - 远端集成分支：`feat/client-chat`（lead 用 patch 应用，不要直接改远端）。
-- 测试：`python -m unittest discover -s tests -v` → **214 用例**，纯 stdlib、离线可跑。
+- 测试：`python -m unittest discover -s tests -v` → **215 用例**，纯 stdlib、离线可跑。
 - GUI 冒烟脚本在 `.tmp/client-work-smoke/`（不在仓库内）：`smoke.py`（登录/房间/聊天/设置）、`smoke_canvas.py`（画板保存/恢复）、`smoke_f.py`（昵称/注册规则/资料/房主管理）、`smoke_username_input.py`（输入过滤/粘贴/光标/IME/注册密码 8 位）、`live_*.py`（真实后端联调）。
 - 本机沙箱曾把 PySide6 装到 `.tmp/pydeps` 并用 `PYTHONPATH` 跑 GUI；正常开发直接 `pip install -r requirements.txt`。
 
@@ -74,9 +74,9 @@
 
 ### F：昵称 / 个人资料 / 大厅自动刷新 / 房主管理 / 历史窗口（新）
 - **昵称兼容**：`user` 对象从 `{id,username}` 变为 `{id,nickname}`；`Member`/`ChatMessage` 解析优先 `nickname`，缺失回退 `username` 并置 `legacy_protocol=True`。展示层一律用 `display_name`（昵称），账号只在个人资料页出现。
-- **注册账号规则**：6–20 位字母/数字、至少 1 个字母；登录不套该规则（兼容老账号）；失败码 `INVALID_USERNAME`。前端 `LoginView` 有实时提示。
+- **注册账号规则**：6–20 位字母/数字、至少 1 个字母；登录页输入框同样只允许字母/数字（不再兼容 `dsh_test` 等下划线账号，输入 `dsh_test` 会变 `dshtest`）；失败码 `INVALID_USERNAME`。前端 `LoginView` 有实时提示。
 - **注册密码**：与改密共用 `NEW_PASSWORD_MIN/MAX`（8–64）；`MIN_REGISTER_PASSWORD_LENGTH = NEW_PASSWORD_MIN` 仅作旧别名，勿单独改。登录密码仍只校验非空（历史 6 位账号可登录）。
-- **账号输入框（G）**：`core.validation.sanitize_username_input(text, mode)` 纯函数即时过滤；注册仅 ASCII 字母/数字（≤20），登录额外允许 `_ -`（≤32）。`ui.username_edit.UsernameLineEdit` 负责粘贴/输入/模式切换；过滤后按“光标前保留字符数”回退光标（不跳末尾）；IME preedit 期间跳过清洗、上屏后再过滤。
+- **账号输入框（G）**：`core.validation.sanitize_username_input(text, mode)` 纯函数即时过滤；注册/登录完全一致，仅 ASCII 字母/数字（≤20）。`ui.username_edit.UsernameLineEdit` 负责粘贴/输入/模式切换；过滤后按“光标前保留字符数”回退光标（不跳末尾）；IME preedit 期间跳过清洗、上屏后再过滤。
 - **个人资料**：`SettingsDialog` 新增「个人资料」tab；昵称 1–20，改密旧密码 + 新密码 8–64 + 确认。**已按 F 后端契约实现**：
   - 改昵称 `PATCH /api/v1/users/me {"nickname": ...}`（响应 `{"user": {...}}`，客户端取 `user`）；
   - 改密 `POST /api/v1/users/me/password {"old_password","new_password"}`；错误码 `WRONG_OLD_PASSWORD` / `INVALID_NEW_PASSWORD` 均已映射中文文案；成功后 token 继续有效，只更新本地 session（不退出登录）。
@@ -106,7 +106,7 @@
 6. 分页 UI：房间列表只有首屏 `items`。
 7. 设置页可加 WS 连通性测试（现在只测 `/health` 与 rooms）。
 8. 服务端若提供幂等去重（client_msg_id 唯一）可去掉 UI 侧重复消息兜底。
-9. 增加 GUI 自动化测试（pytest-qt 等）——当前 214 个测试均为纯逻辑；GUI 用一次性冒烟脚本验证。
+9. 增加 GUI 自动化测试（pytest-qt 等）——当前 215 个测试均为纯逻辑；GUI 用一次性冒烟脚本验证。
 
 ---
 
