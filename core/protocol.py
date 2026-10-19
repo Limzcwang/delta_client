@@ -18,6 +18,7 @@ CLIENT_VERSION = "1.0.0"
 
 #: HTTP 路径（目标契约 /api/v1，B 阶段落地）
 API_V1_LOGIN = "/api/v1/auth/login"
+API_V1_REGISTER = "/api/v1/auth/register"
 API_V1_ME = "/api/v1/users/me"
 API_V1_ROOMS = "/api/v1/rooms"
 API_HEALTH = "/health"

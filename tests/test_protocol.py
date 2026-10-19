@@ -18,6 +18,7 @@ class PathTests(unittest.TestCase):
     def test_login_paths_match_protocol(self) -> None:
         self.assertEqual(protocol.API_V1_LOGIN, "/api/v1/auth/login")
         self.assertEqual(protocol.API_V1_ROOMS, "/api/v1/rooms")
+        self.assertEqual(protocol.API_V1_REGISTER, "/api/v1/auth/register")
         self.assertEqual(protocol.API_LOGIN_LEGACY, "/api/users/login")
 
 

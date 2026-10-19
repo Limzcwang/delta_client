@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 from config import AppConfig, save_config
 from core.errors import ApiError, ErrorKind, to_user_message
 from core.models import ChatMessage, Member, Room, now_ms, parse_members
-from core.protocol import make_client_msg_id, message_type
+from core.protocol import extract_token, extract_user, make_client_msg_id, message_type
 from net.api_client import ApiClient, LoginResult
 from net.mock_backend import MockApiClient, MockWsClient
 from net.ws_client import WsClient
@@ -182,6 +182,14 @@ class MainWindow(QMainWindow):
 
     def _on_register_success(self, data: Any, username: str) -> None:
         self.login_view.set_busy(False)
+        # B2b 的 v1 注册响应与登录一致（含 access_token），可直接自动登录
+        token = extract_token(data)
+        if token:
+            user = extract_user(data) or {"username": username}
+            self.session.set_login(token, user)
+            self._set_status(f"注册成功，已自动登录：{self._username()}")
+            self._show_rooms()
+            return
         self.login_view.set_mode("login")
         self.login_view.show_success("注册成功，请使用新账号登录")
         self.login_view.prefill_username(username)
@@ -277,7 +285,8 @@ class MainWindow(QMainWindow):
         self.room_list_view.set_status(to_user_message(exc), error=True)
 
     def _on_logout(self) -> None:
-        self._stop_ws()
+        room = self._current_room
+        self._stop_ws(room.code if room is not None else None)
         self._current_room = None
         self.session.clear()
         self._show_login()
@@ -333,11 +342,32 @@ class MainWindow(QMainWindow):
         self._ws = ws
         self._safe_submit(ws.run(), on_error=self._on_ws_run_failed)
 
-    def _stop_ws(self) -> None:
+    def _stop_ws(self, leave_room_code: str | None = None) -> None:
+        """停止 WS；若在房间内，先发一帧 WS ``leave_room`` 再断开。
+
+        B2b 实测：服务端的 ``user_left`` 只在收到客户端 WS ``leave_room`` 时广播，
+        单纯断开连接或 HTTP leave 都不会通知队友，因此离开房间必须优雅告知。
+        """
         self._ws_generation += 1
         ws, self._ws = self._ws, None
-        if ws is not None:
+        if ws is None:
+            return
+        if not leave_room_code:
             self._safe_submit(ws.close())
+            return
+
+        async def _shutdown() -> None:
+            try:
+                if getattr(ws, "connected", False):
+                    await ws.leave_room(leave_room_code)
+            except Exception:  # noqa: BLE001 - 离开是尽力而为
+                logger.debug("发送 WS leave_room 失败", exc_info=True)
+            try:
+                await ws.close()
+            except Exception:  # noqa: BLE001
+                logger.debug("关闭 WS 失败", exc_info=True)
+
+        self._safe_submit(_shutdown())
 
     def _on_ws_run_failed(self, exc: BaseException) -> None:
         self.room_view.set_connection_state("error", to_user_message(exc))
@@ -440,7 +470,7 @@ class MainWindow(QMainWindow):
 
     def _on_leave_room(self) -> None:
         room = self._current_room
-        self._stop_ws()
+        self._stop_ws(room.code if room is not None else None)
         self._current_room = None
         self._room_password = None
         if room is not None:
@@ -471,7 +501,8 @@ class MainWindow(QMainWindow):
         self.session.set_persist_token(new_config.persist_token)
 
         if identity_changed:
-            self._stop_ws()
+            room = self._current_room
+            self._stop_ws(room.code if room is not None else None)
             self._current_room = None
             self.session.clear()
             self.api = self._build_api()
@@ -491,8 +522,9 @@ class MainWindow(QMainWindow):
     # ---------- 关闭 ----------
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt 覆盖
         try:
+            room = self._current_room
             self._safe_submit(self.api.close())
-            self._stop_ws()
+            self._stop_ws(room.code if room is not None else None)
         finally:
             self.bridge.stop()
             super().closeEvent(event)

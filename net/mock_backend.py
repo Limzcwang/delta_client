@@ -106,13 +106,16 @@ class MockApiClient:
         return str(self._users.get(username, {}).get("id", "0"))
 
     # ---------- 认证 ----------
+    def _issue_token(self, user: Mapping[str, Any]) -> str:
+        return f"mock-token.{user['id']}.{uuid.uuid4().hex}"
+
     async def login(self, username: str, password: str) -> LoginResult:
         await self._tick()
         self._username = str(username or "").strip()
         user = self._users.get(self._username)
         if user is None or str(user.get("password")) != str(password):
             raise ApiError(ErrorKind.AUTH, "用户名或密码错误", status=401)
-        token = f"mock-token.{user['id']}.{uuid.uuid4().hex}"
+        token = self._issue_token(user)
         public_user = {"id": str(user["id"]), "username": str(user["username"])}
         return LoginResult(
             token=token,
@@ -131,7 +134,18 @@ class MockApiClient:
             raise ApiError(ErrorKind.CONFLICT, "用户名已存在", status=409, code="USERNAME_EXISTS")
         new_id = str(max(int(item["id"]) for item in self._users.values()) + 1)
         self._users[name] = {"id": new_id, "username": name, "password": raw_password}
-        return {"id": new_id, "username": name}
+        user = self._users[name]
+        self._username = name
+        token = self._issue_token(user)
+        # 与 B2b 的 v1 注册响应保持一致（同登录），便于 UI 注册后自动登录
+        return {
+            "id": new_id,
+            "username": name,
+            "access_token": token,
+            "token_type": "Bearer",
+            "expires_in": 604800,
+            "user": {"id": new_id, "username": name},
+        }
 
     # ---------- 房间 ----------
     async def list_rooms(self) -> list[Room]:

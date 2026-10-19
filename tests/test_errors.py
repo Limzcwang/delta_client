@@ -90,6 +90,46 @@ class ErrorBodyTests(unittest.TestCase):
         self.assertIsNone(code)
         self.assertEqual(message, "OK")
 
+    def test_b2b_nested_data_error_code(self) -> None:
+        """B2b 实测错误体：顶层 code 只是 40000 类别，具体码在 data.error_code。"""
+        body = {
+            "code": 40000,
+            "message": "该房间需要密码",
+            "data": {"error_code": "ROOM_PASSWORD_REQUIRED"},
+            "request_id": "req_1",
+        }
+        error = api_error_from_response(400, body)
+        self.assertEqual(error.code, "ROOM_PASSWORD_REQUIRED")
+        self.assertEqual(error.kind, ErrorKind.ROOM_PASSWORD_REQUIRED)
+        self.assertEqual(error.user_message, "该房间需要密码")
+        self.assertEqual(error.request_id, "req_1")
+
+        invalid = api_error_from_response(
+            400,
+            {"code": 40000, "message": "房间密码错误", "data": {"error_code": "ROOM_PASSWORD_INVALID"}},
+        )
+        self.assertEqual(invalid.kind, ErrorKind.ROOM_PASSWORD_INVALID)
+        self.assertTrue(invalid.needs_room_password)
+
+    def test_b2b_ws_error_code_aliases(self) -> None:
+        not_authenticated = api_error_from_response(
+            400,
+            {"type": "error", "code": "NOT_AUTHENTICATED", "error_code": "NOT_AUTHENTICATED", "message": "请先完成认证"},
+        )
+        self.assertEqual(not_authenticated.kind, ErrorKind.AUTH)
+        self.assertTrue(not_authenticated.is_auth_error)
+
+        not_member = api_error_from_response(
+            400,
+            {"type": "error", "code": "NOT_ROOM_MEMBER", "error_code": "NOT_ROOM_MEMBER", "message": "你不在该房间中"},
+        )
+        self.assertEqual(not_member.kind, ErrorKind.FORBIDDEN)
+
+        unsupported = api_error_from_response(
+            400, {"type": "error", "code": "UNSUPPORTED_MESSAGE_TYPE", "message": "当前版本不支持消息类型"}
+        )
+        self.assertEqual(unsupported.kind, ErrorKind.VALIDATION)
+
 
 class ExceptionMappingTests(unittest.TestCase):
     def test_timeout(self) -> None:

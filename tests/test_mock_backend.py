@@ -35,6 +35,9 @@ class MockApiTests(unittest.TestCase):
             api = MockApiClient(latency=0)
             created = await api.register("newbie", "abc123")
             self.assertEqual(created["username"], "newbie")
+            # Mock 与 B2b v1 注册一致：返回 access_token + user，UI 可自动登录
+            self.assertTrue(created.get("access_token"))
+            self.assertEqual(created["user"]["username"], "newbie")
 
             with self.assertRaises(ApiError) as duplicate:
                 await api.register("newbie", "abc123")

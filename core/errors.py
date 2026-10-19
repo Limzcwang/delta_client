@@ -79,6 +79,10 @@ CODE_KINDS: dict[Any, ErrorKind] = {
     "INVALID_PAYLOAD": ErrorKind.VALIDATION,
     "INTERNAL_ERROR": ErrorKind.SERVER,
     "RATE_LIMITED": ErrorKind.RATE_LIMIT,
+    # B2b 实测：服务端这两处码与 PROTOCOL §7.2 的命名不同，客户端做别名兼容
+    "NOT_AUTHENTICATED": ErrorKind.AUTH,
+    "NOT_ROOM_MEMBER": ErrorKind.FORBIDDEN,
+    "UNSUPPORTED_MESSAGE_TYPE": ErrorKind.VALIDATION,
 }
 
 CODE_MESSAGES: dict[Any, str] = {
@@ -110,6 +114,10 @@ CODE_MESSAGES: dict[Any, str] = {
     "INVALID_DOMAIN": "房间类型不合法",
     "INVALID_PAYLOAD": "请求数据不合法",
     "RATE_LIMITED": "操作过于频繁，请稍后再试",
+    # B2b 实测码
+    "NOT_AUTHENTICATED": "请先完成认证，请重新登录",
+    "NOT_ROOM_MEMBER": "你不在该房间中，请重新加入",
+    "UNSUPPORTED_MESSAGE_TYPE": "当前版本不支持该消息类型",
 }
 
 #: HTTP 状态码兜底映射（无业务码时使用）
@@ -264,6 +272,19 @@ def parse_error_body(body: Any) -> tuple[str | None, Any | None, str | None]:
             message = str(message) if message else None
         else:
             message = str(raw_error)
+
+    # B2b 实测：统一响应包把具体错误码放在 data.error_code（顶层 code 只是 40000 之类类别）
+    data_section = body.get("data")
+    if isinstance(data_section, Mapping):
+        nested_code = data_section.get("error_code")
+        if nested_code is None:
+            nested_code = data_section.get("errorCode")
+        if nested_code is not None:
+            code = nested_code
+        if message is None:
+            nested_message = data_section.get("message")
+            if nested_message:
+                message = str(nested_message)
     return message, code, request_id
 
 

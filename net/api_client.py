@@ -173,13 +173,17 @@ class ApiClient:
         return LoginResult(token=token, user=dict(user), raw=body)
 
     async def register(self, username: str, password: str) -> dict[str, Any]:
-        """注册（PROTOCOL.md 未定义 v1 注册接口，沿用 A 现状 /api/users/create）。"""
-        body = await self._request(
-            "POST",
-            protocol.API_REGISTER_LEGACY,
-            json_body={"username": username, "password": password},
-            auth=False,
-        )
+        """注册：B2b 已提供 ``POST /api/v1/auth/register``（响应同登录），404 时回退 A 现状接口。"""
+        payload = {"username": username, "password": password}
+        try:
+            body = await self._request("POST", protocol.API_V1_REGISTER, json_body=payload, auth=False)
+        except ApiError as exc:
+            if exc.status != 404:
+                raise
+            # TODO(协议对齐): 旧后端兼容分支，确认所有环境升级后可删除
+            body = await self._request(
+                "POST", protocol.API_REGISTER_LEGACY, json_body=payload, auth=False
+            )
         data = unwrap_payload(body)
         if isinstance(data, Mapping):
             return dict(data)

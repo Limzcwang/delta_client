@@ -146,43 +146,53 @@ python -m unittest discover -s tests -v
 
 覆盖：配置加载与优先级、URL 规范化、协议路径/WS 消息、HTTP 错误映射、WS 重连退避、房间号校验（5 位 `[A-Z0-9]`）、房间/成员/消息解析、登录注册校验、token 存取与“不落盘密码”、Mock 后端完整流程。
 
-当前结果：**107 个用例全部通过**（约 0.5s）。
+当前结果：**109 个用例全部通过**（约 0.5s）。
 
 ---
 
-## 6. 后端接口依赖（C1 使用 / 需后端配合）
+## 6. 后端接口依赖（C1 使用 / B2b 已联调）
 
-契约以 `delta_service/PROTOCOL.md` 为准（里程碑 A 契约基线，B 阶段实现）。
+契约以 `delta_service/PROTOCOL.md` 为准；B2b（JWT 认证 + 房间模型 + WS 认证）已上线，C1 已用客户端真实代码对 `http://114.132.161.169:8000` 完成联调（2026-10-19）。
 
 ### 6.1 已按目标契约调用
 
 | 用途 | 方法/路径 | 说明 |
 |---|---|---|
 | 登录签发 JWT | `POST /api/v1/auth/login` | 读 `data.access_token`（兼容 `token` / `accessToken`）；`user` 取 `data.user` |
-| 注册 | `POST /api/users/create` | PROTOCOL 暂未定义 v1 注册接口，沿用 A 现状；**需后端确认是否提供 `/api/v1/auth/register`** |
-| 公共房间列表 | `GET /api/v1/rooms` | 读 `data.items`；字段 `code/name/member_count/has_password/owner_id/created_at/background_id` |
+| 注册 | `POST /api/v1/auth/register` | B2b 已上线，响应同登录（含 token，客户端注册后自动登录）；404 时回退旧 `/api/users/create` |
+| 公共房间列表 | `GET /api/v1/rooms` | 读 `data.items + has_more + next_before`；字段 `id/code/name/member_count/has_password/owner_id/created_at/background_id` |
 | 创建房间 | `POST /api/v1/rooms` | `{name, visibility:"public"|"private", password?}`；响应 `data.room` |
-| 加入房间 | `POST /api/v1/rooms/{code}/join` | body `{password?}`；**请后端确认路径参数同时接受 room_code（客户端只有 code，PROTOCOL §4 允许）** |
-| 离开房间 | `POST /api/v1/rooms/{code}/leave` | 尽力而为，失败不阻塞 UI |
+| 加入房间 | `POST /api/v1/rooms/{code}/join` | body `{password?}`；B2b 实测路径参数接受 5 位 room_code（同时支持内部 id），客户端输入自动转大写 |
+| 离开房间 | WS `leave_room` + `POST /api/v1/rooms/{code}/leave` | B2b 实测 `user_left` 只在 WS leave_room 时广播，客户端离开房间/退出登录/关窗会先发 WS leave_room；HTTP leave 用于清理成员（房主需先关闭房间） |
 | 实时连接 | `WS /ws` | 首消息 `{"type":"auth","token","protocol_version":1,"client":{...}}` |
-| 加入实时频道 | WS `join_room` | `{room_code,password?}`；服务端应回 `room_joined`（含 `room`、`members`） |
-| 聊天 | WS `chat_send` | `{client_msg_id,content,content_type:"text"}`；服务端 `chat_message` 需回传 `client_msg_id` 供去重 |
+| 加入实时频道 | WS `join_room` | `{room_code,password?}`；**B2b 要求先 HTTP 加入房间**，否则 `NOT_ROOM_MEMBER`；服务端回 `room_joined`（含 `room`、`members`） |
+| 聊天（C 阶段） | WS `chat_send` | B2b 返回 `UNSUPPORTED_MESSAGE_TYPE`，C 上线后测收发；客户端已实现 `client_msg_id` 去重 |
 | 心跳 | WS `ping` / 服务端 `heartbeat` | 客户端 20s ping，45s 无消息判定失联 |
 
-### 6.2 当前兼容分支（B 阶段上线后删除）
+### 6.2 当前兼容分支（保留以兼容旧后端）
 
 - `POST /api/v1/auth/login` 返回 404 时回退 `POST /api/users/login`（A 现状，无 token → 提示“已登录但无 JWT，聊天仅本地回显”）；
+- `POST /api/v1/auth/register` 返回 404 时回退 `POST /api/users/create`；
 - `GET /api/v1/rooms` 返回 404 时回退 `GET /api/room/public/list`；
-- 错误体同时兼容 `{code,message,data}`、`{detail:{error_code,message}}`、`{detail:"..."}`、Pydantic 422 列表。
+- 错误体同时兼容 `{code,message,data}`、`{detail:{error_code,message}}`、`{detail:"..."}`、Pydantic 422 列表；B2b 的 `data.error_code` 也一并读取。
 
-### 6.3 需要后端确认 / 补齐的接口
+### 6.3 B2b 真实联调结论（客户端实测）
 
-1. **v1 注册接口**：`POST /api/v1/auth/register`（否则客户端长期依赖旧 `/api/users/create`）。
-2. **join 路径参数语义**：`/api/v1/rooms/{id}/join` 是否接受 5 位 room_code；若只接受内部 `room_id`，需要新增按 code 查询接口或允许 code。
-3. **`GET /api/v1/rooms` 分页**：客户端当前一次性读取 `data.items`；若强制分页，需要 `has_more/next_before` 的 UI 分页交互（C1 暂未做）。
-4. **WS `join_room` 密码**：HTTP 加入成功后，WS 加入是否还需要重复传密码（客户端目前会带）。
-5. **`chat_message` 回显**：服务端需把发送者自己的消息也广播回来并带 `client_msg_id`，否则客户端本地回显与服务器回显会重复（已做去重，但需服务端配合）。
-6. **错误码**：私有房间密码错误/缺失在 HTTP 层建议返回 `ROOM_PASSWORD_REQUIRED` / `ROOM_PASSWORD_INVALID`（字符串码或明确文案），客户端会据此弹密码框。
+- 登录：返回 `access_token`；JWT `sub`=user_id、有效期 7 天；`GET /api/v1/users/me` 正常。
+- 401 形态：`{"code":40100,"message":"未认证","data":null}`、`{"code":40102,"message":"登录凭证无效"}`；客户端按 401 清会话回登录页。
+- 房间：列表分页字段齐全；创建公开/私有正确（`has_password`）；join 接受小写/大写 room_code；私有密码错误返回 HTTP 400 + `data.error_code = ROOM_PASSWORD_REQUIRED / ROOM_PASSWORD_INVALID`，客户端能准确识别并弹密码框。
+- WS：`auth` → `auth_ok`（`user`、`heartbeat_interval_ms=30000`）；双账号 `room_joined` 成员互见、`user_joined` 正常；`room_joined` 暂未带 `canvas_snapshot`（D 阶段）。
+- 断线重连：同账号新连接顶号后，客户端自动重连 → 重新 auth → 重新 `join_room` 成功。
+- 离开：WS `leave_room`（room_id 填 code 或内部 id 均可）会广播 `user_left`；**直接断开 WS 或仅 HTTP leave 不会广播**。客户端已改为离开前先发 WS `leave_room`。
+- WS 未认证错误码实测为 `NOT_AUTHENTICATED`（PROTOCOL §7.2 写 `AUTH_REQUIRED`）；`chat_send` 返回 `UNSUPPORTED_MESSAGE_TYPE`。客户端已做错误码别名兼容。
+- 房间对象比 PROTOCOL 多 `visibility/updated_at/closed_at/background` 等字段，客户端忽略未知字段。
+
+### 6.4 仍建议后端补齐 / 后续里程碑
+
+1. `user_left` 的触发语义：WS 断连是否应广播离开，建议写进 PROTOCOL（当前实现只在显式 `leave_room` 时广播）。
+2. WS 未认证错误码建议与 PROTOCOL 统一（`AUTH_REQUIRED` ↔ `NOT_AUTHENTICATED` 二选一）。
+3. `chat_send/chat_message`（C）、`canvas_*`（D）、`skill_*`（E）按里程碑继续。
+4. 列表分页 UI：C1 只渲染首屏 `items`，C2 视需要加分页/滚动加载。
 
 ---
 
@@ -199,8 +209,10 @@ python -m unittest discover -s tests -v
 ## 8. 已知限制 / TODO
 
 - C1 不实现画板（C2）与截屏/技能识别（C3），房间内画板卡片仅为占位；
-- 房间列表暂无分页/自动定时刷新（提供手动刷新）；
+- 房间列表暂无分页/自动定时刷新（提供手动刷新）；C1 只渲染 `items` 首屏；
+- 成员列表依赖 WS `room_joined`；B2b 期间可用 `GET /api/v1/rooms/{code}` 做 HTTP 成员兜底，计划随 C2 一起做；
 - 断线重连后会自动重新 `join_room` 并依赖 `room_joined` 快照恢复状态（画板/技能快照本轮不消费）；
+- 离开房间/退出登录/关闭窗口会先发 WS `leave_room`，确保队友收到 `user_left`；
 - Mock 后端只用于演示，不模拟限频、多客户端并发与持久化；
 - 若后端返回的登录响应没有 token，界面会提示并进入“无 JWT 兼容模式”（聊天本地回显）。
 
