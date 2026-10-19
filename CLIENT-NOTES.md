@@ -18,7 +18,7 @@
 | H4 画板底图 + 图标工具栏 | 完成，画布随底图比例/透明笔画层/图标工具栏；单测+截图冒烟通过 |
 | E2 技能 CD 面板 | 完成，Mock 两队友三状态/倒计时/共享开关/模拟数据；真实 E1 接口待联调 |
 | E3a 干员配置/手动选择/面板数据源 | 完成，17 干员配置/技能名/未知 CD/头像（17/17）/设置页选择持久化/上报 operator_id；截图识别未做 |
-| P1/P2 打包正式化 | 完成，版本 0.1.0/数据目录迁移/日志脱敏轮转/多尺寸图标/spec/build 脚本/Inno 安装包；已产出 Setup 与便携 ZIP |
+| P1/P2 打包正式化 | 完成，版本 0.1.1/数据目录迁移/日志脱敏轮转/多尺寸图标/spec/build 脚本/Inno 安装包；已产出 Setup 与便携 ZIP |
 | E3b HUD 采集/标定/识别 | 部分完成：采集层(WGC/mss)/2FPS 线程、HUD profile+标定对话框、OCR/模板匹配/单帧流水线、识别 HUD 按钮；未实机抓帧/未接入自动共享循环 |
 | E2b ready_at 接收端 | 完成：server_received_at/ready_at 解析、ready_at 倒计时兜底、auth_ok+pong RTT/2 偏移 EMA、单调时钟 tick |
 | E4 悬浮窗/自动循环 | 完成：穿透/置顶/跟随/编辑模式/透明度/快捷键/失败回落；自动识别变化去抖+限频+暂停条件；`识别 HUD` 与自动循环共享缓存 |
@@ -100,7 +100,7 @@
 - **H4 画板底图 + 图标工具栏**：底图 `assets/canvas_map.png`（原图 1105×1260，不重采样；`DELTA_CANVAS_MAP` 可覆盖）。`CanvasHost.resizeEvent` 用 `min(可用宽/图宽, 可用高/图高)` 算画布尺寸并居中，画布控件宽高比=底图比例；控件内部底图铺满、无 letterbox/裁切；宿主剩余空间普通留白。坐标 0–1 = `px/画布宽, py/画布高`。渲染顺序：底图 → 透明笔画层（橡皮 `CompositionMode_Clear`，清空只清层）。工具栏在画板底部，7 个 QPainter 矢量图标（画笔/橡皮/颜色/粗细/撤销/重做/清空），44px 等宽铺满，带 tooltip + 快捷键（P/E/C/W/Ctrl+Z/Ctrl+Shift+Z/Ctrl+Delete），画笔/橡皮 checkable 高亮。打包需把 assets 以 add-data 带上（代码兼容 `_MEIPASS/assets`）。
 - **E2 技能 CD 面板**：`core/skills.py` 解析 E1 真实载荷 `skills` 数组（`slot` 0/1/2 归位，读 `pct`/`remaining_ms`/`charges`/`max_charges`/`state`；`state` 仅 ready/charging/unknown，其它归 unknown；缺失槽位才补 unknown）及旧对象格式，`SkillBook` 按 user_id 缓存；`SkillPanel` 每秒按 `server_now = local_now + offset` 刷新倒计时，`remaining_now = remaining_ms - (server_now - captured_at)`；ready 金色高亮/呼吸，unknown「?」，>30 分钟未更新显示「未共享」；`skill_share_removed` 删除。开关默认关闭，「模拟我的技能」循环 ready/charging/unknown，开启后 `skill_share_update`（本地 2 次/秒节流），关闭发 `skill_share_off`。Mock 预置两名队友并可 `simulate_skill_state/removed`。
 - **E3a 干员配置**：`core/operators.py` 读取 `assets/operators.json`（17 人，`_meta.slot_meaning` 0 大招/1 战术/2 投掷物；`total_cd_ms` + `max_charges`）；设置页「干员」tab 下拉选择，保存 `operator_id` 到 `%APPDATA%\\DeltaClient\\config.json`；面板按 state 的 `operator_id`/名字解析干员名、技能名、头像（`assets/operators/<id>.png`，17/17 齐全）；`total_cd_ms` null/0 槽显示「CD未知」，不画环/不倒计时，模拟上报时 `state=unknown`；`skill_share_update` 带 `operator_id/operator_name`。当前 5 个未知 CD 槽见 operators.README。
-- **P1/P2 打包**：`config.APP_VERSION=0.1.0`、`--version`、设置页版本；数据 `%APPDATA%\\DeltaClient\\{config,session,saved_logins}.json` + `logs/client.log`（2MB×3，敏感值脱敏），旧 `~/.delta_client.json`/session 首次启动迁移并保留 `.bak`；`assets/app.ico` 16–256；`delta_client.spec` one-folder/console=False/upx=False，datas 收录整个 assets；`scripts/build_win.ps1` → `release/DeltaClient-Setup-0.1.0.exe`、`DeltaClient-0.1.0-portable.zip`、`SHA256SUMS.txt`；`installer/delta_client.iss` 中文向导/lowest 权限/`{localappdata}\\Programs\\DeltaClient`/卸载可选删用户数据。
+- **P1/P2 打包**：`config.APP_VERSION=0.1.1`、`--version`、设置页版本；数据 `%APPDATA%\\DeltaClient\\{config,session,saved_logins}.json` + `logs/client.log`（2MB×3，敏感值脱敏），旧 `~/.delta_client.json`/session 首次启动迁移并保留 `.bak`；`assets/app.ico` 16–256；`delta_client.spec` one-folder/console=False/upx=False，datas 收录整个 assets；`scripts/build_win.ps1` → `release/DeltaClient-Setup-0.1.1.exe`、`DeltaClient-0.1.1-portable.zip`、`SHA256SUMS.txt`；`installer/delta_client.iss` 中文向导/lowest 权限/`{localappdata}\\Programs\\DeltaClient`/卸载可选删用户数据。
 - **E3 ROI 备注（尚未实现）**：队友列表里「自己」是最底部一项（与编号无关）；干员识别 ROI = 左侧列表最底部一项，底部左侧自己的头像+名字可互为兜底；识别结果按当前对局缓存，换局/重进游戏重置。
 - **历史窗口**：`ChatPage.window_days` / `truncated` 从历史接口（键名兼容 `window_days/history_window_days/days` 等）或 `room_joined.history_window_days` 读取，UI 提示「仅显示最近 N 天消息」；当前部署两者均未返回，所以默认不提示，后端补字段后自动生效。
 

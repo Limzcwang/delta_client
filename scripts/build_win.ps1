@@ -70,6 +70,12 @@ try {
         Write-Step "安装打包依赖（requirements-build.txt）"
         & $VenvPython -m pip install --disable-pip-version-check -r (Join-Path $Root "requirements-build.txt")
         if ($LASTEXITCODE -ne 0) { throw "pip install 失败（exit $LASTEXITCODE）" }
+        $E3Requirements = Join-Path $Root "requirements-e3.txt"
+        if (Test-Path $E3Requirements) {
+            Write-Step "安装 E3b 采集/OCR 依赖（requirements-e3.txt）"
+            & $VenvPython -m pip install --disable-pip-version-check -r $E3Requirements
+            if ($LASTEXITCODE -ne 0) { throw "E3 依赖安装失败（exit $LASTEXITCODE）" }
+        }
 
         if (-not $SkipTests) {
             Write-Step "运行单元测试"
