@@ -12,6 +12,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
     QRadioButton,
     QTabWidget,
@@ -21,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from config import AppConfig, ConfigError, normalize_server_url, normalize_ws_url
 from core.models import Room
+from state.saved_logins import SavedLoginInfo
 from core.rooms import ValidationError, validate_room_code, validate_room_name, validate_visibility
 from core.rooms import (
     MAX_ROOM_NAME_LENGTH,
@@ -719,3 +722,112 @@ class RoomSettingsDialog(QDialog):
         self._room = room
         self.name_edit.setText(room.name)
         self.delete_confirm_edit.setPlaceholderText(room.name)
+
+
+class SavedLoginsDialog(QDialog):
+    """H2：历史账号列表（最多 5 条，可单条删除/清空）。"""
+
+    selected = Signal(str)
+    delete_requested = Signal(str)
+    clear_requested = Signal()
+
+    def __init__(
+        self, entries: list[SavedLoginInfo], parent: QWidget | None = None
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("历史账号")
+        self.setModal(True)
+        self.setMinimumWidth(440)
+        self._entries = list(entries)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 20, 24, 18)
+        root.setSpacing(10)
+        heading = QLabel("历史账号")
+        heading.setObjectName("PageTitle")
+        sub = QLabel("点击账号可填入；密码仅本机加密保存，30 天内自动带出")
+        sub.setObjectName("PageSubtitle")
+        sub.setWordWrap(True)
+        root.addWidget(heading)
+        root.addWidget(sub)
+
+        self.list = QListWidget()
+        self.list.setObjectName("SavedLogins")
+        root.addWidget(self.list, stretch=1)
+        for entry in self._entries:
+            self._add_item(entry)
+        self.list.itemClicked.connect(self._on_item_clicked)
+
+        actions = QHBoxLayout()
+        self.clear_button = QPushButton("清空全部")
+        self.clear_button.setObjectName("Link")
+        self.clear_button.clicked.connect(self._on_clear)
+        close_button = QPushButton("关闭")
+        close_button.clicked.connect(self.reject)
+        actions.addWidget(self.clear_button)
+        actions.addStretch(1)
+        actions.addWidget(close_button)
+        root.addLayout(actions)
+        self._sync_empty()
+
+    def _add_item(self, entry: SavedLoginInfo) -> None:
+        item = QListWidgetItem()
+        item.setData(Qt.ItemDataRole.UserRole, entry.username)
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(8)
+        text = QLabel(f"{entry.username}  ·  {entry.last_used_text}")
+        text.setToolTip(entry.status_text)
+        status = QLabel(entry.status_text)
+        status.setObjectName("Hint")
+        if entry.expired and entry.has_password:
+            status.setStyleSheet("color: #ffd071;")
+        text.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        status.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        row.setCursor(Qt.CursorShape.PointingHandCursor)
+        row.mousePressEvent = lambda _event, name=entry.username: self._select(name)
+        delete = QPushButton("删除")
+        delete.setObjectName("Link")
+        delete.setProperty("username", entry.username)
+        delete.clicked.connect(
+            lambda _checked=False, btn=delete: self._on_delete(str(btn.property("username")))
+        )
+        layout.addWidget(text, stretch=1)
+        layout.addWidget(status)
+        layout.addWidget(delete)
+        item.setSizeHint(row.sizeHint())
+        self.list.addItem(item)
+        self.list.setItemWidget(item, row)
+
+    def _select(self, username: str) -> None:
+        if username:
+            self.selected.emit(username)
+            self.accept()
+
+    def _on_item_clicked(self, item: QListWidgetItem) -> None:
+        username = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        self._select(username)
+
+    def _on_delete(self, username: str) -> None:
+        self.delete_requested.emit(username)
+        for row in range(self.list.count() - 1, -1, -1):
+            item = self.list.item(row)
+            if str(item.data(Qt.ItemDataRole.UserRole) or "") == username:
+                self.list.takeItem(row)
+                break
+        self._entries = [entry for entry in self._entries if entry.username != username]
+        self._sync_empty()
+
+    def _on_clear(self) -> None:
+        self.clear_requested.emit()
+        self.list.clear()
+        self._entries = []
+        self._sync_empty()
+
+    def _sync_empty(self) -> None:
+        self.clear_button.setEnabled(bool(self._entries))
+        if not self._entries:
+            self.list.addItem("还没有保存的账号")
+            self.list.setEnabled(False)
+        else:
+            self.list.setEnabled(True)

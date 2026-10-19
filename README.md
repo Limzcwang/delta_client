@@ -15,6 +15,7 @@
 | HTTP 客户端 | `net/api_client.py`：统一 Base URL、`X-Request-Id` / `X-Protocol-Version`、`Authorization: Bearer`、超时、错误映射 |
 | WS 客户端 | `net/ws_client.py`：`/ws` 首消息 `auth`、心跳（25s ping / 90s 失联）、指数退避重连（1s→30s）、消息分发、未知类型忽略 |
 | 会话 | `state/session.py`：token + 用户信息（内存；可选落盘，**不落盘密码**） |
+| 历史账号（H2） | `state/saved_logins.py`：`%APPDATA%\DeltaClient\saved_logins.json`；最多 5 个账号、最近使用在前；密码用 Windows DPAPI 加密 base64 保存（30 天有效），DPAPI 不可用只存账号；登录成功保存、打开登录页自动带出最近账号/未过期密码，历史列表支持单删/清空；改密成功或登录密码错误清除该账号密码，退出登录不清历史 |
 | 登录/注册 | `POST /api/v1/auth/login`、`POST /api/v1/auth/register`；注册账号 6–20 位字母/数字且至少含 1 个字母，注册密码 8–32 位（与后端一致；登录密码仍只校验非空以兼容历史短密码）；账号输入框即时过滤（注册/登录均仅字母数字，≤20；`dsh_test` 会被过滤为 `dshtest`），粘贴保留合法部分、IME 上屏后清洗；注册带 token 自动登录 |
 | 昵称展示（F） | 成员列表/聊天/房主标识/加入离开提示统一显示 **nickname**（缺失时回退 username 并标记旧协议）；账号只在个人资料页对自己可见 |
 | 个人资料（F） | 设置页新增「个人资料」：修改昵称（1–20，立即刷新所有展示，含历史聊天中自己的名字）、修改密码（旧密码 + 新密码 8–32 + 确认；成功后保持登录） |
@@ -30,7 +31,7 @@
 | 连通性测试 | 设置页「测试连接」：探测 `/health` + `/api/v1/rooms?page=1`，分别报告可达/鉴权失效/超时/网络错误 |
 | 协议对齐 | PROTOCOL C/D 定稿：`data.error_code`、§7.2/§7.3 实名错误码、WS `room_id_or_code`、聊天字段、画板 `rev`/快照语义 |
 | Mock | `--mock` / `DELTA_MOCK=1`：内置内存后端（昵称/聊天历史/画板快照/房主管理/我的房间），可完整离线演示 |
-| 测试 | 230 个 stdlib unittest（含 4 个 PySide6 对话框测试），离线可跑 |
+| 测试 | 240 个 stdlib unittest（含 4 个 PySide6 对话框测试），离线可跑 |
 
 ---
 
@@ -56,7 +57,8 @@ delta_client/
 │   ├── ws_client.py         # websockets 客户端（auth/心跳/重连）
 │   └── mock_backend.py      # 可切换 Mock HTTP + Mock WS
 ├── state/
-│   └── session.py           # JWT 会话（可选落盘，不含密码）
+│   ├── session.py           # JWT 会话（可选落盘，不含密码）
+│   └── saved_logins.py      # H2 历史账号/DPAPI 加密密码（30 天）
 ├── ui/                      # PySide6 界面
 │   ├── main_window.py       # QStackedWidget + 网络编排
 │   ├── login_view.py        # 登录/注册
@@ -237,7 +239,8 @@ python -m unittest discover -s tests -v
 ## 7. 安全约定
 
 - 服务器地址可配置，仓库内**无硬编码 IP**；
-- 密码只在登录请求体内发送，**不落盘、不写日志、不进配置文件**；
+- 密码只在登录请求体内发送，**不落盘、不写日志、不进配置文件**（H2 历史账号密码例外：仅 DPAPI 加密密文落盘，绝不明文）；
+- H2 历史账号：密码用 Windows DPAPI（`CRYPTPROTECT_UI_FORBIDDEN`）加密后 base64 存入 `%APPDATA%\DeltaClient\saved_logins.json`；DPAPI 失败/非 Windows 时降级为**只存账号、不存密码**，无明文回退；
 - JWT 默认只存内存；开启 `save_token` 时才落盘到 `~/.delta_client_session.json`，并用 `core.validation.sanitize_user` 清洗用户信息（去掉 password/token/secret 类字段）；
 - 错误提示只展示服务端 `message` 或客户端兜底文案，5xx 不展示内部细节；
 - 画板只收发矢量操作/快照（坐标+颜色+粗细），**不上传截图或图像**；截屏/OCR（E）未实现。

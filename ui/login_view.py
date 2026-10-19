@@ -19,6 +19,8 @@ from core.validation import (
     validate_register_input,
     validate_register_username,
 )
+from state.saved_logins import SavedLoginInfo
+from ui.dialogs import SavedLoginsDialog
 from ui.username_edit import UsernameLineEdit
 
 
@@ -28,10 +30,15 @@ class LoginView(QWidget):
     login_requested = Signal(str, str)
     register_requested = Signal(str, str)
     settings_requested = Signal()
+    saved_login_selected = Signal(str)
+    saved_login_delete_requested = Signal(str)
+    saved_login_clear_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._mode = "login"
+        self._saved_entries: list[SavedLoginInfo] = []
+        self._applying_saved = False
         self._build_ui()
         self.set_mode("login")
 
@@ -115,15 +122,30 @@ class LoginView(QWidget):
         self.username_edit = UsernameLineEdit("login")
         self.username_edit.setPlaceholderText("账号")
         self.username_edit.setClearButtonEnabled(True)
-        self.username_edit.textChanged.connect(self._update_register_hint)
+        self.username_edit.textChanged.connect(self._on_username_changed)
 
         # 注册账号实时规则提示（F）：6–20 位字母/数字，至少含 1 个字母
         self.register_username_hint = QLabel()
         self.register_username_hint.setObjectName("Hint")
         self.register_username_hint.setWordWrap(True)
         self.register_username_hint.hide()
-        card_layout.addWidget(self.username_edit)
+
+        username_row = QHBoxLayout()
+        username_row.addWidget(self.username_edit, stretch=1)
+        self.history_button = QPushButton("历史账号")
+        self.history_button.setObjectName("Link")
+        self.history_button.clicked.connect(self._open_history)
+        self.history_button.hide()
+        username_row.addWidget(self.history_button)
+        card_layout.addLayout(username_row)
         card_layout.addWidget(self.register_username_hint)
+
+        # H2：密码自动带出/过期提示
+        self.saved_hint = QLabel()
+        self.saved_hint.setObjectName("Hint")
+        self.saved_hint.setWordWrap(True)
+        self.saved_hint.hide()
+        card_layout.addWidget(self.saved_hint)
 
         self.password_edit = QLineEdit()
         self.password_edit.setPlaceholderText("密码")
@@ -207,11 +229,62 @@ class LoginView(QWidget):
         self.password_hint.setVisible(is_register)
         self.confirm_edit.setVisible(is_register)
         self.register_username_hint.setVisible(is_register)
+        self.saved_hint.setVisible(False)
+        self._sync_history_button()
         self.primary_button.setText("注 册" if is_register else "登 录")
         self.switch_button.setText("已有账号？返回登录" if is_register else "没有账号？创建账户")
         self._update_register_hint()
         self.hide_messages()
         self._focus_first()
+
+    def _on_username_changed(self) -> None:
+        if not self._applying_saved:
+            self.saved_hint.hide()
+        self._update_register_hint()
+
+    def set_saved_logins(self, entries: list[SavedLoginInfo]) -> None:
+        self._saved_entries = list(entries)
+        self._sync_history_button()
+
+    def _sync_history_button(self) -> None:
+        count = len(self._saved_entries)
+        self.history_button.setText(f"历史账号 ({count})" if count else "历史账号")
+        self.history_button.setVisible(self._mode == "login" and count > 0)
+
+    def apply_saved_login(
+        self, username: str, password: str, *, expired: bool = False
+    ) -> None:
+        """带出最近账号/密码；过期时只填账号并提示重新输入。"""
+        self._applying_saved = True
+        try:
+            self.set_mode("login")
+            self.username_edit.setText(username)
+            self.password_edit.setText(password or "")
+        finally:
+            self._applying_saved = False
+        self.hide_messages()
+        if expired:
+            self.saved_hint.setText("密码已过期，请重新输入")
+            self.saved_hint.setStyleSheet("color: #ffd071;")
+            self.saved_hint.show()
+        else:
+            self.saved_hint.hide()
+        if password:
+            self.primary_button.setFocus()
+        else:
+            self.password_edit.setFocus()
+
+    def focus_login_button(self) -> None:
+        self.primary_button.setFocus()
+
+    def _open_history(self) -> None:
+        if not self._saved_entries:
+            return
+        dialog = SavedLoginsDialog(self._saved_entries, self)
+        dialog.selected.connect(self.saved_login_selected.emit)
+        dialog.delete_requested.connect(self.saved_login_delete_requested.emit)
+        dialog.clear_requested.connect(self.saved_login_clear_requested.emit)
+        dialog.exec()
 
     def _update_register_hint(self) -> None:
         """注册模式下实时提示账号规则（F）。"""
