@@ -436,6 +436,16 @@ class MainWindow(QMainWindow):
         self.login_view.set_busy(False)
         self.login_view.show_error(to_user_message(exc))
 
+    def _handle_ws_fatal(self, message: str) -> None:
+        """顶号/认证失效：停止重连、清会话并回登录页。"""
+        self._stop_ws()
+        self._stop_lobby_timer()
+        self._current_room = None
+        self._room_password = None
+        self._clear_room_state()
+        self.session.clear()
+        self._show_login(message)
+
     def _handle_auth_expired(self, exc: BaseException) -> None:
         message = to_user_message(exc)
         self._stop_ws()
@@ -945,7 +955,14 @@ class MainWindow(QMainWindow):
         elif state == "auth_error":
             self.room_view.set_connection_state("auth_error", detail)
             self._system_message(f"认证失败：{detail or '登录状态无效'}")
-            self._refresh_members_http(self._current_room, fallback=True)
+            self._handle_ws_fatal("登录状态无效，请重新登录")
+        elif state == "replaced":
+            self.room_view.set_connection_state("replaced", "账号已在其他设备登录")
+            self._system_message("账号已在其他设备登录，已停止自动重连")
+            self._handle_ws_fatal("账号已在其他设备登录，请重新登录")
+        elif state == "server_restarting":
+            self.room_view.set_connection_state("reconnecting", detail or "服务器更新中")
+            self.room_view.set_status("服务器更新中，正在重连", error=True)
         else:
             self.room_view.set_connection_state(state, detail)
             if state in ("error", "stopped"):

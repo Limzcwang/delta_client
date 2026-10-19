@@ -133,13 +133,14 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         from PySide6.QtGui import QIcon
-        from PySide6.QtWidgets import QApplication
+        from PySide6.QtWidgets import QApplication, QMessageBox
     except ImportError:
         print("缺少 PySide6，无法启动图形界面。", file=sys.stderr)
         print("请执行：python -m pip install -r requirements.txt", file=sys.stderr)
         print("若只想查看配置，可运行：python main.py --print-config", file=sys.stderr)
         return 1
 
+    from ui.single_instance import SingleInstance
     from ui.main_window import MainWindow
     from ui.theme import apply_theme
 
@@ -148,6 +149,11 @@ def main(argv: list[str] | None = None) -> int:
         session = Session.from_file(default_session_path(), persist_token=True)
 
     app = QApplication(sys.argv[:1])
+    lock = SingleInstance("DeltaClient")
+    if not lock.acquire():
+        lock.activate_existing()
+        QMessageBox.information(None, "Delta Client", "Delta Client 已在运行")
+        return 1
     app.setApplicationName("Delta Client")
     app.setOrganizationName("Delta")
     icon_base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
