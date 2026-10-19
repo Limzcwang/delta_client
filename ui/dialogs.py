@@ -652,7 +652,7 @@ class SettingsDialog(QDialog):
                 self.capture_stats_label.setText(f"帧尺寸/均值：-；最后错误：{method}")
                 return
             try:
-                frame = grab_frame_hidden(self, source)
+                frame = grab_frame_hidden(self, source, game_rect=window.client_rect)
                 error = str(getattr(source, "last_error", "") or "")
             finally:
                 source.close()
@@ -682,17 +682,25 @@ class SettingsDialog(QDialog):
             from ui.capture_utils import grab_frame_hidden
 
             while True:
-                source, message = open_source(
-                    process_name=self._capture_process,
-                    title_keyword=self._capture_title,
+                from capture.window import find_game_window
+
+                result = find_game_window(
+                    self._capture_process,
+                    title_keywords=(self._capture_title,) if self._capture_title else ("三角洲", "Delta Force", "DeltaForce"),
                 )
+                window = result.window
+                if window is None:
+                    self.capture_window_status.setText(f"未找到：{result.reason}")
+                    QMessageBox.warning(self, "HUD 标定", result.reason)
+                    return
+                source, message = open_source(window=window)
                 self.capture_method_label.setText(f"采集方式：{message}")
                 if source is None:
                     self.capture_stats_label.setText(f"帧尺寸/均值：-；最后错误：{message}")
                     QMessageBox.warning(self, "HUD 标定", message)
                     return
                 try:
-                    frame = grab_frame_hidden(self, source)
+                    frame = grab_frame_hidden(self, source, game_rect=window.client_rect)
                     last_error = str(getattr(source, "last_error", "") or "")
                 finally:
                     source.close()
@@ -780,6 +788,12 @@ class SettingsDialog(QDialog):
 
     def set_operator_recognition_status(self, text: str) -> None:
         self.operator_recognition_label.setText(text)
+
+    def current_operator_threshold(self) -> float:
+        return float(self.operator_threshold_spin.value())
+
+    def current_auto_operator_enabled(self) -> bool:
+        return bool(self.auto_operator_check.isChecked())
 
     def set_server_migrated(self, migrated: bool) -> None:
         self.server_migrated_label.setVisible(bool(migrated))

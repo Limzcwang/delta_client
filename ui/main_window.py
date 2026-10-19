@@ -1462,6 +1462,7 @@ class MainWindow(QMainWindow):
             from capture.sources import open_source
             from ui.capture_utils import grab_frame_hidden
 
+            self._apply_recognition_ui_settings(dialog)
             source, message = open_source(
                 process_name=self.config.capture_window_process,
                 title_keyword=self.config.capture_window_title,
@@ -1469,8 +1470,13 @@ class MainWindow(QMainWindow):
             if source is None:
                 dialog.set_operator_recognition_status(f"识别失败：{message}")
                 return
+            game_window = self._find_game_window()
             try:
-                frame = grab_frame_hidden(self, source)
+                frame = grab_frame_hidden(
+                    self,
+                    source,
+                    game_rect=game_window.client_rect if game_window is not None else None,
+                )
             finally:
                 source.close()
             if frame is None:
@@ -1487,6 +1493,18 @@ class MainWindow(QMainWindow):
                 )
         except Exception as exc:  # noqa: BLE001
             dialog.set_operator_recognition_status(f"识别失败：{exc}")
+
+    def _apply_recognition_ui_settings(self, dialog: SettingsDialog) -> None:
+        """重新识别前把当前 UI 阈值/开关落盘，避免被默认值覆盖。"""
+        self.config = replace(
+            self.config,
+            auto_operator_enabled=dialog.current_auto_operator_enabled(),
+            operator_recognition_threshold=dialog.current_operator_threshold(),
+        )
+        try:
+            save_config(self.config)
+        except OSError:
+            pass
 
     def _selected_operator(self) -> Operator | None:
         operator = self.operator_catalog.get(self.config.operator_id)
@@ -1593,8 +1611,14 @@ class MainWindow(QMainWindow):
             if source is None:
                 self.room_view.set_status(f"HUD 识别不可用：{message}", error=True)
                 return
+            game_window = self._find_game_window()
             try:
-                frame = grab_frame_hidden(self, source, only_if_active=True)
+                frame = grab_frame_hidden(
+                    self,
+                    source,
+                    game_rect=game_window.client_rect if game_window is not None else None,
+                    only_if_active=True,
+                )
             finally:
                 last_error = str(getattr(source, "last_error", "") or "")
                 source.close()

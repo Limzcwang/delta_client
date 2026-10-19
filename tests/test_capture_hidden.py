@@ -4,20 +4,26 @@ from __future__ import annotations
 
 import unittest
 
-from ui.capture_utils import grab_frame_hidden
+from PySide6.QtCore import QRect
+
+from ui.capture_utils import grab_frame_hidden, select_windows_to_hide
 
 
 class _Window:
-    def __init__(self, visible=True, active=True):
+    def __init__(self, visible=True, active=True, geometry=(0, 0, 100, 100)):
         self.visible = visible
         self.active = active
         self.events = []
+        self._geometry = QRect(*geometry)
 
     def isVisible(self):
         return self.visible
 
     def isActiveWindow(self):
         return self.active
+
+    def frameGeometry(self):
+        return self._geometry
 
     def hide(self):
         self.events.append("hide")
@@ -80,6 +86,45 @@ class HiddenGrabTests(unittest.TestCase):
         )
         self.assertEqual(["hide", "show", "raise"], window.events)
         self.assertTrue(window.visible)
+
+    def test_only_intersecting_windows_hidden(self) -> None:
+        intersecting = _Window(geometry=(10, 10, 100, 100))
+        secondary = _Window(geometry=(2000, 0, 800, 600))
+        source = _Source()
+        grab_frame_hidden(
+            _Widget(intersecting),
+            source,
+            game_rect=QRect(0, 0, 1920, 1080),
+            windows=[intersecting, secondary],
+            delay=0,
+            sleep=lambda _d: None,
+            process_events=lambda: None,
+        )
+        self.assertEqual(["hide", "show", "raise"], intersecting.events)
+        self.assertEqual([], secondary.events)
+        self.assertTrue(secondary.visible)
+
+    def test_no_intersection_does_not_hide(self) -> None:
+        secondary = _Window(geometry=(2000, 0, 800, 600))
+        source = _Source()
+        grab_frame_hidden(
+            _Widget(secondary),
+            source,
+            game_rect=QRect(0, 0, 1920, 1080),
+            windows=[secondary],
+            delay=0,
+            sleep=lambda _d: None,
+            process_events=lambda: None,
+        )
+        self.assertEqual([], secondary.events)
+        self.assertEqual(["grab"], source.events)
+        self.assertTrue(secondary.visible)
+
+    def test_select_windows_to_hide(self) -> None:
+        a = _Window(geometry=(0, 0, 10, 10))
+        b = _Window(geometry=(500, 500, 10, 10))
+        c = _Window(visible=False, geometry=(0, 0, 10, 10))
+        self.assertEqual([a], select_windows_to_hide([a, b, c], QRect(0, 0, 100, 100)))
 
     def test_exception_restores_visibility(self) -> None:
         window = _Window()

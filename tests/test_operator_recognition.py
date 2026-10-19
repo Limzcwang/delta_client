@@ -141,6 +141,24 @@ class OperatorRecognitionTests(unittest.TestCase):
         finally:
             self._close(window)
 
+    def test_ui_threshold_persisted_before_recheck(self) -> None:
+        from ui.dialogs import SettingsDialog
+
+        window = self._window(auto_operator_enabled=True, operator_recognition_threshold=0.70)
+        dialog = SettingsDialog(window.config, catalog=window.operator_catalog)
+        try:
+            dialog.auto_operator_check.setChecked(False)
+            dialog.operator_threshold_spin.setValue(0.86)
+            with mock.patch("ui.main_window.save_config") as save:
+                window._apply_recognition_ui_settings(dialog)
+            self.assertFalse(window.config.auto_operator_enabled)
+            self.assertAlmostEqual(0.86, window.config.operator_recognition_threshold)
+            save.assert_called()
+            self.assertAlmostEqual(0.86, dialog.current_operator_threshold())
+        finally:
+            dialog.deleteLater()
+            self._close(window)
+
 
 if __name__ == "__main__":
     unittest.main()
