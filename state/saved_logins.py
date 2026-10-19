@@ -14,7 +14,6 @@ import ctypes
 import json
 import os
 import sys
-import tempfile
 import time
 from ctypes import wintypes
 from dataclasses import dataclass
@@ -237,11 +236,11 @@ class SavedLogins:
                     for entry in self._entries
                 ],
             }
-            fd, tmp = tempfile.mkstemp(
-                prefix=".delta_saved_logins.", suffix=".tmp", dir=str(self.path.parent)
-            )
+            # 不用 tempfile.mkstemp：受限目录下它可能在 isdir 处阻塞；
+            # 固定同目录临时文件 + os.replace 仍保持原子替换，失败快速返回。
+            tmp = self.path.with_name(self.path.name + ".tmp")
             try:
-                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                with open(tmp, "w", encoding="utf-8") as handle:
                     json.dump(payload, handle, ensure_ascii=False, indent=2)
                     handle.write("\n")
                 try:
@@ -249,12 +248,12 @@ class SavedLogins:
                 except OSError:
                     pass
                 os.replace(tmp, self.path)
-            except BaseException:
+            except OSError:
                 try:
-                    os.unlink(tmp)
+                    tmp.unlink()
                 except OSError:
                     pass
-                raise
+                return None
             return self.path
         except OSError:
             return None
@@ -378,3 +377,4 @@ def _as_float(value: Any) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
