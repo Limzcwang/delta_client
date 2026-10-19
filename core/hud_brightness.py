@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from core.hud_profile import HudProfile
-from core.hud_recognition import parse_charge, parse_percent
+from core.hud_recognition import parse_charge, parse_duration_ms, parse_percent
 
 READY_P90_THRESHOLD = 140
 BRIGHT_PIXEL = 150
@@ -89,7 +89,7 @@ def recognize_frame_brightness(
     server_now: int = 0,
 ) -> Any:
     """按每槽 p90 亮度判 ready/charging，状态跳变生成 ready_at。"""
-    from core.hud_ocr import read_skill_bar_texts
+    from core.hud_ocr import read_skill_bar_texts, read_text_roi_texts
     from core.hud_pipeline import RecognitionFrame, SlotDiagnostic, _slot_config
     from core.hud_recognition import SlotRecognition, charged_remaining_ms
     from core.skills import SLOT_ABILITY, SLOT_THROWABLE, SLOT_ULTIMATE
@@ -105,17 +105,35 @@ def recognize_frame_brightness(
     except Exception:  # noqa: BLE001
         texts_per_slot = [[], [], []]
     result.texts = texts_per_slot
+    text_texts: list[list[str]] = [[], [], []]
+    if ocr is not None:
+        try:
+            for index, roi in enumerate(profile.text_rois()):
+                text_texts[index] = read_text_roi_texts(ocr, frame, roi, scale=3)
+        except Exception:  # noqa: BLE001
+            text_texts = [[], [], []]
     threshold = int(profile.brightness_threshold)
     for index, slot in enumerate((SLOT_ULTIMATE, SLOT_ABILITY, SLOT_THROWABLE)):
         roi = rois[index]
         crop = frame[roi.y : roi.bottom, roi.x : roi.right] if hasattr(frame, "__getitem__") else None
         p90, bright_ratio = p90_brightness(crop)
         texts = texts_per_slot[index] if index < len(texts_per_slot) else []
+        row_texts = text_texts[index] if index < len(text_texts) else []
         meta = _slot_config(operator, index)
         total_cd = int(meta.total_cd_ms or 0) if meta is not None else 0
         max_charges = max(1, min(9, int(meta.max_charges if meta is not None else 1)))
-        pct = parse_percent(texts) if index == 0 else None
-        if index == 0 and pct is not None:
+        seconds = parse_duration_ms(row_texts)
+        pct = parse_percent(row_texts) if index == 0 else None
+        text_reason = ""
+        if seconds is not None:
+            state = "charging"
+            remaining = int(seconds)
+            ready_at = int(server_now) + remaining
+            transition = "text-seconds"
+            tracker.states[index] = "charging"
+            tracker.ready_at[index] = ready_at
+            text_reason = "文字秒数"
+        elif index == 0 and pct is not None:
             if pct >= 100:
                 state = "ready"
                 remaining = 0
@@ -130,9 +148,11 @@ def recognize_frame_brightness(
                 transition = "pct"
                 tracker.states[0] = "charging"
                 tracker.ready_at[0] = ready_at
+            text_reason = "百分比"
         else:
             state = "ready" if p90 >= threshold else "charging"
             ready_at, remaining, transition = tracker.update(index, state, total_cd, server_now)
+            text_reason = "未读到文字，回退 p90"
         charge = parse_charge(texts)
         if index == 0:
             charges = 1 if state != "unknown" else 0
@@ -160,19 +180,20 @@ def recognize_frame_brightness(
                 slot=index,
                 roi=(roi.x, roi.y, roi.width, roi.height),
                 texts=list(texts),
-                parsed={"percent": pct, "charge": charge},
+                parsed={"percent": pct, "charge": charge, "seconds_ms": seconds},
                 mask_ratio=0.0,
+                p90=round(p90, 2),
+                bright_ratio=round(bright_ratio, 4),
+                transition=transition,
+                text_texts=list(row_texts),
+                text_reason=text_reason,
                 state=state,
                 remaining_ms=int(remaining),
                 reason=(
                     f"p90={p90:.1f} {'>= ' if p90 >= threshold else '< '}阈值 {threshold}，"
-                    f"亮比例={bright_ratio:.3f}，{transition or 'steady'}"
+                    f"亮比例={bright_ratio:.3f}，{text_reason or transition or 'steady'}"
                 ),
                 expanded_roi=None,
             )
         )
-        # 附加诊断字段（dataclass 未声明时通过临时属性仍是可读的；导出使用 to_dict 扩展）
-        result.diagnostics[-1].p90 = round(p90, 2)
-        result.diagnostics[-1].bright_ratio = round(bright_ratio, 4)
-        result.diagnostics[-1].transition = transition
     return result

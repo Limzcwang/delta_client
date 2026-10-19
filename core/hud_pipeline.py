@@ -37,6 +37,8 @@ class SlotDiagnostic:
     p90: float = 0.0
     bright_ratio: float = 0.0
     transition: str = ""
+    text_texts: list[str] = field(default_factory=list)
+    text_reason: str = ""
     state: str = "unknown"
     remaining_ms: int = 0
     reason: str = ""
@@ -53,6 +55,8 @@ class SlotDiagnostic:
             "p90": round(float(self.p90), 2),
             "bright_ratio": round(float(self.bright_ratio), 4),
             "transition": self.transition,
+            "text_texts": list(self.text_texts),
+            "text_reason": self.text_reason,
             "state": self.state,
             "remaining_ms": int(self.remaining_ms),
             "reason": self.reason,

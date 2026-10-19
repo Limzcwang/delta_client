@@ -74,6 +74,29 @@ def read_skill_bar_texts(ocr: HudOcr, image: Any, profile: HudProfile) -> list[l
     return [read_roi_texts(ocr, image, roi, profile.ocr_threshold) for roi in profile.slot_rois()]
 
 
+def read_text_roi_texts(ocr: HudOcr, image: Any, roi: Roi, scale: int = 3) -> list[str]:
+    """文字行 OCR：裁槽下方 ROI，放大 3x + 灰度，提高 NN秒 识别率。"""
+    crop_image = crop(image, roi)
+    if crop_image is None:
+        return []
+    try:
+        import cv2  # type: ignore[import-not-found]
+
+        target = crop_image
+        if target.ndim == 3:
+            target = cv2.cvtColor(target, cv2.COLOR_BGR2GRAY)
+        target = cv2.resize(
+            target,
+            (max(1, target.shape[1] * scale), max(1, target.shape[0] * scale)),
+            interpolation=cv2.INTER_CUBIC,
+        )
+        if target.ndim == 2:
+            target = cv2.cvtColor(target, cv2.COLOR_GRAY2BGR)
+        return [line.text for line in ocr.read_lines(target) if line.score >= 0.3]
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def read_all_texts(ocr: HudOcr, image: Any, profile: HudProfile) -> list[str]:
     return read_roi_texts(ocr, image, profile.skill_bar, profile.ocr_threshold)
 

@@ -78,12 +78,13 @@ class BrightnessTests(unittest.TestCase):
             client_width=2560,
             client_height=1440,
             slots=[Roi(0, 0, 84, 84).to_dict(), Roi(100, 0, 84, 84).to_dict(), Roi(200, 0, 84, 84).to_dict()],
+            text_row=Roi(0, 100, 300, 56),
         )
         frame = np.zeros((200, 400, 3), dtype=np.uint8)
         frame[0:84, 0:84] = 200
         frame[0:84, 100:184] = 60
         frame[0:84, 200:284] = 60
-        ocr = _Ocr([["50%"], ["2"], []])
+        ocr = _Ocr([[], [], [], ["50%"], ["2"], []])
         tracker = SkillTransitionTracker()
         result = recognize_frame(
             frame, profile, operator=_operator(), ocr=ocr, tracker=tracker, server_now=1000
@@ -119,6 +120,56 @@ class BrightnessTests(unittest.TestCase):
         self.assertEqual("ready", result.slots["ability"].state)
         self.assertEqual("ready", result.slots["throwable"].state)
 
+    def test_text_seconds_priority_over_p90(self) -> None:
+        if not HAS_NUMPY:
+            self.skipTest("numpy 未安装")
+        profile = HudProfile(
+            client_width=400,
+            client_height=200,
+            slots=[Roi(0, 0, 84, 84).to_dict(), Roi(100, 0, 84, 84).to_dict(), Roi(200, 0, 84, 84).to_dict()],
+            text_row=Roi(0, 100, 300, 56),
+        )
+        frame = np.full((200, 400, 3), 60, dtype=np.uint8)
+        ocr = _Ocr([[], [], [], ["1%"], ["55秒"], ["36秒"]])
+        result = recognize_frame(
+            frame, profile, operator=_operator(), ocr=ocr,
+            tracker=SkillTransitionTracker(), server_now=1000,
+        )
+        self.assertEqual("charging", result.slots["ultimate"].state)
+        self.assertEqual(55_000, result.slots["ability"].remaining_ms)
+        self.assertEqual(36_000, result.slots["throwable"].remaining_ms)
+        self.assertEqual(56_000, result.slots["ability"].ready_at)
+        self.assertEqual("文字秒数", result.diagnostics[1].text_reason)
+
+    def test_real_text_layer_ocr_fixtures(self) -> None:
+        if not HAS_NUMPY or cv2 is None:
+            self.skipTest("opencv/numpy 未安装")
+        try:
+            from core.hud_ocr import HudOcr, read_text_roi_texts
+        except Exception:  # noqa: BLE001
+            self.skipTest("OCR 依赖未安装")
+        from core.hud_recognition import parse_duration_ms, parse_percent
+
+        base = Path(__file__).parent / "fixtures" / "hud_text"
+        profile = HudProfile(
+            client_width=800,
+            client_height=340,
+            skill_bar=Roi(272, 162, 252, 84),
+            text_row=Roi(266, 252, 300, 56),
+        )
+        ocr = HudOcr()
+        image = cv2.imdecode(np.fromfile(str(base / "cd_55_36.png"), dtype=np.uint8), cv2.IMREAD_COLOR)
+        texts = [read_text_roi_texts(ocr, image, roi) for roi in profile.text_rois()]
+        self.assertIn(55_000, [parse_duration_ms(item) for item in texts])
+        self.assertIn(36_000, [parse_duration_ms(item) for item in texts])
+
+        image = cv2.imdecode(np.fromfile(str(base / "pct_1.png"), dtype=np.uint8), cv2.IMREAD_COLOR)
+        texts = [read_text_roi_texts(ocr, image, roi) for roi in profile.text_rois()]
+        self.assertEqual(3, parse_percent(texts[0]))
+        durations = [parse_duration_ms(item) for item in texts]
+        self.assertIn(37_000, durations)
+        self.assertIn(18_000, durations)
+
     def test_ultimate_ready_when_bright(self) -> None:
         if not HAS_NUMPY:
             self.skipTest("numpy 未安装")
@@ -138,6 +189,5 @@ class BrightnessTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
 
 

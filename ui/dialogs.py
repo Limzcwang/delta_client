@@ -831,6 +831,7 @@ class SettingsDialog(QDialog):
         self.hud_profile_label.setText(
             f"当前 profile：skill_bar=({bar.x},{bar.y}) {bar.width}×{bar.height}；"
             f"avatar_roi=({avatar.x},{avatar.y}) {avatar.width}×{avatar.height}；"
+            f"text_row=({profile.text_row.x},{profile.text_row.y}) {profile.text_row.width}×{profile.text_row.height}；"
             f"亮度阈值 {profile.brightness_threshold}；"
             f"OCR 阈值 {profile.ocr_threshold:.2f} / 头像阈值 {profile.template_threshold:.2f}"
         )
