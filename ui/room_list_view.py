@@ -1,4 +1,4 @@
-"""房间大厅：公共房间列表 + 创建/加入/退出入口。"""
+"""房间大厅：公共房间列表 + 创建/加入/退出入口（F：5s 自动刷新按 id diff 更新）。"""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.models import Room
+from core.room_list import room_key
 
 
 class RoomListView(QWidget):
@@ -24,6 +25,9 @@ class RoomListView(QWidget):
     join_requested = Signal(str)  # 房间号，空字符串表示让用户自己输入
     logout_requested = Signal()
     settings_requested = Signal()
+    profile_requested = Signal()
+
+    COLUMNS = 4
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -35,7 +39,6 @@ class RoomListView(QWidget):
         root.setContentsMargins(30, 24, 30, 20)
         root.setSpacing(14)
 
-        # 顶部标题栏
         header = QHBoxLayout()
         header.setSpacing(12)
 
@@ -59,7 +62,6 @@ class RoomListView(QWidget):
         header.addWidget(self.user_label, alignment=Qt.AlignmentFlag.AlignVCenter)
         root.addLayout(header)
 
-        # 操作按钮
         actions = QHBoxLayout()
         actions.setSpacing(10)
         self.refresh_button = QPushButton("刷新列表")
@@ -69,6 +71,8 @@ class RoomListView(QWidget):
         self.create_button.clicked.connect(self.create_requested.emit)
         self.join_button = QPushButton("加入房间")
         self.join_button.clicked.connect(self._emit_join)
+        self.profile_button = QPushButton("个人资料")
+        self.profile_button.clicked.connect(self.profile_requested.emit)
         self.logout_button = QPushButton("退出登录")
         self.logout_button.clicked.connect(self.logout_requested.emit)
         self.settings_button = QPushButton("连接设置")
@@ -79,12 +83,12 @@ class RoomListView(QWidget):
         actions.addWidget(self.create_button)
         actions.addWidget(self.join_button)
         actions.addStretch(1)
+        actions.addWidget(self.profile_button)
         actions.addWidget(self.settings_button)
         actions.addWidget(self.logout_button)
         root.addLayout(actions)
 
-        # 房间表格
-        self.table = QTableWidget(0, 4)
+        self.table = QTableWidget(0, self.COLUMNS)
         self.table.setHorizontalHeaderLabels(["房间号", "房间名", "人数", "类型"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -101,19 +105,22 @@ class RoomListView(QWidget):
         self.table.cellDoubleClicked.connect(self._on_double_click)
         root.addWidget(self.table, stretch=1)
 
-        # 底部状态
         footer = QHBoxLayout()
         self.status_label = QLabel("尚未加载房间")
         self.status_label.setObjectName("Muted")
+        self.auto_hint = QLabel("大厅每 5s 自动刷新")
+        self.auto_hint.setObjectName("Hint")
         note = QLabel("私有房间不会出现在公共列表，需要输入 5 位房间号和密码加入")
         note.setObjectName("Hint")
         footer.addWidget(self.status_label, stretch=1)
+        footer.addWidget(self.auto_hint)
         footer.addWidget(note)
         root.addLayout(footer)
 
     # ---------- 对外 ----------
-    def set_user(self, username: str) -> None:
-        self.user_label.setText(f"当前用户：{username or '-'}")
+    def set_user(self, display_name: str) -> None:
+        """F：展示昵称（账号只在个人资料页对自己可见）。"""
+        self.user_label.setText(f"当前用户：{display_name or '-'}")
 
     def set_mode(self, is_mock: bool, server_url: str) -> None:
         self.mode_badge.setText("MOCK 模式" if is_mock else "LIVE 模式")
@@ -122,31 +129,65 @@ class RoomListView(QWidget):
         mode_note = "内置演示后端（不联网）" if is_mock else server_url
         self.subtitle.setText(f"服务器：{mode_note}  ·  双击行可直接加入")
 
-    def set_rooms(self, rooms: list[Room]) -> None:
-        self._rooms = list(rooms)
-        self.table.setRowCount(0)
-        for row, room in enumerate(self._rooms):
-            self.table.insertRow(row)
-            values = [
-                room.code or "-",
-                room.display_name,
-                str(room.member_count),
-                "🔒 私有" if room.has_password else "公开",
-            ]
-            for column, text in enumerate(values):
-                item = QTableWidgetItem(text)
-                if column in (0, 2, 3):
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                self.table.setItem(row, column, item)
-        if not self._rooms:
+    def set_auto_refresh_hint(self, text: str) -> None:
+        self.auto_hint.setText(str(text))
+
+    def update_rooms(self, rooms: list[Room]) -> None:
+        """F-c3：按 room_key diff 更新；保留选中行与滚动位置，不整页重建。"""
+        selected_key = self._selected_key()
+        scroll_value = self.table.verticalScrollBar().value()
+        desired = list(rooms)
+        desired_keys = [room_key(room) for room in desired]
+
+        # 1) 删除已不存在的行（从下往上，避免索引漂移）
+        row = 0
+        while row < self.table.rowCount():
+            key = self._row_key(row)
+            if not key or key not in desired_keys:
+                self.table.removeRow(row)
+            else:
+                row += 1
+
+        # 2) 按新顺序就地更新/插入
+        for index, room in enumerate(desired):
+            key = room_key(room)
+            current = self._find_row(key)
+            if current is None:
+                self.table.insertRow(index)
+                self._write_row(index, room)
+            else:
+                if current != index:
+                    items = [self.table.takeItem(current, column) for column in range(self.COLUMNS)]
+                    self.table.removeRow(current)
+                    self.table.insertRow(index)
+                    for column, item in enumerate(items):
+                        if item is not None:
+                            self.table.setItem(index, column, item)
+                self._write_row(index, room)
+
+        # 3) 清理多余行（理论上步骤 1/2 已对齐）
+        while self.table.rowCount() > len(desired):
+            self.table.removeRow(self.table.rowCount() - 1)
+
+        self._rooms = desired
+        if not desired:
             self.status_label.setText("暂无公开房间，点「创建房间」开一个吧")
+
+        # 4) 恢复选中与滚动位置
+        if selected_key:
+            row = self._find_row(selected_key)
+            if row is not None:
+                self.table.selectRow(row)
+        self.table.verticalScrollBar().setValue(min(scroll_value, self.table.verticalScrollBar().maximum()))
+
+    def set_rooms(self, rooms: list[Room]) -> None:
+        """兼容旧调用（首次加载也走 diff，不会整页重建）。"""
+        self.update_rooms(rooms)
 
     def set_loading(self, loading: bool) -> None:
         self.refresh_button.setEnabled(not loading)
         self.join_button.setEnabled(not loading)
         self.create_button.setEnabled(not loading)
-        if loading:
-            self.status_label.setText("正在加载房间列表…")
 
     def set_status(self, text: str, error: bool = False) -> None:
         self.status_label.setText(str(text))
@@ -159,6 +200,43 @@ class RoomListView(QWidget):
         return ""
 
     # ---------- 内部 ----------
+    def _row_key(self, row: int) -> str:
+        item = self.table.item(row, 0)
+        if item is None:
+            return ""
+        data = item.data(Qt.ItemDataRole.UserRole)
+        return str(data) if data else ""
+
+    def _find_row(self, key: str) -> int | None:
+        for row in range(self.table.rowCount()):
+            if self._row_key(row) == key:
+                return row
+        return None
+
+    def _selected_key(self) -> str:
+        row = self.table.currentRow()
+        if 0 <= row < self.table.rowCount():
+            return self._row_key(row)
+        return ""
+
+    def _write_row(self, row: int, room: Room) -> None:
+        values = [
+            room.code or "-",
+            room.display_name,
+            str(room.member_count),
+            "🔒 私有" if room.has_password else "公开",
+        ]
+        for column, text in enumerate(values):
+            item = self.table.item(row, column)
+            if item is None:
+                item = QTableWidgetItem()
+                self.table.setItem(row, column, item)
+            item.setText(text)
+            if column == 0:
+                item.setData(Qt.ItemDataRole.UserRole, room_key(room))
+            if column in (0, 2, 3):
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+
     def _emit_join(self) -> None:
         self.join_requested.emit(self.selected_code())
 

@@ -55,7 +55,17 @@ class Session:
 
     @property
     def username(self) -> str:
+        """账号（仅个人资料/设置页对自己展示）。"""
         return str(self.user.get("username") or self.user.get("name") or "")
+
+    @property
+    def nickname(self) -> str:
+        """昵称（F：展示层统一用昵称；旧协议缺 nickname 时回退 username）。"""
+        return str(self.user.get("nickname") or "")
+
+    @property
+    def display_name(self) -> str:
+        return self.nickname or self.username or "未命名用户"
 
     @property
     def user_id(self) -> str:
@@ -79,6 +89,15 @@ class Session:
         self.token = str(token).strip() if token else None
         self.user = sanitize_user(user)
         self.save()
+
+    def update_user(self, user: Mapping[str, Any] | None) -> dict[str, Any]:
+        """本地资料更新（F）：合并昵称等字段并落盘（token 不变、不退出登录）。"""
+        if isinstance(user, Mapping):
+            merged = dict(self.user)
+            merged.update(sanitize_user(user))
+            self.user = merged
+            self.save()
+        return dict(self.user)
 
     def set_persist_token(self, enabled: bool) -> None:
         self.persist_token = bool(enabled)

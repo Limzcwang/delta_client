@@ -103,6 +103,15 @@ class FailureRetryTests(unittest.TestCase):
         self.assertEqual(["c-1", "c-2"], [entry.client_msg_id for entry in failed])
         self.assertEqual([], timeline.pending_entries())
 
+    def test_rename_sender_updates_own_messages(self) -> None:
+        timeline = ChatTimeline()
+        timeline.add_pending("c-1", "旧昵称", "hi", sender_id="1")
+        timeline.merge_remote(make_message("m-2", "c-2", sender="别人", content="yo"))
+        self.assertTrue(timeline.rename_sender("1", "新昵称"))
+        self.assertEqual("新昵称", timeline.entries[0].sender_name)
+        self.assertEqual("别人", timeline.entries[1].sender_name)
+        self.assertFalse(timeline.rename_sender("99", "无关"))
+
     def test_timeout_fail_after_copy(self) -> None:
         timeline = ChatTimeline()
         timeline.add_pending("c-1", "alice", "hi")

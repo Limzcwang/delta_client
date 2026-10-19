@@ -8,7 +8,9 @@ from typing import Any, Mapping
 ROOM_CODE_LENGTH = 5
 ROOM_CODE_PATTERN = re.compile(r"^[A-Z0-9]{5}$")
 MAX_ROOM_NAME_LENGTH = 32
+MAX_ROOM_NAME_UPDATE_LENGTH = 30   # F：房主修改房间名 1–30
 MAX_ROOM_PASSWORD_LENGTH = 64
+ROOM_PASSWORD_CHANGE_MIN = 4       # F：房主修改私有房密码 4–64
 VISIBILITIES = ("public", "private")
 
 
@@ -80,6 +82,39 @@ def validate_room_password(password: Any, visibility: str) -> str | None:
     if len(text) > MAX_ROOM_PASSWORD_LENGTH:
         raise ValidationError(f"房间密码最多 {MAX_ROOM_PASSWORD_LENGTH} 个字符")
     return text
+
+
+def validate_room_name_update(raw: Any) -> str:
+    """房主修改房间名（F）：1–30 字符，去首尾空白，不含控制字符。"""
+    name = str(raw or "").strip()
+    if not name:
+        raise ValidationError("请输入房间名称")
+    if len(name) > MAX_ROOM_NAME_UPDATE_LENGTH:
+        raise ValidationError(f"房间名称最多 {MAX_ROOM_NAME_UPDATE_LENGTH} 个字符")
+    if any(ord(char) < 32 or ord(char) == 127 for char in name):
+        raise ValidationError("房间名称不能包含控制字符")
+    return name
+
+
+def validate_room_password_change(new_password: Any, confirm: Any) -> str:
+    """房主修改私有房密码（F）：4–64 位，两次输入一致。"""
+    password = "" if new_password is None else str(new_password)
+    confirmation = "" if confirm is None else str(confirm)
+    if len(password) < ROOM_PASSWORD_CHANGE_MIN:
+        raise ValidationError(f"房间密码至少 {ROOM_PASSWORD_CHANGE_MIN} 位")
+    if len(password) > MAX_ROOM_PASSWORD_LENGTH:
+        raise ValidationError(f"房间密码最多 {MAX_ROOM_PASSWORD_LENGTH} 位")
+    if password != confirmation:
+        raise ValidationError("两次输入的房间密码不一致")
+    return password
+
+
+def validate_room_delete_confirmation(typed_name: Any, room_name: str) -> str:
+    """删除房间的二次确认：必须原样输入房间名。"""
+    typed = str(typed_name or "").strip()
+    if typed != str(room_name or "").strip():
+        raise ValidationError("请输入完整房间名以确认删除")
+    return typed
 
 
 def room_has_password(room: Mapping[str, Any]) -> bool:

@@ -13,7 +13,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core.validation import ValidationError, validate_login_input, validate_register_input
+from core.validation import (
+    ValidationError,
+    validate_login_input,
+    validate_register_input,
+    validate_register_username,
+)
 
 
 class LoginView(QWidget):
@@ -107,8 +112,17 @@ class LoginView(QWidget):
         card_layout.addSpacing(10)
 
         self.username_edit = QLineEdit()
-        self.username_edit.setPlaceholderText("用户名")
+        self.username_edit.setPlaceholderText("账号")
         self.username_edit.setClearButtonEnabled(True)
+        self.username_edit.textChanged.connect(self._update_register_hint)
+
+        # 注册账号实时规则提示（F）：6–20 位字母/数字，至少含 1 个字母
+        self.register_username_hint = QLabel()
+        self.register_username_hint.setObjectName("Hint")
+        self.register_username_hint.setWordWrap(True)
+        self.register_username_hint.hide()
+        card_layout.addWidget(self.username_edit)
+        card_layout.addWidget(self.register_username_hint)
 
         self.password_edit = QLineEdit()
         self.password_edit.setPlaceholderText("密码")
@@ -118,7 +132,6 @@ class LoginView(QWidget):
         self.confirm_edit.setPlaceholderText("确认密码")
         self.confirm_edit.setEchoMode(QLineEdit.EchoMode.Password)
 
-        card_layout.addWidget(self.username_edit)
         card_layout.addWidget(self.password_edit)
         card_layout.addWidget(self.confirm_edit)
 
@@ -180,10 +193,30 @@ class LoginView(QWidget):
             "注册后即可登录并加入队友房间" if is_register else "使用账号登录，进入房间大厅"
         )
         self.confirm_edit.setVisible(is_register)
+        self.register_username_hint.setVisible(is_register)
         self.primary_button.setText("注 册" if is_register else "登 录")
         self.switch_button.setText("已有账号？返回登录" if is_register else "没有账号？创建账户")
+        self._update_register_hint()
         self.hide_messages()
         self._focus_first()
+
+    def _update_register_hint(self) -> None:
+        """注册模式下实时提示账号规则（F）。"""
+        if self._mode != "register":
+            return
+        raw = self.username_edit.text().strip()
+        if not raw:
+            self.register_username_hint.setText("账号：6–20 位字母或数字，至少包含 1 个字母")
+            self.register_username_hint.setStyleSheet("color: #8b98a8;")
+            return
+        try:
+            validate_register_username(raw)
+        except ValidationError as exc:
+            self.register_username_hint.setText(str(exc))
+            self.register_username_hint.setStyleSheet("color: #ff9b8f;")
+        else:
+            self.register_username_hint.setText("账号格式可用")
+            self.register_username_hint.setStyleSheet("color: #8be3a8;")
 
     def set_server_text(self, server_url: str, mode_label: str) -> None:
         self.server_label.setText(f"服务器：{server_url}  ·  模式：{mode_label}")

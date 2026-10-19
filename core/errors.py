@@ -112,6 +112,16 @@ CODE_KINDS: dict[Any, ErrorKind] = {
     "GET_PUBLIC_ROOMS_FAILED": ErrorKind.SERVER,
     "USER_NOT_IN_ROOM": ErrorKind.FORBIDDEN,
     "INVALID_DOMAIN": ErrorKind.VALIDATION,
+    # F：账号/昵称/密码校验
+    "INVALID_USERNAME": ErrorKind.VALIDATION,
+    "USERNAME_TAKEN": ErrorKind.CONFLICT,
+    "INVALID_NICKNAME": ErrorKind.VALIDATION,
+    "NICKNAME_TAKEN": ErrorKind.CONFLICT,
+    "INVALID_PASSWORD": ErrorKind.VALIDATION,
+    "OLD_PASSWORD_INVALID": ErrorKind.VALIDATION,
+    "INVALID_OLD_PASSWORD": ErrorKind.VALIDATION,
+    "PASSWORD_MISMATCH": ErrorKind.VALIDATION,
+    "PASSWORD_TOO_WEAK": ErrorKind.VALIDATION,
 }
 
 CODE_MESSAGES: dict[Any, str] = {
@@ -160,7 +170,6 @@ CODE_MESSAGES: dict[Any, str] = {
     "CANVAS_OUT_OF_ORDER": "画板操作序号过期，已丢弃",
     "INVALID_CANVAS_OP": "画板操作不合法（点数/坐标/尺寸超限）",
     # PROTOCOL PR#9 §7.3 HTTP data.error_code
-    "ROOM_NAME_INVALID": "房间名称不合法（1-32 字符）",
     "INVALID_BACKGROUND": "房间底图不合法",
     "INVALID_VISIBILITY": "房间可见性不合法",
     "ROOM_PASSWORD_NOT_ALLOWED": "公开房间不允许设置密码",
@@ -175,6 +184,17 @@ CODE_MESSAGES: dict[Any, str] = {
     "LEAVE_ROOM_FAILED": "离开房间失败，请稍后重试",
     "GET_PUBLIC_ROOMS_FAILED": "获取房间列表失败，请稍后重试",
     "INTERNAL_ERROR": "服务端内部错误，请稍后重试",
+    # F：账号/昵称/密码校验
+    "INVALID_USERNAME": "账号需为 6–20 位字母或数字，且至少包含 1 个字母",
+    "USERNAME_TAKEN": "账号已被占用",
+    "INVALID_NICKNAME": "昵称需为 1–20 个字符",
+    "NICKNAME_TAKEN": "昵称已被占用",
+    "INVALID_PASSWORD": "新密码需为 8–64 位",
+    "OLD_PASSWORD_INVALID": "旧密码错误",
+    "INVALID_OLD_PASSWORD": "旧密码错误",
+    "PASSWORD_MISMATCH": "两次输入的新密码不一致",
+    "PASSWORD_TOO_WEAK": "密码强度不足，请使用 8–64 位密码",
+    "ROOM_NAME_INVALID": "房间名称不合法（1–30 字符）",
 }
 
 #: HTTP 状态码兜底映射（无业务码时使用）

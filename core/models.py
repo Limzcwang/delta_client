@@ -73,25 +73,38 @@ def _as_str(value: Any, default: str = "") -> str:
 
 @dataclass(frozen=True)
 class Member:
-    """房间成员（PROTOCOL.md §3.2 UserSummary）。"""
+    """房间成员（PROTOCOL F：优先 ``nickname``，兼容旧 ``username``）。"""
 
     id: str = ""
     username: str = ""
+    nickname: str = ""
     online: bool = True
+    legacy_protocol: bool = False
 
     @classmethod
     def from_api(cls, payload: Mapping[str, Any]) -> "Member":
         if not isinstance(payload, Mapping):
             payload = {}
+        nickname = _as_str(_first(payload, "nickname"))
+        username = _as_str(_first(payload, "username", "account", "name"))
         return cls(
             id=_as_str(_first(payload, "id", "user_id", "userId")),
-            username=_as_str(_first(payload, "username", "name", "nickname")),
+            username=username,
+            nickname=nickname,
             online=_first(payload, "online", default=True) is not False,
+            # F：新协议 user 对象为 {id,nickname}；缺 nickname 视为旧协议回退 username
+            legacy_protocol=bool(username and not nickname),
         )
 
     @property
     def display_name(self) -> str:
-        return self.username or self.id or "未知用户"
+        """展示层用昵称；旧协议回退 username，再回退 id。"""
+        return self.nickname or self.username or self.id or "未知用户"
+
+    @property
+    def account(self) -> str:
+        """账号仅用于个人设置等“对自己可见”的场景。"""
+        return self.username
 
 
 @dataclass(frozen=True)
@@ -167,10 +180,13 @@ class ChatMessage:
     room_id: str = ""
     sender_id: str = ""
     sender_name: str = ""
+    sender_nickname: str = ""
+    sender_username: str = ""
     content: str = ""
     client_msg_id: str = ""
     created_at: int | None = None
     system: bool = False
+    legacy_protocol: bool = False
 
     @property
     def ts(self) -> int | None:
@@ -183,24 +199,37 @@ class ChatMessage:
             payload = {}
         user = payload.get("user")
         sender = payload.get("sender")
+        sender_id = ""
+        sender_nickname = ""
+        sender_username = ""
+
+        def _read_user(mapping: Mapping[str, Any]) -> None:
+            nonlocal sender_id, sender_nickname, sender_username
+            sender_id = _as_str(_first(mapping, "id", "user_id", "userId"))
+            sender_nickname = _as_str(_first(mapping, "nickname"))
+            sender_username = _as_str(_first(mapping, "username", "account"))
+
         if isinstance(user, Mapping):
-            sender_id = _as_str(_first(user, "id", "user_id", "userId"))
-            sender_name = _as_str(_first(user, "username", "name", "nickname", "id"))
+            _read_user(user)
         elif isinstance(sender, Mapping):
-            sender_id = _as_str(_first(sender, "id", "user_id", "userId"))
-            sender_name = _as_str(_first(sender, "username", "name", "id"))
-        else:
-            sender_id = _as_str(_first(payload, "user_id", "sender_id"))
-            sender_name = _as_str(_first(payload, "username", "sender_name"))
+            _read_user(sender)
+
+        if not sender_nickname and not sender_username:
+            sender_username = _as_str(_first(payload, "username", "sender_name"))
+        sender_name = sender_nickname or sender_username or _as_str(payload.get("sender_name"))
+        legacy_protocol = bool(sender_username and not sender_nickname)
         return cls(
             message_id=_as_str(_first(payload, "id", "message_id", "messageId")),
             room_id=_as_str(_first(payload, "room_id", "roomId", "room_code")),
             sender_id=sender_id,
             sender_name=sender_name or "未知用户",
+            sender_nickname=sender_nickname,
+            sender_username=sender_username,
             content=_as_str(payload.get("content")),
             client_msg_id=_as_str(_first(payload, "client_msg_id", "clientMsgId")),
             created_at=parse_ts(_first(payload, "created_at", "createdAt", "ts")),
             system=False,
+            legacy_protocol=legacy_protocol,
         )
 
     @property
@@ -221,10 +250,16 @@ class ChatPage:
     messages: tuple[ChatMessage, ...] = ()
     has_more: bool = False
     next_before: str | None = None
+    window_days: int | None = None
+    truncated: bool = False
 
 
 def parse_chat_page(payload: Any) -> ChatPage:
-    """解析 ``GET /api/v1/rooms/{ref}/messages`` 的 ``{items,has_more,next_before}``。"""
+    """解析 ``GET /api/v1/rooms/{ref}/messages`` 的 ``{items,has_more,next_before}``。
+
+    F：兼容后端可能返回的历史窗口字段（``window_days`` / ``truncated``），用于
+    提示「仅显示最近 N 天消息」。
+    """
     data = unwrap_payload(payload)
     if not isinstance(data, Mapping):
         return ChatPage()
@@ -233,7 +268,45 @@ def parse_chat_page(payload: Any) -> ChatPage:
     if isinstance(raw_items, list):
         messages = tuple(ChatMessage.from_ws(item) for item in raw_items if isinstance(item, Mapping))
     next_before = _as_str(_first(data, "next_before", "nextBefore")) or None
-    return ChatPage(messages=messages, has_more=bool(data.get("has_more")), next_before=next_before)
+    window_raw = _first(
+        data, "window_days", "history_window_days", "message_window_days", "days"
+    )
+    try:
+        window_days = int(window_raw) if window_raw is not None else None
+    except (TypeError, ValueError):
+        window_days = None
+    if window_days is not None and window_days <= 0:
+        window_days = None
+    truncated = bool(
+        data.get("truncated")
+        or data.get("history_truncated")
+        or data.get("is_truncated")
+    )
+    return ChatPage(
+        messages=messages,
+        has_more=bool(data.get("has_more")),
+        next_before=next_before,
+        window_days=window_days,
+        truncated=truncated,
+    )
+
+
+def parse_history_window_days(payload: Mapping[str, Any] | None) -> int | None:
+    """从 room_joined 等载荷读取历史窗口天数（F，字段名兼容多种写法）。"""
+    if not isinstance(payload, Mapping):
+        return None
+    raw = _first(
+        payload,
+        "history_window_days",
+        "window_days",
+        "message_window_days",
+        "history_days",
+    )
+    try:
+        days = int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+    return days if days and days > 0 else None
 
 
 def make_system_message(content: str) -> ChatMessage:

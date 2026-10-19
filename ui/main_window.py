@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import replace
 from typing import Any, Mapping
 
-from PySide6.QtCore import QEventLoop, QTimer
+from PySide6.QtCore import QEvent, QEventLoop, QTimer
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QDialog,
@@ -18,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from config import AppConfig, ConfigError, normalize_server_url, normalize_ws_url, save_config
+from core.backoff import ReconnectBackoff
 from core.canvas import (
     CanvasError,
     CanvasRateLimiter,
@@ -27,14 +29,27 @@ from core.canvas import (
 )
 from core.chat import ChatTimeline
 from core.errors import ApiError, ErrorKind, to_user_message
-from core.models import ChatMessage, Member, Room, RoomDetail, now_ms, parse_members
+from core.models import (
+    ChatMessage,
+    Member,
+    Room,
+    RoomDetail,
+    now_ms,
+    parse_history_window_days,
+    parse_members,
+)
 from core.protocol import extract_token, extract_user, make_client_msg_id, message_type
 from net.api_client import ApiClient, LoginResult
 from net.mock_backend import MockApiClient, MockWsClient
 from net.ws_client import WsClient
 from state.session import Session, default_session_path
 from ui.async_bridge import AsyncBridge
-from ui.dialogs import CreateRoomDialog, JoinRoomDialog, SettingsDialog
+from ui.dialogs import (
+    CreateRoomDialog,
+    JoinRoomDialog,
+    RoomSettingsDialog,
+    SettingsDialog,
+)
 from ui.login_view import LoginView
 from ui.room_list_view import RoomListView
 from ui.room_view import RoomView
@@ -97,6 +112,14 @@ class MainWindow(QMainWindow):
         self._canvas_loaded = False
         self._canvas_queue: list[dict[str, Any]] = []
         self._canvas_limiter = CanvasRateLimiter()
+        # F-c3：大厅 5s 自动刷新（失败退避 5→10→20s）
+        self._lobby_timer = QTimer(self)
+        self._lobby_timer.setInterval(5000)
+        self._lobby_timer.timeout.connect(self._auto_refresh_lobby)
+        self._lobby_backoff = ReconnectBackoff(base=5.0, factor=2.0, max_delay=20.0)
+        self._rooms_loading = False
+        # F-c5：历史窗口文案（room_joined / 历史接口可选字段）
+        self._history_window_days: int | None = None
 
         self.setWindowTitle("Delta Client - 三角洲行动队友房间")
         self.resize(1200, 780)
@@ -137,11 +160,13 @@ class MainWindow(QMainWindow):
         self.room_list_view.join_requested.connect(self._on_join_room)
         self.room_list_view.logout_requested.connect(self._on_logout)
         self.room_list_view.settings_requested.connect(self._on_settings)
+        self.room_list_view.profile_requested.connect(self._on_profile)
 
         self.room_view.leave_requested.connect(self._on_leave_room)
         self.room_view.chat_submitted.connect(self._on_chat_submitted)
         self.room_view.history_requested.connect(self._on_history_requested)
         self.room_view.retry_requested.connect(self._on_retry_chat)
+        self.room_view.room_settings_requested.connect(self._on_room_settings)
         self.room_view.canvas.stroke_finished.connect(self._on_canvas_strokes)
         self.room_view.canvas.clear_requested.connect(self._on_canvas_clear_requested)
 
@@ -156,7 +181,15 @@ class MainWindow(QMainWindow):
 
     # ---------- 通用 ----------
     def _username(self) -> str:
-        return self.session.username or "未知用户"
+        """F：展示用昵称（成员/聊天/提示均用它，不显示账号）。"""
+        return self.session.display_name or "未知用户"
+
+    def _account(self) -> str:
+        """账号：仅在个人资料页对自己展示。"""
+        return self.session.username
+
+    def _user_id(self) -> str:
+        return self.session.user_id
 
     def _set_status(self, message: str) -> None:
         self.statusBar().showMessage(str(message), 8000)
@@ -174,6 +207,7 @@ class MainWindow(QMainWindow):
             return None
 
     def _show_login(self, message: str = "") -> None:
+        self._stop_lobby_timer()
         self.login_view.set_server_text(self.config.server_url, self.config.mode_label)
         self.login_view.set_busy(False)
         self.login_view.set_mode("login")
@@ -186,7 +220,38 @@ class MainWindow(QMainWindow):
         self.room_list_view.set_user(self._username())
         self.room_list_view.set_mode(self.config.use_mock, self.config.server_url)
         self.stack.setCurrentWidget(self.room_list_view)
-        self._refresh_rooms()
+        self._lobby_backoff.reset()
+        self._lobby_timer.setInterval(5000)
+        self._update_lobby_timer()
+        self._refresh_rooms(manual=True)
+
+    # ---------- F-c3：大厅自动刷新 ----------
+    def _update_lobby_timer(self) -> None:
+        """仅大厅可见且有焦点时开启 5s 轮询。"""
+        if self.stack.currentWidget() is self.room_list_view and self.isActiveWindow():
+            if not self._lobby_timer.isActive():
+                self._lobby_timer.setInterval(5000)
+                self._lobby_timer.start()
+                self.room_list_view.set_auto_refresh_hint("大厅每 5s 自动刷新")
+        else:
+            self._stop_lobby_timer()
+
+    def _stop_lobby_timer(self) -> None:
+        self._lobby_timer.stop()
+        self.room_list_view.set_auto_refresh_hint("")
+
+    def _auto_refresh_lobby(self) -> None:
+        if self.stack.currentWidget() is not self.room_list_view or not self.isActiveWindow():
+            self._stop_lobby_timer()
+            return
+        if self._rooms_loading:
+            return
+        self._refresh_rooms(manual=False)
+
+    def changeEvent(self, event: Any) -> None:  # noqa: N802 - Qt 覆盖
+        if event.type() == QEvent.Type.ActivationChange:
+            self._update_lobby_timer()
+        super().changeEvent(event)
 
     # ---------- 认证 ----------
     def _on_login(self, username: str, password: str) -> None:
@@ -226,7 +291,7 @@ class MainWindow(QMainWindow):
         # B2b 的 v1 注册响应与登录一致（含 access_token），可直接自动登录
         token = extract_token(data)
         if token:
-            user = extract_user(data) or {"username": username}
+            user = extract_user(data) or {"username": username, "nickname": username}
             self.session.set_login(token, user)
             self._set_status(f"注册成功，已自动登录：{self._username()}")
             self._show_rooms()
@@ -243,36 +308,57 @@ class MainWindow(QMainWindow):
     def _handle_auth_expired(self, exc: BaseException) -> None:
         message = to_user_message(exc)
         self._stop_ws()
+        self._stop_lobby_timer()
         self._current_room = None
         self._clear_room_state()
         self.session.clear()
         self._show_login(f"{message}，请重新登录")
 
     # ---------- 房间大厅 ----------
-    def _refresh_rooms(self) -> None:
-        self.room_list_view.set_loading(True)
-        self.room_list_view.set_status(f"正在连接 {self.config.server_url} …")
+    def _refresh_rooms(self, manual: bool = True) -> None:
+        if self._rooms_loading:
+            return
+        self._rooms_loading = True
+        if manual:
+            self.room_list_view.set_loading(True)
+            self.room_list_view.set_status(f"正在连接 {self.config.server_url} …")
         self._safe_submit(
             self.api.list_rooms(),
-            self._on_rooms_loaded,
-            self._on_rooms_failed,
+            lambda rooms: self._on_rooms_loaded(rooms, manual),
+            lambda exc: self._on_rooms_failed(exc, manual),
         )
 
-    def _on_rooms_loaded(self, rooms: list[Room]) -> None:
-        self.room_list_view.set_loading(False)
-        self.room_list_view.set_rooms(rooms)
+    def _on_rooms_loaded(self, rooms: list[Room], manual: bool = True) -> None:
+        self._rooms_loading = False
+        if manual:
+            self.room_list_view.set_loading(False)
+        self.room_list_view.update_rooms(rooms)
+        self._lobby_backoff.reset()
+        self._lobby_timer.setInterval(5000)
         suffix = "（Mock 演示数据）" if self.config.use_mock else ""
+        stamp = time.strftime("%H:%M:%S")
         if rooms:
-            self.room_list_view.set_status(f"共 {len(rooms)} 个公共房间{suffix}")
+            self.room_list_view.set_status(f"共 {len(rooms)} 个公共房间{suffix} · 更新于 {stamp}")
         else:
             self.room_list_view.set_status(f"暂无公开房间{suffix}，可以创建一个")
 
-    def _on_rooms_failed(self, exc: BaseException) -> None:
-        self.room_list_view.set_loading(False)
+    def _on_rooms_failed(self, exc: BaseException, manual: bool = True) -> None:
+        self._rooms_loading = False
+        if manual:
+            self.room_list_view.set_loading(False)
         if isinstance(exc, ApiError) and exc.is_auth_error:
             self._handle_auth_expired(exc)
             return
-        self.room_list_view.set_status(to_user_message(exc), error=True)
+        if manual:
+            self._lobby_backoff.reset()
+            self._lobby_timer.setInterval(5000)
+            self.room_list_view.set_status(to_user_message(exc), error=True)
+            return
+        delay = self._lobby_backoff.next_delay()
+        self._lobby_timer.setInterval(int(delay * 1000))
+        self.room_list_view.set_status(
+            f"自动刷新失败，{delay:.0f}s 后重试：{to_user_message(exc)}", error=True
+        )
 
     def _on_create_room(self) -> None:
         dialog = CreateRoomDialog(self)
@@ -342,6 +428,7 @@ class MainWindow(QMainWindow):
 
     # ---------- 房间内 ----------
     def _enter_room(self, room: Room, password: str | None = None) -> None:
+        self._stop_lobby_timer()
         self._current_room = room
         self._room_password = password
         self._ws_members_loaded = False
@@ -350,8 +437,9 @@ class MainWindow(QMainWindow):
         self._chat_has_more = False
         self._chat_next_before = None
         self._chat_loading = False
+        self._history_window_days = None
         self.room_view.set_room(room)
-        self.room_view.set_user(self._username())
+        self.room_view.set_user(self._username(), self._user_id())
         self.room_view.clear_chat()
         self.room_view.canvas.reset()
         self._canvas_rev = 0
@@ -573,6 +661,7 @@ class MainWindow(QMainWindow):
                 room = Room.from_api(payload)
                 self._current_room = room
                 self.room_view.set_room(room)
+            self._history_window_days = parse_history_window_days(message)
             members = parse_members(message.get("members"))
             if members:
                 self._ws_members_loaded = True
@@ -580,6 +669,10 @@ class MainWindow(QMainWindow):
                 self.room_view.set_members(members)
             self._on_room_joined_canvas(message.get("canvas_snapshot"))
             self.room_view.set_status("")
+        elif mtype == "room_updated":
+            self._on_room_updated(message)
+        elif mtype == "room_deleted":
+            self._on_room_deleted(message)
         elif mtype == "user_joined":
             user = message.get("user")
             if isinstance(user, Mapping):
@@ -626,6 +719,87 @@ class MainWindow(QMainWindow):
         self._timeline.add_system(str(text))
         self._render_chat()
 
+    # ---------- F-c4：房间事件 ----------
+    def _on_room_updated(self, message: Mapping[str, Any]) -> None:
+        room = self._current_room
+        if room is None:
+            return
+        payload = message.get("room")
+        if isinstance(payload, Mapping):
+            updated = Room.from_api(payload)
+        else:
+            updated = replace(
+                room,
+                name=str(message.get("name") or room.name),
+                has_password=bool(message.get("has_password", room.has_password)),
+            )
+        self._current_room = updated
+        self.room_view.set_room(updated)
+        self.room_view.set_user(self._username(), self._user_id())
+        self.room_view.set_status("房间信息已更新")
+        self._set_status(f"房间「{updated.name}」已更新")
+
+    def _on_room_deleted(self, message: Mapping[str, Any] | None = None) -> None:
+        self._system_message("房间已被房主删除")
+        self._stop_ws()
+        self._current_room = None
+        self._room_password = None
+        self._clear_room_state()
+        self._set_status("房间已被删除，已返回大厅")
+        self._show_rooms()
+
+    # ---------- 设置（含个人资料） ----------
+    def _on_profile(self) -> None:
+        self._open_settings(start_tab=1)
+
+    def _on_nickname_save(self, dialog: SettingsDialog, nickname: str) -> None:
+        self._safe_submit(
+            self.api.update_nickname(nickname),
+            lambda data: self._on_nickname_saved(dialog, data, nickname),
+            lambda exc: self._update_profile_dialog(
+                dialog, "nickname", f"昵称修改失败：{to_user_message(exc)}", False
+            ),
+        )
+
+    def _on_nickname_saved(self, dialog: SettingsDialog, data: Any, nickname: str) -> None:
+        user = dict(data) if isinstance(data, Mapping) else {}
+        user.setdefault("nickname", nickname)
+        self.session.update_user(user)
+        self.room_list_view.set_user(self._username())
+        self.room_view.set_user(self._username(), self._user_id())
+        self.room_view.update_member(self._user_id(), self._username())
+        if self._timeline.rename_sender(self._user_id(), self._username()):
+            self._render_chat()
+        self._update_profile_dialog(dialog, "nickname", "昵称已更新", True)
+        self._set_status(f"昵称已更新为：{self._username()}")
+
+    def _on_password_change(self, dialog: SettingsDialog, old_password: str, new_password: str) -> None:
+        self._safe_submit(
+            self.api.change_password(old_password, new_password),
+            lambda _result: self._on_password_changed(dialog),
+            lambda exc: self._update_profile_dialog(
+                dialog, "password", to_user_message(exc), False
+            ),
+        )
+
+    def _on_password_changed(self, dialog: SettingsDialog) -> None:
+        self._update_profile_dialog(
+            dialog, "password", "密码已修改，当前登录保持有效", True
+        )
+        self._set_status("密码已修改，当前登录保持有效")
+
+    @staticmethod
+    def _update_profile_dialog(
+        dialog: SettingsDialog, kind: str, text: str, ok: bool
+    ) -> None:
+        try:
+            if kind == "nickname":
+                dialog.set_nickname_result(text, ok)
+            else:
+                dialog.set_password_result(text, ok)
+        except RuntimeError:  # 对话框已关闭
+            logger.debug("设置对话框已关闭，忽略个人资料结果")
+
     def _render_chat(self, *, stick_to_bottom: bool = False) -> None:
         self.room_view.set_chat_entries(list(self._timeline.entries), stick_to_bottom=stick_to_bottom)
 
@@ -661,9 +835,19 @@ class MainWindow(QMainWindow):
         added = self._timeline.add_page(page)
         self._chat_has_more = bool(page.has_more)
         self._chat_next_before = page.next_before
+        if initial and (page.window_days or page.truncated):
+            self._history_window_days = page.window_days or self._history_window_days
         self._render_chat(stick_to_bottom=initial)
         if initial:
-            self.room_view.set_status(f"已加载 {len(page.messages)} 条历史消息" if page.messages else "")
+            window_days = page.window_days or self._history_window_days
+            if window_days:
+                self.room_view.set_status(f"仅显示最近 {window_days} 天消息")
+            elif page.truncated:
+                self.room_view.set_status("仅显示最近一段时间的消息（历史已截断）")
+            else:
+                self.room_view.set_status(
+                    f"已加载 {len(page.messages)} 条历史消息" if page.messages else ""
+                )
         elif added:
             self.room_view.set_status(f"已加载 {added} 条更早消息")
 
@@ -699,7 +883,9 @@ class MainWindow(QMainWindow):
             self.room_view.append_chat_input(text)
             return
         client_msg_id = make_client_msg_id()
-        self._timeline.add_pending(client_msg_id, self._username(), text, now_ms())
+        self._timeline.add_pending(
+            client_msg_id, self._username(), text, now_ms(), self._user_id()
+        )
         self._render_chat(stick_to_bottom=True)
         self._send_chat(client_msg_id, text, room)
 
@@ -918,10 +1104,24 @@ class MainWindow(QMainWindow):
 
     # ---------- 设置 ----------
     def _on_settings(self) -> None:
+        self._open_settings(start_tab=0)
+
+    def _open_settings(self, start_tab: int = 0) -> None:
         dialog = SettingsDialog(self.config, self)
         dialog.test_requested.connect(
             lambda server_text, ws_text: self._on_test_connection(dialog, server_text, ws_text)
         )
+        dialog.nickname_save_requested.connect(
+            lambda nickname: self._on_nickname_save(dialog, nickname)
+        )
+        dialog.password_change_requested.connect(
+            lambda old_password, new_password: self._on_password_change(
+                dialog, old_password, new_password
+            )
+        )
+        dialog.set_account(self._account())
+        dialog.set_nickname(self.session.nickname or self.session.username)
+        dialog.tabs.setCurrentIndex(0 if start_tab <= 0 else 1)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         new_config = dialog.config_result()
@@ -989,9 +1189,105 @@ class MainWindow(QMainWindow):
         except RuntimeError:  # 对话框已关闭，忽略迟到的测试回调
             logger.debug("设置对话框已关闭，忽略连通性测试结果")
 
+    # ---------- F-c4：房主房间管理 ----------
+    def _on_room_settings(self) -> None:
+        room = self._current_room
+        if room is None:
+            return
+        if not (self._user_id() and str(room.owner_id) == self._user_id()):
+            self.room_view.set_status("只有房主可以修改房间设置", error=True)
+            return
+        dialog = RoomSettingsDialog(room, self)
+        dialog.rename_requested.connect(lambda name: self._on_room_rename(dialog, name))
+        dialog.password_change_requested.connect(
+            lambda password: self._on_room_password_change(dialog, password)
+        )
+        dialog.delete_requested.connect(lambda: self._on_room_delete(dialog))
+        dialog.exec()
+
+    def _on_room_rename(self, dialog: RoomSettingsDialog, name: str) -> None:
+        room = self._current_room
+        if room is None:
+            return
+        self._safe_submit(
+            self.api.update_room(room.code, name=name),
+            lambda updated: self._on_room_renamed(dialog, updated),
+            lambda exc: self._room_dialog_failure(dialog, "rename", exc),
+        )
+
+    def _on_room_renamed(self, dialog: RoomSettingsDialog, updated: Room) -> None:
+        self._current_room = updated
+        self.room_view.set_room(updated)
+        self._safe_room_dialog(dialog, "rename", "房间名称已更新", True)
+        dialog.update_room(updated)
+        self._set_status(f"房间名称已更新：{updated.name}")
+
+    def _on_room_password_change(self, dialog: RoomSettingsDialog, password: str) -> None:
+        room = self._current_room
+        if room is None:
+            return
+        self._safe_submit(
+            self.api.update_room(room.code, password=password),
+            lambda updated: self._on_room_password_changed(dialog, updated),
+            lambda exc: self._room_dialog_failure(dialog, "password", exc),
+        )
+
+    def _on_room_password_changed(self, dialog: RoomSettingsDialog, updated: Room) -> None:
+        self._current_room = updated
+        self.room_view.set_room(updated)
+        self._safe_room_dialog(dialog, "password", "房间密码已更新", True)
+        dialog.update_room(updated)
+        self._set_status("房间密码已更新")
+
+    def _on_room_delete(self, dialog: RoomSettingsDialog) -> None:
+        room = self._current_room
+        if room is None:
+            return
+        self._safe_submit(
+            self.api.delete_room(room.code),
+            lambda _result: self._on_room_deleted_by_owner(dialog),
+            lambda exc: self._room_dialog_failure(dialog, "delete", exc),
+        )
+
+    def _on_room_deleted_by_owner(self, dialog: RoomSettingsDialog) -> None:
+        try:
+            dialog.accept()
+        except RuntimeError:
+            pass
+        self._stop_ws()
+        self._current_room = None
+        self._room_password = None
+        self._clear_room_state()
+        self._set_status("房间已删除，已返回大厅")
+        self._show_rooms()
+
+    def _room_dialog_failure(self, dialog: RoomSettingsDialog, kind: str, exc: BaseException) -> None:
+        if isinstance(exc, ApiError) and exc.is_auth_error:
+            self._handle_auth_expired(exc)
+            return
+        message = to_user_message(exc)
+        if isinstance(exc, ApiError) and exc.kind == ErrorKind.FORBIDDEN:
+            message = "只有房主才能执行该操作"
+        self._safe_room_dialog(dialog, kind, f"操作失败：{message}", False)
+
+    @staticmethod
+    def _safe_room_dialog(
+        dialog: RoomSettingsDialog, kind: str, text: str, ok: bool
+    ) -> None:
+        try:
+            if kind == "rename":
+                dialog.set_rename_result(text, ok)
+            elif kind == "password":
+                dialog.set_password_result(text, ok)
+            else:
+                dialog.set_delete_result(text, ok)
+        except RuntimeError:  # 对话框已关闭
+            logger.debug("房间设置对话框已关闭，忽略结果")
+
     # ---------- 关闭 ----------
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt 覆盖
         try:
+            self._stop_lobby_timer()
             room = self._current_room
             save_canvas = room is not None
             if save_canvas and self._canvas_loaded and self._canvas_snapshot_for_save() is None:

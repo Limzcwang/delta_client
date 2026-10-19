@@ -64,6 +64,19 @@ HTTP_ERROR_CODES = [
     "INVALID_CANVAS_OP",
 ]
 
+#: F：个人资料/账号相关错误码
+PROFILE_ERROR_CODES = [
+    "INVALID_USERNAME",
+    "USERNAME_TAKEN",
+    "INVALID_NICKNAME",
+    "NICKNAME_TAKEN",
+    "INVALID_PASSWORD",
+    "OLD_PASSWORD_INVALID",
+    "INVALID_OLD_PASSWORD",
+    "PASSWORD_MISMATCH",
+    "PASSWORD_TOO_WEAK",
+]
+
 
 class StatusMappingTests(unittest.TestCase):
     def test_kind_for_status(self) -> None:
@@ -240,6 +253,26 @@ class ProtocolPr9ErrorTableTests(unittest.TestCase):
         )
         self.assertEqual(error.kind, ErrorKind.CONFLICT)
         self.assertIn("房主", error.user_message)
+
+    def test_profile_error_codes_known(self) -> None:
+        for code in PROFILE_ERROR_CODES:
+            with self.subTest(code=code):
+                kind = kind_for_code(code)
+                self.assertIsNotNone(kind, f"资料错误码 {code} 未映射")
+                self.assertNotEqual(kind, ErrorKind.UNKNOWN)
+                self.assertTrue(code_message(code), f"资料错误码 {code} 缺少用户文案")
+
+    def test_invalid_username_maps_to_friendly_hint(self) -> None:
+        error = api_error_from_response(
+            400,
+            {"code": 40000, "message": "invalid username", "data": {"error_code": "INVALID_USERNAME"}},
+        )
+        self.assertEqual(error.kind, ErrorKind.VALIDATION)
+        # 服务端 message 优先；无 message 时用 code 中文文案
+        bare = api_error_from_response(
+            400, {"code": 40000, "message": "", "data": {"error_code": "INVALID_USERNAME"}}
+        )
+        self.assertIn("6–20", bare.user_message)
 
 
 if __name__ == "__main__":

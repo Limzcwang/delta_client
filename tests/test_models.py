@@ -13,6 +13,7 @@ from core.models import (
     make_system_message,
     now_ms,
     parse_chat_page,
+    parse_history_window_days,
     parse_members,
     parse_room_detail,
     parse_room_list,
@@ -264,6 +265,57 @@ class ChatPageTests(unittest.TestCase):
         self.assertIsNone(page.next_before)
         self.assertEqual(ChatPage(), parse_chat_page(None))
         self.assertEqual(ChatPage(), parse_chat_page("junk"))
+
+    def test_history_window_fields(self) -> None:
+        page = parse_chat_page(
+            {"data": {"items": [], "has_more": False, "window_days": 7, "truncated": True}}
+        )
+        self.assertEqual(7, page.window_days)
+        self.assertTrue(page.truncated)
+        self.assertIsNone(parse_chat_page({"data": {"window_days": "junk"}}).window_days)
+        self.assertEqual(30, parse_history_window_days({"history_window_days": 30}))
+        self.assertEqual(7, parse_history_window_days({"window_days": 7}))
+        self.assertIsNone(parse_history_window_days(None))
+        self.assertIsNone(parse_history_window_days({"window_days": 0}))
+
+
+class NicknameCompatTests(unittest.TestCase):
+    """F-c1：user 对象优先 nickname，旧协议回退 username 并标记。"""
+
+    def test_member_new_protocol(self) -> None:
+        member = Member.from_api({"id": "1", "nickname": "老王"})
+        self.assertEqual("老王", member.display_name)
+        self.assertFalse(member.legacy_protocol)
+        self.assertEqual("", member.account)
+
+    def test_member_legacy_protocol(self) -> None:
+        member = Member.from_api({"id": "2", "username": "bob"})
+        self.assertEqual("bob", member.display_name)
+        self.assertTrue(member.legacy_protocol)
+        self.assertEqual("bob", member.account)
+
+    def test_member_nickname_preferred_over_username(self) -> None:
+        member = Member.from_api({"id": "3", "username": "bob", "nickname": "鲍勃"})
+        self.assertEqual("鲍勃", member.display_name)
+        self.assertFalse(member.legacy_protocol)
+        self.assertEqual("bob", member.account)
+
+    def test_chat_message_new_protocol(self) -> None:
+        message = ChatMessage.from_ws(
+            {"id": "m1", "user": {"id": "1", "nickname": "老王"}, "content": "hi"}
+        )
+        self.assertEqual("老王", message.sender_name)
+        self.assertEqual("老王", message.sender_nickname)
+        self.assertEqual("", message.sender_username)
+        self.assertFalse(message.legacy_protocol)
+
+    def test_chat_message_legacy_protocol(self) -> None:
+        message = ChatMessage.from_ws(
+            {"id": "m1", "user": {"id": "1", "username": "bob"}, "content": "hi"}
+        )
+        self.assertEqual("bob", message.sender_name)
+        self.assertTrue(message.legacy_protocol)
+        self.assertEqual("bob", message.sender_username)
 
 
 if __name__ == "__main__":
