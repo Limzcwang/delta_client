@@ -30,6 +30,7 @@ class RoomView(QWidget):
     history_requested = Signal()
     retry_requested = Signal(str)  # client_msg_id
     room_settings_requested = Signal()
+    kick_requested = Signal(str, str)  # (user_id, nickname)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -172,6 +173,8 @@ class RoomView(QWidget):
         self._owner_id = room.owner_id
         self.room_name.setText(room.display_name)
         self.room_code.setText(f"房间号 {room.code}" if room.code else "")
+        if self._members:
+            self._render_members()
         self._refresh_owner_controls()
 
     def set_user(self, display_name: str, user_id: str = "") -> None:
@@ -179,22 +182,19 @@ class RoomView(QWidget):
         self._username = display_name
         if user_id:
             self._user_id = str(user_id)
+        if self._members:
+            self._render_members()
         self._refresh_owner_controls()
 
     def set_members(self, members: list[Member]) -> None:
         self._members = list(members)
-        self.member_list.clear()
-        for member in self._members:
-            self.member_list.addItem(self._member_item(member))
-        self.members_title.setText(f"成员 ({len(self._members)})")
-        self._refresh_owner_controls()
+        self._render_members()
 
     def add_member(self, member: Member) -> None:
         if any(existing.id == member.id and existing.username == member.username for existing in self._members):
             return
         self._members.append(member)
-        self.member_list.addItem(self._member_item(member))
-        self.members_title.setText(f"成员 ({len(self._members)})")
+        self._render_members()
 
     def update_member(self, user_id: str, nickname: str) -> None:
         """F：本地修改昵称后立即更新成员列表展示。"""
@@ -210,9 +210,8 @@ class RoomView(QWidget):
         for index, existing in enumerate(list(self._members)):
             if existing.id == member.id or (member.username and existing.username == member.username):
                 self._members.pop(index)
-                self.member_list.takeItem(index)
                 break
-        self.members_title.setText(f"成员 ({len(self._members)})")
+        self._render_members()
 
     def set_connection_state(self, state: str, detail: str = "") -> None:
         mapping = {
@@ -291,20 +290,56 @@ class RoomView(QWidget):
         if data.get("status") == STATUS_FAILED and data.get("client_msg_id"):
             self.retry_requested.emit(str(data["client_msg_id"]))
 
-    def _member_item(self, member: Member) -> QListWidgetItem:
+    def _render_members(self) -> None:
+        self.member_list.clear()
+        for member in self._members:
+            row = self._member_row(member)
+            item = QListWidgetItem()
+            item.setSizeHint(row.sizeHint())
+            self.member_list.addItem(item)
+            self.member_list.setItemWidget(item, row)
+        self.members_title.setText(f"成员 ({len(self._members)})")
+        self._refresh_owner_controls()
+
+    def _member_row(self, member: Member) -> QWidget:
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(4)
+
         marker = "●" if member.online else "○"
         suffixes = []
-        if self._owner_id and str(member.id) == str(self._owner_id):
+        is_owner_member = bool(self._owner_id and str(member.id) == str(self._owner_id))
+        is_self = bool(self._user_id and str(member.id) == str(self._user_id))
+        if is_owner_member:
             suffixes.append("房主")
-        if self._user_id and str(member.id) == str(self._user_id):
+        if is_self:
             suffixes.append("我")
         suffix = f"  [{'/'.join(suffixes)}]" if suffixes else ""
-        item = QListWidgetItem(f"{marker}  {member.display_name}{suffix}")
-        if suffixes and "房主" in suffixes:
-            item.setForeground(QColor("#ffb61f"))
+        label = QLabel(f"{marker}  {member.display_name}{suffix}")
+        if is_owner_member:
+            label.setStyleSheet("color: #ffb61f;")
         else:
-            item.setForeground(QColor("#6fdc8c" if member.online else "#778696"))
-        return item
+            label.setStyleSheet(f"color: {'#6fdc8c' if member.online else '#778696'};")
+        layout.addWidget(label, stretch=1)
+
+        # H3：仅房主可见非房主成员的「移出」按钮（自己/房主本人没有）
+        is_current_owner = bool(
+            self._user_id and self._owner_id and str(self._user_id) == str(self._owner_id)
+        )
+        if is_current_owner and not is_owner_member and not is_self and member.id:
+            button = QPushButton("移出")
+            button.setObjectName("Link")
+            button.setProperty("user_id", str(member.id))
+            button.setProperty("nickname", member.display_name)
+            button.setToolTip(f"将 {member.display_name} 移出房间")
+            button.clicked.connect(
+                lambda _checked=False, uid=str(member.id), name=member.display_name: (
+                    self.kick_requested.emit(uid, name)
+                )
+            )
+            layout.addWidget(button)
+        return row
 
     def _refresh_owner_controls(self) -> None:
         """F：房主标识 + 仅房主显示「房间设置」。"""

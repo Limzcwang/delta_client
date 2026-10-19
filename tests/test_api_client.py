@@ -121,5 +121,25 @@ class MyRoomsApiTests(unittest.TestCase):
         asyncio.run(scenario())
 
 
+class KickApiTests(unittest.TestCase):
+    def test_kick_member_posts_user_id(self) -> None:
+        async def scenario() -> None:
+            calls: list[tuple[str, str, object]] = []
+            client = ApiClient("http://unit-test")
+
+            async def fake_request(method: str, path: str, **kwargs):
+                calls.append((method, path, kwargs.get("json_body")))
+                return {"code": 200, "data": {"kicked": True}}
+
+            client._request = fake_request  # type: ignore[method-assign]
+            result = await client.kick_member("ab12c", "42")
+            self.assertEqual(
+                [("POST", "/api/v1/rooms/AB12C/kick", {"user_id": "42"})], calls
+            )
+            self.assertTrue(result["kicked"])
+
+        asyncio.run(scenario())
+
+
 if __name__ == "__main__":
     unittest.main()

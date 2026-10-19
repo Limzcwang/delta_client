@@ -441,5 +441,63 @@ class MockMyRoomsTests(unittest.TestCase):
         asyncio.run(scenario())
 
 
+class MockKickTests(unittest.TestCase):
+    """H3：Mock 踢人权限/成功/错误码 + room_kicked 事件。"""
+
+    def test_owner_kicks_member(self) -> None:
+        async def scenario() -> None:
+            api = MockApiClient(latency=0)
+            await api.login("demo", "demo123")
+            before = await api.get_room_detail("MYR03")
+            self.assertIn("队友玩家", {m.display_name for m in before.members})
+            result = await api.kick_member("MYR03", "2")
+            self.assertTrue(result["kicked"])
+            after = await api.get_room_detail("MYR03")
+            self.assertNotIn("队友玩家", {m.display_name for m in after.members})
+            self.assertEqual(len(before.members) - 1, len(after.members))
+
+        asyncio.run(scenario())
+
+    def test_non_owner_and_errors(self) -> None:
+        async def scenario() -> None:
+            api = MockApiClient(latency=0)
+            await api.login("player", "player123")
+            with self.assertRaises(ApiError) as forbidden:
+                await api.kick_member("MYR03", "1")
+            self.assertEqual(forbidden.exception.kind, ErrorKind.FORBIDDEN)
+            self.assertEqual("NOT_ROOM_OWNER", forbidden.exception.code)
+
+            await api.login("demo", "demo123")
+            with self.assertRaises(ApiError) as missing:
+                await api.kick_member("MYR03", "999")
+            self.assertEqual(missing.exception.kind, ErrorKind.NOT_FOUND)
+            self.assertEqual("MEMBER_NOT_FOUND", missing.exception.code)
+
+        asyncio.run(scenario())
+
+    def test_mock_ws_room_kicked_event(self) -> None:
+        async def scenario() -> None:
+            messages: list[dict] = []
+            api = MockApiClient(latency=0)
+            await api.login("demo", "demo123")
+            room = (await api.get_room_detail("MYR03")).room
+            ws = MockWsClient(
+                on_message=messages.append,
+                user={"id": "1", "username": "demo", "nickname": "演示玩家"},
+                room=room,
+                store=api,
+                latency=0,
+            )
+            await ws.join_room(room.code)
+            messages.clear()
+            ws.simulate_room_kicked(by={"id": "2", "nickname": "队友玩家"})
+            kicked = next(m for m in messages if m["type"] == "room_kicked")
+            self.assertEqual("kicked", kicked["reason"])
+            self.assertEqual("队友玩家", kicked["by"]["nickname"])
+            self.assertEqual(room.id, kicked["room_id"])
+
+        asyncio.run(scenario())
+
+
 if __name__ == "__main__":
     unittest.main()

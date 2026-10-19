@@ -14,12 +14,13 @@
 | D 共享画板（实时增量/快照/撤销重做） | 完成，已对线上双账号实测 |
 | F 完善（昵称展示/个人资料/大厅自动刷新/房主管理/历史窗口） | 完成，资料/房间事件已真实联调；历史窗口字段待后端返回 |
 | H1 我的房间 + A 建房表单 + B 密码上限 32 | 完成，Mock/冒烟通过；真实 `/rooms/mine` 当前 404，待后端上线联调 |
+| H3 房主移出成员 + room_kicked | 完成，Mock/冒烟通过；真实 `POST /kick` 已验证，`room_kicked` 事件待后端下发 |
 | E 技能共享（截屏/OCR/技能 CD） | **未开始**（等方案拍板；客户端不传截图） |
 
-- 本地工作副本：`.tmp/client-work`，当前分支 `feat/saved-logins`。
+- 本地工作副本：`.tmp/client-work`，当前分支 `feat/kick-client`。
 - 远端集成分支：`feat/client-chat`（lead 用 patch 应用，不要直接改远端）。
-- 测试：`python -m unittest discover -s tests -v` → **240 用例**（含 4 个 PySide6 对话框测试；无 PySide6 时跳过），离线可跑。
-- GUI 冒烟脚本在 `.tmp/client-work-smoke/`（不在仓库内）：`smoke.py`（登录/房间/聊天/设置）、`smoke_canvas.py`（画板保存/恢复）、`smoke_f.py`（昵称/注册规则/资料/房主管理）、`smoke_username_input.py`（输入过滤/粘贴/光标/IME/注册密码边界）、`smoke_my_rooms.py`（我的房间/退出/关闭/空态）、`smoke_create_room.py`（建房实时校验/失败保留表单/密码 4–32）、`smoke_saved_logins.py`（历史账号/重启带出/删除/失败清密码）、`live_*.py`（真实后端联调）。
+- 测试：`python -m unittest discover -s tests -v` → **247 用例**（含 7 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑。
+- GUI 冒烟脚本在 `.tmp/client-work-smoke/`（不在仓库内）：`smoke.py`（登录/房间/聊天/设置）、`smoke_canvas.py`（画板保存/恢复）、`smoke_f.py`（昵称/注册规则/资料/房主管理）、`smoke_username_input.py`（输入过滤/粘贴/光标/IME/注册密码边界）、`smoke_my_rooms.py`（我的房间/退出/关闭/空态）、`smoke_create_room.py`（建房实时校验/失败保留表单/密码 4–32）、`smoke_saved_logins.py`（历史账号/重启带出/删除/失败清密码）、`smoke_kick.py`（房主移出/room_kicked 回大厅）、`live_*.py`（真实后端联调）。
 - 本机沙箱曾把 PySide6 装到 `.tmp/pydeps` 并用 `PYTHONPATH` 跑 GUI；正常开发直接 `pip install -r requirements.txt`。
 
 ---
@@ -88,6 +89,7 @@
 - **A 建房表单**：`CreateRoomDialog` 实时校验房间名（1–30）与私有密码（4–32），非法时提示并禁用创建；提交失败只写错误区、保留名称/可见性/密码，按钮恢复可再次提交；切回公开时清密码和旧错误。
 - **B 密码上限 32**：`NEW_PASSWORD_MAX=32`（注册/改密共用，登录仍只校验非空）；`ROOM_PASSWORD_MAX=32`、房间密码 4–32；提示文案/错误码同步。
 - **H2 历史账号**：`state/saved_logins.py` 存 `%APPDATA%\DeltaClient\saved_logins.json`（`DELTA_SAVED_LOGINS_FILE` 可覆盖），结构 `{version, entries:[{username, secret, saved_at, expires_at, last_used_at}]}`；最多 5 条按 `last_used_at` 倒序。密码用 DPAPI `CryptProtectData`（`CRYPTPROTECT_UI_FORBIDDEN`）加密后 base64 存 `secret`；DPAPI 不可用/失败只存账号，**绝不明文回退**。密码有效期 30 天（`now >= expires_at` 视为过期，29 天可用/30 天过期/31 天过期）；登录成功 upsert 到首位，打开登录页带出最近账号+未过期密码，历史列表可选中/单删/清空；改密成功、登录 AUTH 失败清密码保留账号；退出登录不清历史。
+- **H3 房主移出成员**：`RoomView` 成员列表改为自定义行，仅当前用户=房主时给每个非房主成员显示「移出」按钮（自己/房主无）；点击发 `kick_requested(user_id,nickname)`，MainWindow 二次确认「确定将《昵称》移出房间？」后调 `POST /api/v1/rooms/{ref}/kick {"user_id"}`，成功刷新成员并提示、失败保留列表并提示错误。处理 `room_kicked` 定向事件：当前房间匹配则提示「你已被房主《by.nickname》移出房间」→ 停 WS、清空状态回大厅；其它房间仅提示。其他成员被移出继续走 `user_left(reason=kicked)`。Mock 增加 `kick_member` 与 `MockWsClient.simulate_room_kicked()`；真实 `POST /kick` 已验证，`room_kicked` 待后台下发。
 - **历史窗口**：`ChatPage.window_days` / `truncated` 从历史接口（键名兼容 `window_days/history_window_days/days` 等）或 `room_joined.history_window_days` 读取，UI 提示「仅显示最近 N 天消息」；当前部署两者均未返回，所以默认不提示，后端补字段后自动生效。
 
 ### 通用
@@ -111,7 +113,7 @@
 6. 分页 UI：房间列表只有首屏 `items`。
 7. 设置页可加 WS 连通性测试（现在只测 `/health` 与 rooms）。
 8. 服务端若提供幂等去重（client_msg_id 唯一）可去掉 UI 侧重复消息兜底。
-9. 增加 GUI 自动化测试（pytest-qt 等）——当前 240 个测试中 4 个为 PySide6 对话框测试，其余为纯逻辑；复杂交互仍用冒烟脚本验证。
+9. 增加 GUI 自动化测试（pytest-qt 等）——当前 247 个测试中 7 个为 PySide6 组件测试，其余为纯逻辑；复杂交互仍用冒烟脚本验证。
 
 ---
 
