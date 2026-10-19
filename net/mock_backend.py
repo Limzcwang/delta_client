@@ -283,15 +283,19 @@ class MockApiClient:
             old_value = validate_password(old_password)
             new_value = validate_new_password(new_password)
         except ValidationError as exc:
-            raise ApiError(ErrorKind.VALIDATION, str(exc), status=400, code="INVALID_PASSWORD") from exc
+            code = "INVALID_NEW_PASSWORD" if "新密码" in str(exc) else "INVALID_PASSWORD"
+            raise ApiError(ErrorKind.VALIDATION, str(exc), status=400, code=code) from exc
         record = self._users.get(self._username or "")
         if record is None or str(record.get("password")) != old_value:
             raise ApiError(
-                ErrorKind.VALIDATION, "旧密码错误", status=400, code="OLD_PASSWORD_INVALID"
+                ErrorKind.VALIDATION, "旧密码错误", status=400, code="WRONG_OLD_PASSWORD"
             )
         if old_value == new_value:
             raise ApiError(
-                ErrorKind.VALIDATION, "新密码不能与旧密码相同", status=400, code="INVALID_PASSWORD"
+                ErrorKind.VALIDATION,
+                "新密码不能与旧密码相同",
+                status=400,
+                code="INVALID_NEW_PASSWORD",
             )
         record["password"] = new_value
 

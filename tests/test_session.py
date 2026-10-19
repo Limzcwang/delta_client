@@ -40,6 +40,16 @@ class SessionMemoryTests(unittest.TestCase):
         session = Session(token="super-secret-jwt", user={"username": "a"})
         self.assertNotIn("super-secret-jwt", repr(session))
 
+    def test_update_user_nickname_keeps_token_and_refreshes_display(self) -> None:
+        """F-c2：改昵称后本地立即刷新展示，token/登录态不变。"""
+        session = Session(token="jwt-1", user={"id": "1", "username": "demo", "nickname": "旧昵称"})
+        self.assertEqual("旧昵称", session.display_name)
+        session.update_user({"nickname": "新昵称"})
+        self.assertEqual("新昵称", session.display_name)
+        self.assertEqual("demo", session.username)       # 账号不变
+        self.assertEqual("jwt-1", session.token)         # token 不变、不退登录
+        self.assertEqual({"Authorization": "Bearer jwt-1"}, session.authorization_header())
+
 
 class SessionPersistenceTests(unittest.TestCase):
     def setUp(self) -> None:

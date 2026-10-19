@@ -20,8 +20,7 @@ CLIENT_VERSION = "1.0.0"
 API_V1_LOGIN = "/api/v1/auth/login"
 API_V1_REGISTER = "/api/v1/auth/register"
 API_V1_ME = "/api/v1/users/me"
-#: F 个人资料（等后端 feat/profile 定稿；客户端按 PATCH /me 优先，404 时回退这些路径）
-API_V1_ME_NICKNAME = "/api/v1/users/me/nickname"
+#: F 个人资料（feat/profile 契约）：改名 PATCH /users/me，改密 POST /users/me/password
 API_V1_ME_PASSWORD = "/api/v1/users/me/password"
 API_V1_ROOMS = "/api/v1/rooms"
 API_HEALTH = "/health"

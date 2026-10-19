@@ -207,7 +207,13 @@ class MockApiTests(unittest.TestCase):
             with self.assertRaises(ApiError) as wrong_old:
                 await api.change_password("wrong-pass", "newpass123")
             self.assertEqual(wrong_old.exception.kind, ErrorKind.VALIDATION)
-            self.assertEqual("OLD_PASSWORD_INVALID", wrong_old.exception.code)
+            self.assertEqual("WRONG_OLD_PASSWORD", wrong_old.exception.code)
+            self.assertEqual("旧密码错误", wrong_old.exception.user_message)
+
+            with self.assertRaises(ApiError) as invalid_new:
+                await api.change_password("demo123", "123")
+            self.assertEqual("INVALID_NEW_PASSWORD", invalid_new.exception.code)
+            self.assertIn("新密码", invalid_new.exception.user_message)
 
             await api.change_password("demo123", "newpass123")
             with self.assertRaises(ApiError):
