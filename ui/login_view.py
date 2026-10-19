@@ -129,8 +129,8 @@ class LoginView(QWidget):
         self.password_edit.setPlaceholderText("密码")
         self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
 
-        # 注册密码下限与后端 F 对齐（8–64 位）
-        self.password_hint = QLabel("密码 8–64 位")
+        # 注册密码下限与后端 F/B 对齐（8–32 位）
+        self.password_hint = QLabel("密码 8–32 位")
         self.password_hint.setObjectName("Hint")
         self.password_hint.hide()
 
@@ -203,7 +203,7 @@ class LoginView(QWidget):
         self.username_edit.setPlaceholderText(
             "账号（字母/数字，6–20 位）" if is_register else "账号（字母/数字）"
         )
-        self.password_edit.setPlaceholderText("密码（8–64 位）" if is_register else "密码")
+        self.password_edit.setPlaceholderText("密码（8–32 位）" if is_register else "密码")
         self.password_hint.setVisible(is_register)
         self.confirm_edit.setVisible(is_register)
         self.register_username_hint.setVisible(is_register)

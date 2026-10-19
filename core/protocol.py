@@ -23,6 +23,8 @@ API_V1_ME = "/api/v1/users/me"
 #: F 个人资料（feat/profile 契约）：改名 PATCH /users/me，改密 POST /users/me/password
 API_V1_ME_PASSWORD = "/api/v1/users/me/password"
 API_V1_ROOMS = "/api/v1/rooms"
+#: H1：「我的房间」（按加入时间倒序，page/page_size）
+API_V1_MY_ROOMS = "/api/v1/rooms/mine"
 API_HEALTH = "/health"
 
 #: 过渡期兼容路径（A 现状）

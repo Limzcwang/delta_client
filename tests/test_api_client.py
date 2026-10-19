@@ -87,7 +87,38 @@ class ProfileApiContractTests(unittest.TestCase):
             400,
             {"code": 40000, "message": "", "data": {"error_code": "INVALID_NEW_PASSWORD"}},
         )
-        self.assertEqual("新密码不合法（8–64 位）", error.user_message)
+        self.assertEqual("新密码不合法（8–32 位）", error.user_message)
+
+
+class MyRoomsApiTests(unittest.TestCase):
+    def test_list_my_rooms_uses_get_mine_with_pagination(self) -> None:
+        async def scenario() -> None:
+            calls: list[tuple[str, str, object]] = []
+            client = ApiClient("http://unit-test")
+
+            async def fake_request(method: str, path: str, **kwargs):
+                calls.append((method, path, kwargs.get("params")))
+                return {
+                    "code": 200,
+                    "data": {
+                        "items": [
+                            {"id": "a", "code": "AAAAA", "name": "A", "role": "owner"},
+                            {"id": "b", "code": "BBBBB", "name": "B", "role": "member"},
+                        ],
+                        "has_more": False,
+                        "next_before": None,
+                    },
+                }
+
+            client._request = fake_request  # type: ignore[method-assign]
+            page = await client.list_my_rooms(page=2, page_size=10)
+            self.assertEqual(
+                [("GET", protocol.API_V1_MY_ROOMS, {"page": 2, "page_size": 10})], calls
+            )
+            self.assertEqual(["a", "b"], [item.id for item in page.items])
+            self.assertTrue(page.items[0].is_owner)
+
+        asyncio.run(scenario())
 
 
 if __name__ == "__main__":

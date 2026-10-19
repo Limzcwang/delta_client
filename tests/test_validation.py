@@ -7,6 +7,7 @@ import unittest
 from core.validation import (
     MAX_USERNAME_LENGTH,
     MIN_REGISTER_PASSWORD_LENGTH,
+    NEW_PASSWORD_MAX,
     NEW_PASSWORD_MIN,
     ValidationError,
     sanitize_user,
@@ -68,10 +69,11 @@ class PasswordTests(unittest.TestCase):
 
 
 class RegisterPasswordRuleTests(unittest.TestCase):
-    """G：注册密码与后端 F 对齐为 8–64；登录仍只校验非空。"""
+    """G/B：注册密码与后端对齐为 8–32；登录仍只校验非空。"""
 
     def test_constants_share_same_rule(self) -> None:
         self.assertEqual(8, NEW_PASSWORD_MIN)
+        self.assertEqual(32, NEW_PASSWORD_MAX)
         self.assertEqual(NEW_PASSWORD_MIN, MIN_REGISTER_PASSWORD_LENGTH)
 
     def test_six_and_seven_rejected_before_submit(self) -> None:
@@ -87,12 +89,12 @@ class RegisterPasswordRuleTests(unittest.TestCase):
             validate_register_input("alice1", "12345678", "12345678"),
         )
         self.assertEqual(
-            ("alice1", "x" * 64),
-            validate_register_input("alice1", "x" * 64, "x" * 64),
+            ("alice1", "x" * 32),
+            validate_register_input("alice1", "x" * 32, "x" * 32),
         )
         with self.assertRaises(ValidationError) as too_long:
-            validate_register_input("alice1", "x" * 65, "x" * 65)
-        self.assertIn("64", str(too_long.exception))
+            validate_register_input("alice1", "x" * 33, "x" * 33)
+        self.assertIn("32", str(too_long.exception))
 
     def test_login_password_stays_lenient(self) -> None:
         # 历史 6 位密码仍可登录，绝不能因为注册/改密规则把老用户挡在门外
@@ -230,7 +232,8 @@ class NicknameTests(unittest.TestCase):
 class PasswordChangeTests(unittest.TestCase):
     def test_new_password_length(self) -> None:
         self.assertEqual(validate_new_password("12345678"), "12345678")
-        for password in ("1234567", "x" * 65):
+        self.assertEqual(validate_new_password("x" * 32), "x" * 32)
+        for password in ("1234567", "x" * 33):
             with self.subTest(password=password):
                 with self.assertRaises(ValidationError):
                     validate_new_password(password)

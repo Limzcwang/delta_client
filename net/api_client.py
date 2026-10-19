@@ -20,7 +20,16 @@ from core import protocol
 from core.canvas import CanvasSnapshot, parse_canvas_snapshot
 from core.connection import ConnectionCheck, ProbeResult, probe_from_error, probe_ok
 from core.errors import ApiError, ErrorKind, api_error_from_exception, api_error_from_response
-from core.models import ChatPage, Room, RoomDetail, parse_chat_page, parse_room_detail, parse_room_list
+from core.models import (
+    ChatPage,
+    MyRoomsPage,
+    Room,
+    RoomDetail,
+    parse_chat_page,
+    parse_my_rooms_page,
+    parse_room_detail,
+    parse_room_list,
+)
 from core.protocol import extract_token, extract_user, unwrap_payload
 from core.rooms import room_reference
 
@@ -204,6 +213,15 @@ class ApiClient:
         # TODO(协议对齐): B 阶段后删除该兼容分支
         legacy_body = await self._request("GET", protocol.API_ROOMS_LEGACY)
         return parse_room_list(unwrap_payload(legacy_body))
+
+    async def list_my_rooms(self, page: int = 1, page_size: int = 20) -> MyRoomsPage:
+        """H1「我的房间」：``GET /api/v1/rooms/mine?page=1&page_size=20``。"""
+        body = await self.request_data(
+            "GET",
+            protocol.API_V1_MY_ROOMS,
+            params={"page": max(1, int(page)), "page_size": max(1, int(page_size))},
+        )
+        return parse_my_rooms_page(body)
 
     async def create_room(self, name: str, visibility: str, password: str | None = None) -> Room:
         payload: dict[str, Any] = {"name": name, "visibility": visibility}

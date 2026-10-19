@@ -13,12 +13,13 @@
 | C 聊天（收发/历史/乐观更新/失败重试） | 完成，已对线上双账号实测 |
 | D 共享画板（实时增量/快照/撤销重做） | 完成，已对线上双账号实测 |
 | F 完善（昵称展示/个人资料/大厅自动刷新/房主管理/历史窗口） | 完成，资料/房间事件已真实联调；历史窗口字段待后端返回 |
+| H1 我的房间 + A 建房表单 + B 密码上限 32 | 完成，Mock/冒烟通过；真实 `/rooms/mine` 当前 404，待后端上线联调 |
 | E 技能共享（截屏/OCR/技能 CD） | **未开始**（等方案拍板；客户端不传截图） |
 
-- 本地工作副本：`.tmp/client-work`，当前分支 `feat/username-input`。
+- 本地工作副本：`.tmp/client-work`，当前分支 `feat/my-rooms-client`。
 - 远端集成分支：`feat/client-chat`（lead 用 patch 应用，不要直接改远端）。
-- 测试：`python -m unittest discover -s tests -v` → **215 用例**，纯 stdlib、离线可跑。
-- GUI 冒烟脚本在 `.tmp/client-work-smoke/`（不在仓库内）：`smoke.py`（登录/房间/聊天/设置）、`smoke_canvas.py`（画板保存/恢复）、`smoke_f.py`（昵称/注册规则/资料/房主管理）、`smoke_username_input.py`（输入过滤/粘贴/光标/IME/注册密码 8 位）、`live_*.py`（真实后端联调）。
+- 测试：`python -m unittest discover -s tests -v` → **230 用例**（含 4 个 PySide6 对话框测试；无 PySide6 时跳过），离线可跑。
+- GUI 冒烟脚本在 `.tmp/client-work-smoke/`（不在仓库内）：`smoke.py`（登录/房间/聊天/设置）、`smoke_canvas.py`（画板保存/恢复）、`smoke_f.py`（昵称/注册规则/资料/房主管理）、`smoke_username_input.py`（输入过滤/粘贴/光标/IME/注册密码边界）、`smoke_my_rooms.py`（我的房间/退出/关闭/空态）、`smoke_create_room.py`（建房实时校验/失败保留表单/密码 4–32）、`live_*.py`（真实后端联调）。
 - 本机沙箱曾把 PySide6 装到 `.tmp/pydeps` 并用 `PYTHONPATH` 跑 GUI；正常开发直接 `pip install -r requirements.txt`。
 
 ---
@@ -75,14 +76,17 @@
 ### F：昵称 / 个人资料 / 大厅自动刷新 / 房主管理 / 历史窗口（新）
 - **昵称兼容**：`user` 对象从 `{id,username}` 变为 `{id,nickname}`；`Member`/`ChatMessage` 解析优先 `nickname`，缺失回退 `username` 并置 `legacy_protocol=True`。展示层一律用 `display_name`（昵称），账号只在个人资料页出现。
 - **注册账号规则**：6–20 位字母/数字、至少 1 个字母；登录页输入框同样只允许字母/数字（不再兼容 `dsh_test` 等下划线账号，输入 `dsh_test` 会变 `dshtest`）；失败码 `INVALID_USERNAME`。前端 `LoginView` 有实时提示。
-- **注册密码**：与改密共用 `NEW_PASSWORD_MIN/MAX`（8–64）；`MIN_REGISTER_PASSWORD_LENGTH = NEW_PASSWORD_MIN` 仅作旧别名，勿单独改。登录密码仍只校验非空（历史 6 位账号可登录）。
+- **注册密码**：与改密共用 `NEW_PASSWORD_MIN/MAX`（8–32）；`MIN_REGISTER_PASSWORD_LENGTH = NEW_PASSWORD_MIN` 仅作旧别名，勿单独改。登录密码仍只校验非空（历史 6 位账号可登录）。
 - **账号输入框（G）**：`core.validation.sanitize_username_input(text, mode)` 纯函数即时过滤；注册/登录完全一致，仅 ASCII 字母/数字（≤20）。`ui.username_edit.UsernameLineEdit` 负责粘贴/输入/模式切换；过滤后按“光标前保留字符数”回退光标（不跳末尾）；IME preedit 期间跳过清洗、上屏后再过滤。
-- **个人资料**：`SettingsDialog` 新增「个人资料」tab；昵称 1–20，改密旧密码 + 新密码 8–64 + 确认。**已按 F 后端契约实现**：
+- **个人资料**：`SettingsDialog` 新增「个人资料」tab；昵称 1–20，改密旧密码 + 新密码 8–32 + 确认。**已按 F 后端契约实现**：
   - 改昵称 `PATCH /api/v1/users/me {"nickname": ...}`（响应 `{"user": {...}}`，客户端取 `user`）；
   - 改密 `POST /api/v1/users/me/password {"old_password","new_password"}`；错误码 `WRONG_OLD_PASSWORD` / `INVALID_NEW_PASSWORD` 均已映射中文文案；成功后 token 继续有效，只更新本地 session（不退出登录）。
   - 旧的 404/405/422 猜测回退已删除；改名与改密是两个独立调用。
 - **大厅自动刷新**：QTimer 5s，仅大厅可见且窗口 active 时运行；`core.room_list.diff_rooms` 按 room key 做 added/removed/updated，`RoomListView.update_rooms` 就地改单元格并恢复选中/滚动；失败用 `ReconnectBackoff(base=5,factor=2,max_delay=20)` 退避，成功 reset。手动刷新会 reset 退避。
-- **房主管理**：`RoomSettingsDialog`；改名 1–30、私有房密码 4–64、删除需原样输入房间名。HTTP `PATCH/DELETE /api/v1/rooms/{ref}` 已实测；公开房不能设密码（`ROOM_PASSWORD_NOT_ALLOWED`）。WS `room_updated`（字段 `room_id/name/visibility/has_password`，无 `room` 包装）与 `room_deleted` 已实测下发；客户端处理逻辑已接通。
+- **房主管理**：`RoomSettingsDialog`；改名 1–30、私有房密码 4–32、删除需原样输入房间名。HTTP `PATCH/DELETE /api/v1/rooms/{ref}` 已实测；公开房不能设密码（`ROOM_PASSWORD_NOT_ALLOWED`）。WS `room_updated`（字段 `room_id/name/visibility/has_password`，无 `room` 包装）与 `room_deleted` 已实测下发；客户端处理逻辑已接通。
+- **H1 我的房间**：`MyRoom`/`parse_my_rooms_page` 解析 `items/has_more/next_before`；大厅 `QTabWidget`（公共/我的房间），`MyRoomsView` 按 room id diff、保留滚动/选中与正在退出的按钮禁用态。`role=owner` 显示「关闭房间」（`QInputDialog` 输入房名确认后走 DELETE），其它显示「退出」（`QMessageBox` 二次确认后走 leave）；成功后立即移除，当前房间被退/关时回大厅。与公共列表共用 5s `_refresh_lobby` 节拍；`room_deleted` 也会移除对应行。**真实 `/api/v1/rooms/mine` 当前 404**，Mock 已完整演示，接口上线后联调。
+- **A 建房表单**：`CreateRoomDialog` 实时校验房间名（1–30）与私有密码（4–32），非法时提示并禁用创建；提交失败只写错误区、保留名称/可见性/密码，按钮恢复可再次提交；切回公开时清密码和旧错误。
+- **B 密码上限 32**：`NEW_PASSWORD_MAX=32`（注册/改密共用，登录仍只校验非空）；`ROOM_PASSWORD_MAX=32`、房间密码 4–32；提示文案/错误码同步。
 - **历史窗口**：`ChatPage.window_days` / `truncated` 从历史接口（键名兼容 `window_days/history_window_days/days` 等）或 `room_joined.history_window_days` 读取，UI 提示「仅显示最近 N 天消息」；当前部署两者均未返回，所以默认不提示，后端补字段后自动生效。
 
 ### 通用
@@ -92,7 +96,7 @@
 - Mock 不模拟限频/多客户端/持久化。
 - PySide6 版本差异：本地验证用 `PySide6-Essentials 6.12`；代码只用 QtWidgets/QtCore/QtGui 基础 API，`requirements.txt` 写 `PySide6>=6.5`。
 - 字体：离屏截图需 `QT_QPA_FONTDIR=C:\Windows\Fonts` 才有中文；正常桌面无需设置。
-- 测试不依赖 PySide6/aiohttp/websockets：core 层禁止 import GUI/网络库。
+- 测试以 stdlib unittest 为主；`tests/test_create_room_dialog.py` 需要 PySide6（无则跳过），其余 core 测试不依赖 GUI/网络库。
 
 ---
 
@@ -106,7 +110,7 @@
 6. 分页 UI：房间列表只有首屏 `items`。
 7. 设置页可加 WS 连通性测试（现在只测 `/health` 与 rooms）。
 8. 服务端若提供幂等去重（client_msg_id 唯一）可去掉 UI 侧重复消息兜底。
-9. 增加 GUI 自动化测试（pytest-qt 等）——当前 215 个测试均为纯逻辑；GUI 用一次性冒烟脚本验证。
+9. 增加 GUI 自动化测试（pytest-qt 等）——当前 230 个测试中 4 个为 PySide6 对话框测试，其余为纯逻辑；复杂交互仍用冒烟脚本验证。
 
 ---
 

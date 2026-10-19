@@ -374,5 +374,72 @@ class MockWsTests(unittest.TestCase):
         asyncio.run(scenario())
 
 
+class MockMyRoomsTests(unittest.TestCase):
+    """H1：Mock 我的房间（预置/退出/创建/删除）。"""
+
+    def test_seed_my_rooms_roles_and_order(self) -> None:
+        async def scenario() -> None:
+            api = MockApiClient(latency=0)
+            await api.login("demo", "demo123")
+            page = await api.list_my_rooms()
+            self.assertEqual(3, len(page.items))
+            self.assertEqual({"MYR01", "MYR02", "MYR03"}, {item.code for item in page.items})
+            # 按加入时间倒序：MYR01 最新
+            self.assertEqual("MYR01", page.items[0].code)
+            roles = {item.code: item.role for item in page.items}
+            self.assertEqual("owner", roles["MYR03"])
+            self.assertEqual("member", roles["MYR01"])
+            private = next(item for item in page.items if item.code == "MYR02")
+            self.assertTrue(private.is_private)
+
+        asyncio.run(scenario())
+
+    def test_leave_removes_from_my_rooms_and_members(self) -> None:
+        async def scenario() -> None:
+            api = MockApiClient(latency=0)
+            await api.login("demo", "demo123")
+            await api.leave_room("MYR01")
+            page = await api.list_my_rooms()
+            self.assertNotIn("MYR01", {item.code for item in page.items})
+            detail = await api.get_room_detail("MYR01")
+            self.assertNotIn("演示玩家", {member.display_name for member in detail.members})
+
+        asyncio.run(scenario())
+
+    def test_join_create_delete_update_my_rooms(self) -> None:
+        async def scenario() -> None:
+            api = MockApiClient(latency=0)
+            await api.login("demo", "demo123")
+            await api.join_room("AB12C")
+            page = await api.list_my_rooms()
+            self.assertIn("AB12C", {item.code for item in page.items})
+            await api.leave_room("AB12C")
+            page = await api.list_my_rooms()
+            self.assertNotIn("AB12C", {item.code for item in page.items})
+
+            created = await api.create_room("H1 新建房", "public")
+            page = await api.list_my_rooms()
+            mine = next(item for item in page.items if item.code == created.code)
+            self.assertTrue(mine.is_owner)
+            self.assertTrue(await api.delete_room(created.code))
+            page = await api.list_my_rooms()
+            self.assertNotIn(created.code, {item.code for item in page.items})
+
+        asyncio.run(scenario())
+
+    def test_other_user_sees_own_rooms_only(self) -> None:
+        async def scenario() -> None:
+            api = MockApiClient(latency=0)
+            await api.login("player", "player123")
+            page = await api.list_my_rooms()
+            self.assertEqual([], list(page.items))
+            await api.join_room("MYR02", "1234")
+            page = await api.list_my_rooms()
+            self.assertEqual(["MYR02"], [item.code for item in page.items])
+            self.assertEqual("member", page.items[0].role)
+
+        asyncio.run(scenario())
+
+
 if __name__ == "__main__":
     unittest.main()

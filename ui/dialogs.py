@@ -23,6 +23,9 @@ from config import AppConfig, ConfigError, normalize_server_url, normalize_ws_ur
 from core.models import Room
 from core.rooms import ValidationError, validate_room_code, validate_room_name, validate_visibility
 from core.rooms import (
+    MAX_ROOM_NAME_LENGTH,
+    ROOM_PASSWORD_MAX,
+    ValidationError,
     validate_room_delete_confirmation,
     validate_room_name_update,
     validate_room_password,
@@ -57,11 +60,14 @@ def _error_label(layout: QVBoxLayout) -> QLabel:
 
 
 class CreateRoomDialog(QDialog):
-    """创建房间：名称 + 公开/私有 + 私有密码。"""
+    """创建房间：名称 + 公开/私有 + 私有密码（A：实时校验，失败保留表单）。"""
+
+    create_requested = Signal(str, str, str)  # (name, visibility, password 或 "")
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._values: tuple[str, str, str | None] | None = None
+        self._busy = False
         self._build()
 
     def _build(self) -> None:
@@ -82,8 +88,13 @@ class CreateRoomDialog(QDialog):
 
         root.addWidget(QLabel("房间名称"))
         self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText("例如：开黑上分（缺 1）")
+        self.name_edit.setPlaceholderText("1–30 位，例如：开黑上分（缺 1）")
+        self.name_edit.textChanged.connect(self._revalidate)
         root.addWidget(self.name_edit)
+        self.name_hint = QLabel("1–30 位")
+        self.name_hint.setObjectName("Hint")
+        self.name_hint.setWordWrap(True)
+        root.addWidget(self.name_hint)
 
         root.addWidget(QLabel("可见性"))
         self.public_radio = QRadioButton("公开房间（出现在公共列表）")
@@ -93,36 +104,104 @@ class CreateRoomDialog(QDialog):
         root.addWidget(self.public_radio)
         root.addWidget(self.private_radio)
 
-        self.password_label = QLabel("房间密码")
+        self.password_label = QLabel("房间密码（4–32 位）")
         self.password_edit = QLineEdit()
-        self.password_edit.setPlaceholderText("私有房间密码（公开房间不需要）")
+        self.password_edit.setPlaceholderText("4–32 位")
         self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.password_edit.textChanged.connect(self._revalidate)
+        self.password_hint = QLabel("4–32 位")
+        self.password_hint.setObjectName("Hint")
+        self.password_hint.setWordWrap(True)
         root.addWidget(self.password_label)
         root.addWidget(self.password_edit)
+        root.addWidget(self.password_hint)
 
         self.error_label = _error_label(root)
-        _add_buttons(self, root, "创建并进入")
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.cancel_button = QPushButton("取消")
+        self.cancel_button.clicked.connect(self.reject)
+        self.create_button = QPushButton("创建并进入")
+        self.create_button.setObjectName("Primary")
+        self.create_button.setDefault(True)
+        self.create_button.clicked.connect(self._on_create_clicked)
+        row.addWidget(self.cancel_button)
+        row.addWidget(self.create_button)
+        root.addSpacing(6)
+        root.addLayout(row)
+
         self._on_visibility_changed()
 
     def _on_visibility_changed(self, *_args: object) -> None:
         is_private = self.private_radio.isChecked()
         self.password_label.setVisible(is_private)
         self.password_edit.setVisible(is_private)
-        self.password_edit.setEnabled(is_private)
+        self.password_hint.setVisible(is_private)
         if not is_private:
+            self.password_edit.blockSignals(True)
             self.password_edit.clear()
+            self.password_edit.blockSignals(False)
+            self.error_label.hide()
+        self._revalidate()
 
-    def accept(self) -> None:  # noqa: D401 - Qt 覆盖
-        self.error_label.hide()
+    def _current_values(self) -> tuple[str, str, str] | None:
+        visibility = "private" if self.private_radio.isChecked() else "public"
         try:
             name = validate_room_name(self.name_edit.text())
-            visibility = validate_visibility("private" if self.private_radio.isChecked() else "public")
-            password = validate_room_password(self.password_edit.text(), visibility)
         except ValidationError as exc:
-            self.error_label.setText(str(exc))
-            self.error_label.show()
+            self._set_hint(self.name_hint, str(exc), error=True)
+            return None
+        else:
+            self._set_hint(self.name_hint, f"{len(name)}/{MAX_ROOM_NAME_LENGTH}", error=False)
+        if visibility == "private":
+            try:
+                password = validate_room_password(self.password_edit.text(), visibility) or ""
+            except ValidationError as exc:
+                self._set_hint(self.password_hint, str(exc), error=True)
+                return None
+            else:
+                self._set_hint(self.password_hint, f"{len(password)}/{ROOM_PASSWORD_MAX}（4–32 位）", error=False)
+        else:
+            password = ""
+            self._set_hint(self.password_hint, "4–32 位", error=False)
+        return name, visibility, password
+
+    def _revalidate(self, *_args: object) -> None:
+        valid = self._current_values() is not None
+        self.create_button.setEnabled(valid and not self._busy)
+
+    @staticmethod
+    def _set_hint(label: QLabel, text: str, *, error: bool) -> None:
+        label.setText(text)
+        label.setStyleSheet("color: #ff9b8f;" if error else "color: #8b98a8;")
+
+    def _on_create_clicked(self) -> None:
+        values = self._current_values()
+        if values is None:
             return
-        self._values = (name, visibility, password)
+        self.error_label.hide()
+        self.create_requested.emit(*values)
+
+    def set_busy(self, busy: bool) -> None:
+        self._busy = bool(busy)
+        self.create_button.setText("创建中…" if self._busy else "创建并进入")
+        self.name_edit.setEnabled(not self._busy)
+        self.password_edit.setEnabled(not self._busy and self.private_radio.isChecked())
+        self.public_radio.setEnabled(not self._busy)
+        self.private_radio.setEnabled(not self._busy)
+        self._revalidate()
+
+    def set_error(self, message: str) -> None:
+        self.error_label.setText(str(message))
+        self.error_label.show()
+
+    def accept(self) -> None:  # noqa: D401 - Qt 覆盖
+        values = self._current_values()
+        if values is None:
+            return
+        name, visibility, password = values
+        self._values = (name, visibility, password or None)
         super().accept()
 
     def values(self) -> tuple[str, str, str | None]:
@@ -320,7 +399,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.nickname_result_label)
 
         layout.addSpacing(10)
-        layout.addWidget(QLabel("修改密码（新密码 8–64 位，成功后保持登录）"))
+        layout.addWidget(QLabel("修改密码（新密码 8–32 位，成功后保持登录）"))
         layout.addWidget(QLabel("旧密码"))
         self.old_password_edit = QLineEdit()
         self.old_password_edit.setEchoMode(QLineEdit.EchoMode.Password)
@@ -504,7 +583,7 @@ class RoomSettingsDialog(QDialog):
         # 改密码（仅私有房）
         if self._room.has_password:
             root.addSpacing(6)
-            root.addWidget(QLabel("修改房间密码（4–64 位）"))
+            root.addWidget(QLabel("修改房间密码（4–32 位）"))
             self.new_password_edit = QLineEdit()
             self.new_password_edit.setEchoMode(QLineEdit.EchoMode.Password)
             self.new_password_edit.setPlaceholderText("新房间密码")

@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QPushButton,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from core.models import Room
 from core.room_list import room_key
+from ui.my_rooms_view import MyRoomsView
 
 
 class RoomListView(QWidget):
@@ -103,7 +105,16 @@ class RoomListView(QWidget):
         header_view.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         header_view.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.table.cellDoubleClicked.connect(self._on_double_click)
-        root.addWidget(self.table, stretch=1)
+
+        self.public_tab = QWidget()
+        public_layout = QVBoxLayout(self.public_tab)
+        public_layout.setContentsMargins(0, 8, 0, 0)
+        public_layout.addWidget(self.table)
+        self.my_rooms = MyRoomsView()
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self.public_tab, "公共房间")
+        self.tabs.addTab(self.my_rooms, "我的房间")
+        root.addWidget(self.tabs, stretch=1)
 
         footer = QHBoxLayout()
         self.status_label = QLabel("尚未加载房间")
