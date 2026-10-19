@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -13,6 +15,8 @@ from capture.window import (
     WindowInfo,
     find_game_window,
 )
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_FPS = 2.0
 
@@ -148,8 +152,9 @@ def open_source(
     process_name: str = "",
     *,
     title_keyword: str = "",
+    prefer_wgc: bool | None = None,
 ) -> tuple[FrameSource | None, str]:
-    """优先 WGC，失败回退 mss；返回 (source, error/status)。"""
+    """默认 mss；仅显式 DELTA_CAPTURE_WGC=1 时先试 WGC（无边框窗口 WGC 常失败）。"""
     if window is None:
         keywords = (title_keyword,) if title_keyword else DEFAULT_TITLE_KEYWORDS
         result = find_game_window(process_name or DEFAULT_PROCESS_NAME, title_keywords=keywords)
@@ -158,14 +163,17 @@ def open_source(
             return None, result.reason
     if window.is_minimized:
         return None, "游戏窗口已最小化"
+    if prefer_wgc is None:
+        prefer_wgc = os.environ.get("DELTA_CAPTURE_WGC", "").strip().lower() in ("1", "true", "yes")
+    if prefer_wgc:
+        try:
+            return WgcSource(window), "wgc"
+        except Exception as exc:  # noqa: BLE001 - WGC 仅独占全屏可用
+            logger.warning("WGC 采集失败，回退 mss：%s", exc)
     try:
-        return WgcSource(window), "wgc"
-    except Exception as exc:  # noqa: BLE001 - WGC 不可用时回退
-        wgc_error = str(exc)
-    try:
-        return MssSource(window), f"mss (WGC 不可用: {wgc_error})"
+        return MssSource(window), "mss"
     except Exception as exc:  # noqa: BLE001
-        return None, f"WGC/mss 均不可用: {wgc_error}; {exc}"
+        return None, f"mss 不可用: {exc}"
 
 
 class CaptureWorker:

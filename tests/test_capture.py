@@ -93,6 +93,19 @@ class WindowMatchingTests(unittest.TestCase):
         tiny = self._candidate(client_width=100, client_height=100)
         self.assertIsNone(find_game_window(candidates=[tiny]).window)
 
+    def test_own_client_window_not_matched_by_title(self) -> None:
+        own = self._candidate(
+            pid=44204,
+            title="Delta Client - 三角洲行动队友房间",
+            process_name="python.exe",
+        )
+        self.assertIsNone(find_game_window(candidates=[own]).window)
+        # 真正的游戏窗口排在后面也必须优先按进程名命中，而不是先命中客户端标题
+        game = self._candidate(pid=33220, hwnd=2)
+        result = find_game_window(candidates=[own, game])
+        self.assertEqual(33220, result.window.pid)
+        self.assertEqual("process", result.match_method)
+
     def test_minimized_reason(self) -> None:
         result = find_game_window(candidates=[self._candidate(minimized=True)])
         self.assertIsNotNone(result.window)

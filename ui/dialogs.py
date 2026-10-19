@@ -463,6 +463,9 @@ class SettingsDialog(QDialog):
         self.capture_window_status.setObjectName("Hint")
         self.capture_window_status.setWordWrap(True)
         layout.addWidget(self.capture_window_status)
+        self.capture_method_label = QLabel("采集方式：mss（默认；WGC 仅独占全屏可选）")
+        self.capture_method_label.setObjectName("Hint")
+        layout.addWidget(self.capture_method_label)
 
         calibration_row = QHBoxLayout()
         self.calibration_button = QPushButton("HUD 标定…")
@@ -591,6 +594,7 @@ class SettingsDialog(QDialog):
             if source is None:
                 QMessageBox.warning(self, "HUD 标定", message)
                 return
+            self.capture_method_label.setText(f"采集方式：{message}")
             try:
                 frame = source.grab()
             finally:

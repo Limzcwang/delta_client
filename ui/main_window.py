@@ -952,10 +952,10 @@ class MainWindow(QMainWindow):
             if detail:
                 self.room_view.set_status(f"重连中：{detail}", error=True)
             self._refresh_members_http(self._current_room, fallback=True)
-        elif state == "auth_error":
-            self.room_view.set_connection_state("auth_error", detail)
-            self._system_message(f"认证失败：{detail or '登录状态无效'}")
-            self._handle_ws_fatal("登录状态无效，请重新登录")
+        elif state in ("auth_error", "auth_failed"):
+            self.room_view.set_connection_state("auth_failed", detail)
+            self._system_message("登录已失效")
+            self._handle_ws_fatal("登录已失效，请重新登录")
         elif state == "replaced":
             self.room_view.set_connection_state("replaced", "账号已在其他设备登录")
             self._system_message("账号已在其他设备登录，已停止自动重连")
