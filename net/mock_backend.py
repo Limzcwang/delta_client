@@ -140,6 +140,8 @@ def _mock_skill_states(now: int) -> list[dict[str, Any]]:
         {
             "user_id": "2",
             "nickname": "队友-Alpha",
+            "operator_id": "honglang",
+            "operator_name": "红狼",
             "operator": "红狼",
             "captured_at": now,
             "skills": {
@@ -156,6 +158,8 @@ def _mock_skill_states(now: int) -> list[dict[str, Any]]:
         {
             "user_id": "3",
             "nickname": "队友-Bravo",
+            "operator_id": "fengyi",
+            "operator_name": "蜂医",
             "operator": "蜂医",
             "captured_at": now,
             "skills": {
@@ -848,12 +852,19 @@ class MockWsClient:
         return True
 
     async def send_skill_update(
-        self, room_id: str, captured_at: int, skills: Mapping[str, Any]
+        self,
+        room_id: str,
+        captured_at: int,
+        skills: Any,
+        operator_id: str = "",
+        operator_name: str = "",
     ) -> bool:
         self.last_skill_update = {
             "room_id": str(room_id),
             "captured_at": int(captured_at),
-            "skills": dict(skills),
+            "skills": skills,
+            "operator_id": str(operator_id or ""),
+            "operator_name": str(operator_name or ""),
         }
         return True
 
@@ -868,14 +879,17 @@ class MockWsClient:
         skills: Mapping[str, Any] | list[Mapping[str, Any]],
         *,
         operator: str = "",
+        operator_id: str = "",
         captured_at: int | None = None,
     ) -> None:
-        """Mock E2：主动下发一条队友技能状态（skills 支持对象或 E1 数组）。"""
+        """Mock E2/E3a：主动下发一条队友技能状态（skills 支持对象或 E1 数组）。"""
         self._emit(
             {
                 "type": protocol.WS_SKILL_SHARE_STATE,
                 "user_id": str(user_id),
                 "nickname": nickname,
+                "operator_id": operator_id,
+                "operator_name": operator,
                 "operator": operator,
                 "captured_at": int(captured_at or now_ms()),
                 "skills": (dict(skills) if isinstance(skills, Mapping) else list(skills)),

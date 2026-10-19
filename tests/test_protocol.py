@@ -58,6 +58,17 @@ class MessageTests(unittest.TestCase):
         self.assertEqual(message["type"], "leave_room")
         self.assertEqual(message["room_id_or_code"], "AB12C")
         self.assertEqual(protocol.leave_room_message()["type"], "leave_room")
+
+    def test_skill_share_update_message_with_operator(self) -> None:
+        skills = [{"slot": 0, "state": "charging", "pct": 16}]
+        message = protocol.skill_share_update_message(
+            "AB12C", 1_700_000_000_000, skills, "honglang", "红狼"
+        )
+        self.assertEqual("skill_share_update", message["type"])
+        self.assertEqual("AB12C", message["room_id"])
+        self.assertEqual(skills, message["skills"])
+        self.assertEqual("honglang", message["operator_id"])
+        self.assertEqual("红狼", message["operator_name"])
         self.assertNotIn("room_id", protocol.leave_room_message())
 
     def test_chat_and_ping_messages(self) -> None:

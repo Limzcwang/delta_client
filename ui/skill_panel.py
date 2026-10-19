@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 
 from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.operators import Operator, OperatorCatalog
 from core.skills import (
     SLOT_ABILITY,
     SLOT_LABELS,
@@ -32,6 +33,7 @@ from core.skills import (
 )
 
 _SLOT_ORDER = (SLOT_ULTIMATE, SLOT_ABILITY, SLOT_THROWABLE)
+_SLOT_INDEX = {SLOT_ULTIMATE: 0, SLOT_ABILITY: 1, SLOT_THROWABLE: 2}
 _COLORS = {
     SKILL_READY: "#ffb61f",
     "charging": "#5fb7ff",
@@ -49,6 +51,8 @@ class SkillSlotWidget(QWidget):
         self.captured_at = 0
         self.server_now = 0
         self.pulse = False
+        self.skill_name = ""
+        self.cd_known = True
         self.setMinimumSize(82, 92)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setToolTip(SLOT_LABELS.get(kind, kind))
@@ -56,14 +60,26 @@ class SkillSlotWidget(QWidget):
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt 覆盖
         return QSize(96, 96)
 
-    def set_data(self, slot: SkillSlot, captured_at: int, server_now: int, pulse: bool = False) -> None:
+    def set_data(
+        self,
+        slot: SkillSlot,
+        captured_at: int,
+        server_now: int,
+        pulse: bool = False,
+        *,
+        skill_name: str = "",
+        cd_known: bool = True,
+    ) -> None:
         self.slot = slot
         self.captured_at = int(captured_at)
         self.server_now = int(server_now)
         self.pulse = bool(pulse)
+        self.skill_name = str(skill_name or "")
+        self.cd_known = bool(cd_known)
         state = self.effective_state()
         self.setProperty("skillState", state)
-        self.setToolTip(f"{SLOT_LABELS.get(self.kind, self.kind)}：{self.text_lines()[1]}")
+        title, main, _sub = self.text_lines()
+        self.setToolTip(f"{title}：{main}")
         self.update()
 
     def effective_state(self) -> str:
@@ -73,8 +89,10 @@ class SkillSlotWidget(QWidget):
         return self.slot.remaining_now(self.captured_at, self.server_now)
 
     def text_lines(self) -> tuple[str, str, str]:
+        title = self.skill_name or SLOT_LABELS.get(self.kind, self.kind)
+        if not self.cd_known:
+            return title, "CD未知", "CD未知"
         state = self.effective_state()
-        title = SLOT_LABELS.get(self.kind, self.kind)
         if state == SKILL_UNKNOWN:
             return title, "?", "未共享"
         if self.kind == SLOT_ULTIMATE:
@@ -116,7 +134,7 @@ class SkillSlotWidget(QWidget):
         main_font.setPointSize(14 if self.kind != SLOT_ULTIMATE else 15)
         main_font.setBold(True)
         painter.setFont(main_font)
-        if self.kind == SLOT_ULTIMATE and state != SKILL_UNKNOWN:
+        if self.kind == SLOT_ULTIMATE and state != SKILL_UNKNOWN and self.cd_known:
             ring_rect = QRectF(self.width() / 2 - 24, 23, 48, 48)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.setPen(QPen(QColor("#2b3440"), 5))
@@ -157,11 +175,14 @@ class SkillRow(QFrame):
         parent: QWidget | None = None,
         *,
         server_now: int | None = None,
+        operator: Operator | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("Card")
         self.user_id = state.user_id
         self.state = state
+        self.operator_def = operator
+        self._avatar_key = ""
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 8)
         root.setSpacing(6)
@@ -204,13 +225,46 @@ class SkillRow(QFrame):
         self.state = state
         if state.display_name != self.name_label.text():
             self.name_label.setText(state.display_name)
-            self.avatar.setText(state.avatar_letter)
-        self.operator_label.setText(state.operator or "干员未共享")
+        self._apply_avatar(state)
+        operator = self.operator_def
+        self.operator_label.setText(
+            (operator.display_name if operator is not None else (state.operator or "干员未共享"))
+        )
         unshared = state.is_unshared(server_now)
         self.status_label.setText("未共享" if unshared else "已共享")
         self.status_label.setStyleSheet("color: #ffd071;" if unshared else "color: #6fdc8c;")
         for kind, widget in self.slot_widgets.items():
-            widget.set_data(state.slot(kind), state.captured_at, server_now, pulse=pulse)
+            meta = operator.skill(_SLOT_INDEX[kind]) if operator is not None else None
+            widget.set_data(
+                state.slot(kind),
+                state.captured_at,
+                server_now,
+                pulse=pulse,
+                skill_name=meta.name if meta is not None else "",
+                cd_known=meta.cd_known if meta is not None else True,
+            )
+
+    def _apply_avatar(self, state: SkillState) -> None:
+        """头像文件存在则加载，否则首字母占位；同一干员不重复加载。"""
+        operator = self.operator_def
+        key = operator.id if operator is not None else f"name:{state.display_name}"
+        if key == self._avatar_key:
+            return
+        self._avatar_key = key
+        if operator is not None and operator.avatar_available():
+            pixmap = QPixmap(str(operator.avatar_path()))
+            if not pixmap.isNull():
+                self.avatar.setText("")
+                self.avatar.setPixmap(
+                    pixmap.scaled(
+                        self.avatar.size(),
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+                return
+        self.avatar.setPixmap(QPixmap())
+        self.avatar.setText(state.avatar_letter)
 
 
 class SkillPanel(QWidget):
@@ -220,13 +274,18 @@ class SkillPanel(QWidget):
     simulate_requested = Signal()
 
     def __init__(
-        self, parent: QWidget | None = None, *, clock=None
+        self,
+        parent: QWidget | None = None,
+        *,
+        clock=None,
+        catalog: OperatorCatalog | None = None,
     ) -> None:
         super().__init__(parent)
         self._states: dict[str, SkillState] = {}
         self._rows: dict[str, SkillRow] = {}
         self._clock_offset_ms = 0
         self._pulse = False
+        self._catalog = catalog if catalog is not None else OperatorCatalog()
         # 可注入时钟（测试冻结时间）；默认使用本机时间
         self._clock = clock or (lambda: int(time.time() * 1000))
         self._build()
@@ -286,6 +345,11 @@ class SkillPanel(QWidget):
         self.share_check.setChecked(bool(enabled))
         self.share_check.blockSignals(False)
 
+    def set_operator_catalog(self, catalog: OperatorCatalog) -> None:
+        self._catalog = catalog if catalog is not None else OperatorCatalog()
+        if self._states:
+            self.set_states(self.states())
+
     def set_clock_offset(self, offset_ms: int) -> None:
         self._clock_offset_ms = int(offset_ms)
         self._tick()
@@ -333,7 +397,13 @@ class SkillPanel(QWidget):
         self.set_states([])
 
     def _add_row(self, state: SkillState) -> None:
-        row = SkillRow(state, self.list_widget, server_now=self.server_now_ms())
+        operator = self._catalog.resolve(state.operator_id, state.operator)
+        row = SkillRow(
+            state,
+            self.list_widget,
+            server_now=self.server_now_ms(),
+            operator=operator,
+        )
         self._rows[state.user_id] = row
         self.list_layout.insertWidget(self.list_layout.count() - 1, row)
 

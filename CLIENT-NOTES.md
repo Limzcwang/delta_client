@@ -17,12 +17,13 @@
 | H3 房主移出成员 + room_kicked | 完成，右键菜单/行高修复；Mock/冒烟通过；真实 `POST /kick` 已验证，`room_kicked` 事件待后端下发 |
 | H4 画板底图 + 图标工具栏 | 完成，画布随底图比例/透明笔画层/图标工具栏；单测+截图冒烟通过 |
 | E2 技能 CD 面板 | 完成，Mock 两队友三状态/倒计时/共享开关/模拟数据；真实 E1 接口待联调 |
+| E3a 干员配置/手动选择/面板数据源 | 完成，16 干员配置/技能名/未知 CD/头像缺失占位/设置页选择持久化/上报 operator_id；截图识别未做 |
 | E1/E3 技能采集管线 | **未开始**（E3 ROI 规则已记录：队友列表最底部「自己」；不传图像） |
 
-- 本地工作副本：`.tmp/client-work`，当前分支 `feat/skill-panel`。
+- 本地工作副本：`.tmp/client-work`，当前分支 `feat/skill-recog`。
 - 远端集成分支：`feat/client-chat`（lead 用 patch 应用，不要直接改远端）。
-- 测试：`python -m unittest discover -s tests -v` → **280 用例**（含 20 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑。
-- GUI 冒烟脚本在 `.tmp/client-work-smoke/`（不在仓库内）：`smoke.py`（登录/房间/聊天/设置）、`smoke_canvas.py`（画板保存/恢复）、`smoke_canvas_map.py`（底图比例/坐标/透明层/图标工具栏/截图）、`smoke_skill_panel.py`（技能面板三状态/开关/模拟/移除截图）、`smoke_f.py`（昵称/注册规则/资料/房主管理）、`smoke_username_input.py`（输入过滤/粘贴/光标/IME/注册密码边界）、`smoke_my_rooms.py`（我的房间/退出/关闭/空态）、`smoke_create_room.py`（建房实时校验/失败保留表单/密码 4–32）、`smoke_saved_logins.py`（历史账号/重启带出/删除/失败清密码）、`smoke_kick.py`（右键移出/room_kicked 回大厅）、`smoke_member_menu.py`（多成员/长昵称/行高/右键菜单状态/截图）、`live_*.py`（真实后端联调）。
+- 测试：`python -m unittest discover -s tests -v` → **295 用例**（含 27 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑。
+- GUI 冒烟脚本在 `.tmp/client-work-smoke/`（不在仓库内）：`smoke.py`（登录/房间/聊天/设置）、`smoke_canvas.py`（画板保存/恢复）、`smoke_canvas_map.py`（底图比例/坐标/透明层/图标工具栏/截图）、`smoke_skill_panel.py`（技能面板三状态/E1 载荷/E3a 干员配置与未知 CD/开关/模拟/移除截图）、`smoke_f.py`（昵称/注册规则/资料/房主管理）、`smoke_username_input.py`（输入过滤/粘贴/光标/IME/注册密码边界）、`smoke_my_rooms.py`（我的房间/退出/关闭/空态）、`smoke_create_room.py`（建房实时校验/失败保留表单/密码 4–32）、`smoke_saved_logins.py`（历史账号/重启带出/删除/失败清密码）、`smoke_kick.py`（右键移出/room_kicked 回大厅）、`smoke_member_menu.py`（多成员/长昵称/行高/右键菜单状态/截图）、`live_*.py`（真实后端联调）。
 - 本机沙箱曾把 PySide6 装到 `.tmp/pydeps` 并用 `PYTHONPATH` 跑 GUI；正常开发直接 `pip install -r requirements.txt`。
 
 ---
@@ -95,6 +96,7 @@
   - **成员行扁平根因**：上一版自定义行 widget 无 `minimumHeight`，`QListWidgetItem.setSizeHint(row.sizeHint())` 在布局 polish 前取到接近 0 的高度，叠加 `QListWidget::item` 的 QSS `padding:7px`，行高被压到 ~14px，长昵称/按钮又把行撑宽，文字被压扁不可见。现改用标准 item + `QSize(0,40)`，主题增加 `QListWidget#MemberList::item { padding:9px; min-height:40px; }`。
 - **H4 画板底图 + 图标工具栏**：底图 `assets/canvas_map.png`（原图 1105×1260，不重采样；`DELTA_CANVAS_MAP` 可覆盖）。`CanvasHost.resizeEvent` 用 `min(可用宽/图宽, 可用高/图高)` 算画布尺寸并居中，画布控件宽高比=底图比例；控件内部底图铺满、无 letterbox/裁切；宿主剩余空间普通留白。坐标 0–1 = `px/画布宽, py/画布高`。渲染顺序：底图 → 透明笔画层（橡皮 `CompositionMode_Clear`，清空只清层）。工具栏在画板底部，7 个 QPainter 矢量图标（画笔/橡皮/颜色/粗细/撤销/重做/清空），44px 等宽铺满，带 tooltip + 快捷键（P/E/C/W/Ctrl+Z/Ctrl+Shift+Z/Ctrl+Delete），画笔/橡皮 checkable 高亮。打包需把 assets 以 add-data 带上（代码兼容 `_MEIPASS/assets`）。
 - **E2 技能 CD 面板**：`core/skills.py` 解析 E1 真实载荷 `skills` 数组（`slot` 0/1/2 归位，读 `pct`/`remaining_ms`/`charges`/`max_charges`/`state`；`state` 仅 ready/charging/unknown，其它归 unknown；缺失槽位才补 unknown）及旧对象格式，`SkillBook` 按 user_id 缓存；`SkillPanel` 每秒按 `server_now = local_now + offset` 刷新倒计时，`remaining_now = remaining_ms - (server_now - captured_at)`；ready 金色高亮/呼吸，unknown「?」，>30 分钟未更新显示「未共享」；`skill_share_removed` 删除。开关默认关闭，「模拟我的技能」循环 ready/charging/unknown，开启后 `skill_share_update`（本地 2 次/秒节流），关闭发 `skill_share_off`。Mock 预置两名队友并可 `simulate_skill_state/removed`。
+- **E3a 干员配置**：`core/operators.py` 读取 `assets/operators.json`（16 人，`_meta.slot_meaning` 0 大招/1 战术/2 投掷物；`total_cd_ms` + `max_charges`）；设置页「干员」tab 下拉选择，保存 `operator_id` 到 `~/.delta_client.json`；面板按 state 的 `operator_id`/名字解析干员名、技能名、头像（`assets/operators/<id>.png` 存在则加载，缺失首字母占位）；`total_cd_ms` null/0 槽显示「CD未知」，不画环/不倒计时，模拟上报时 `state=unknown`；`skill_share_update` 带 `operator_id/operator_name`。当前 5 个未知 CD 槽见 operators.README。
 - **E3 ROI 备注（尚未实现）**：队友列表里「自己」是最底部一项（与编号无关）；干员识别 ROI = 左侧列表最底部一项，底部左侧自己的头像+名字可互为兜底；识别结果按当前对局缓存，换局/重进游戏重置。
 - **历史窗口**：`ChatPage.window_days` / `truncated` 从历史接口（键名兼容 `window_days/history_window_days/days` 等）或 `room_joined.history_window_days` 读取，UI 提示「仅显示最近 N 天消息」；当前部署两者均未返回，所以默认不提示，后端补字段后自动生效。
 
@@ -119,8 +121,8 @@
 6. 分页 UI：房间列表只有首屏 `items`。
 7. 设置页可加 WS 连通性测试（现在只测 `/health` 与 rooms）。
 8. 服务端若提供幂等去重（client_msg_id 唯一）可去掉 UI 侧重复消息兜底。
-9. 增加 GUI 自动化测试（pytest-qt 等）——当前 280 个测试中 20 个为 PySide6 组件测试，其余为纯逻辑；复杂交互仍用冒烟脚本验证。
-10. E3 干员识别：ROI 为队友列表最底部「自己」；底部左侧头像+名字兜底；按当前对局缓存，换局/重进游戏重置。
+9. 增加 GUI 自动化测试（pytest-qt 等）——当前 295 个测试中 27 个为 PySide6 组件测试，其余为纯逻辑；复杂交互仍用冒烟脚本验证。
+10. E3b 截图识别（未开始）：等待确认游戏显示模式（无边框/全屏）与 OCR 依赖体积；计划捕获取 `DeltaForceClient-Win64-Shipping` 窗口、ROI 为队友列表最底部「自己」、按对局缓存、换局重置。
 
 ---
 
@@ -138,4 +140,6 @@ python main.py --server http://114.132.161.169:8000   # 线上（测试账号由
 - `live_chat.py`：双账号聊天收发/历史分页/限频/非法消息/成员校验；
 - `live_canvas.py`：双账号画板实时/无自回显/clear/save ack/后进房快照/错误码；
 - `smoke_canvas.py`、`smoke_canvas_map.py`、`smoke.py`、`smoke_conn_test.py`：离屏 GUI 冒烟。
+
+
 

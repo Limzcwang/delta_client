@@ -263,11 +263,18 @@ class WsClient:
         return await self._send(protocol.canvas_op_message(room_id, rev, op))
 
     async def send_skill_update(
-        self, room_id: str, captured_at: int, skills: Mapping[str, Any]
+        self,
+        room_id: str,
+        captured_at: int,
+        skills: Any,
+        operator_id: str = "",
+        operator_name: str = "",
     ) -> bool:
-        """E2：上报本机技能状态（服务端时钟口径的 captured_at）。"""
+        """E2/E3a：上报本机技能状态（服务端时钟口径的 captured_at）。"""
         return await self._send(
-            protocol.skill_share_update_message(room_id, captured_at, skills)
+            protocol.skill_share_update_message(
+                room_id, captured_at, skills, operator_id, operator_name
+            )
         )
 
     async def send_skill_off(self, room_id: str | None = None) -> bool:

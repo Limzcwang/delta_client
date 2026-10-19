@@ -138,6 +138,7 @@ class SaveConfigTests(unittest.TestCase):
                 server_url="http://host:1234",
                 use_mock=True,
                 persist_token=True,
+                operator_id="honglang",
                 request_timeout=9.0,
                 source="cli",
             )
@@ -147,12 +148,14 @@ class SaveConfigTests(unittest.TestCase):
             self.assertEqual(data["server_url"], "http://host:1234")
             self.assertTrue(data["mock"])
             self.assertTrue(data["save_token"])
+            self.assertEqual("honglang", data["operator_id"])
             self.assertNotIn("token", data)
             self.assertNotIn("password", data)
             reloaded = load_config(path=target, env={})
             self.assertEqual(reloaded.server_url, "http://host:1234")
             self.assertTrue(reloaded.use_mock)
             self.assertTrue(reloaded.persist_token)
+            self.assertEqual("honglang", reloaded.operator_id)
             self.assertEqual(reloaded.effective_ws_url, "ws://host:1234/ws")
 
     def test_config_path_env_override(self) -> None:
