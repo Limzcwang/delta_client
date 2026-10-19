@@ -141,6 +141,8 @@ class AppConfig:
     auto_capture_enabled: bool = False
     auto_loop_enabled: bool = False
     auto_sample_ms: int = 2000
+    capture_window_process: str = "DeltaForceClient-Win64-Shipping"
+    capture_window_title: str = ""
     request_timeout: float = DEFAULT_TIMEOUT
     source: str = "default"
 
@@ -172,6 +174,8 @@ class AppConfig:
             "auto_capture_enabled": self.auto_capture_enabled,
             "auto_loop_enabled": self.auto_loop_enabled,
             "auto_sample_ms": self.auto_sample_ms,
+            "capture_window_process": self.capture_window_process,
+            "capture_window_title": self.capture_window_title,
             "request_timeout": self.request_timeout,
         }
 
@@ -305,6 +309,10 @@ def load_config(
         auto_sample_ms = 2000
     if auto_sample_ms not in (1000, 2000, 3000):
         auto_sample_ms = 2000
+    capture_window_process = str(
+        file_data.get("capture_window_process") or "DeltaForceClient-Win64-Shipping"
+    ).strip()
+    capture_window_title = str(file_data.get("capture_window_title") or "").strip()
 
     timeout = DEFAULT_TIMEOUT
     raw_timeout = file_data.get("request_timeout")
@@ -329,6 +337,8 @@ def load_config(
         auto_capture_enabled=auto_capture_enabled,
         auto_loop_enabled=auto_loop_enabled,
         auto_sample_ms=auto_sample_ms,
+        capture_window_process=capture_window_process,
+        capture_window_title=capture_window_title,
         request_timeout=timeout,
         source=source,
     )

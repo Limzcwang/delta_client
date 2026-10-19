@@ -35,11 +35,12 @@
 | HUD 采集/识别（E3b） | 自动查找 DeltaForceClient-Win64-Shipping 窗口；WGC 优先、mss 回退；独立线程 2 FPS + 最小化暂停；HUD profile（2560×1440 默认/缩放/3 槽等分/JSON 导入导出）与「识别 HUD」按钮；RapidOCR 读百分比/秒数/充能，暗色遮罩比例算 CD，17 干员头像灰度多尺度模板匹配（遮左上编号，失败回退手动干员）；ult_pct_meaning=charged（16%=已充能16%）；识别失败槽 unknown；截图仅内存 |
 | 干员配置中心（E5） | 启动/登录后/进房前 `GET /api/v1/config/operators`（If-None-Match）：304 用缓存，200 校验后写 `%APPDATA%\DeltaClient\operators.json` 并热更新面板/识别/上报；损坏/缺失/非法回退内置 `assets/operators.json`；网络失败静默；设置页显示版本/来源/更新时间+手动检查 |
 | WS 重连保护 | 单实例文件锁（重复启动提示「Delta Client 已在运行」）；close 4001/replaced、认证失效停止自动重连并清会话回登录；1001/1012/网络错误继续指数退避 1→2→4→8→…→30s；server_restarting 提示服务器更新中 |
+| 窗口检测兜底 | 进程名忽略 `.exe`/大小写；标题「三角洲/Delta Force」+客户区 ≥800×600 兜底；设置页选择/检测窗口与匹配方式/失败原因；候选窗口日志 |
 | 悬浮窗/自动循环（E4） | 可选技能 CD 悬浮窗（默认关闭）：无边框/置顶/鼠标穿透/WS_EX_TOOLWINDOW；跟随游戏窗口 500ms，最小化隐藏、独占全屏回落提示；透明度默认 30%、缩放、位置重置、快捷键可自定义（录制+冲突）；自动识别 2s 采样+变化去抖+2 次/秒限频；房间面板原样保留 |
 | 连通性测试 | 设置页「测试连接」：探测 `/health` + `/api/v1/rooms?page=1`，分别报告可达/鉴权失效/超时/网络错误 |
 | 协议对齐 | PROTOCOL C/D 定稿：`data.error_code`、§7.2/§7.3 实名错误码、WS `room_id_or_code`、聊天字段、画板 `rev`/快照语义 |
 | Mock | `--mock` / `DELTA_MOCK=1`：内置内存后端（昵称/聊天历史/画板快照/房主管理/我的房间），可完整离线演示 |
-| 测试 | 387 个 stdlib unittest（含 40 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑；真实 HUD OCR 测试需 requirements-e3.txt 环境 |
+| 测试 | 395 个 stdlib unittest（含 40 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑；真实 HUD OCR 测试需 requirements-e3.txt 环境 |
 ---
 
 ## 2. 目录结构
@@ -200,7 +201,7 @@ python -m unittest discover -s tests -v
 
 覆盖：配置加载与优先级、URL 规范化、协议路径/WS 消息、HTTP 错误映射、WS 重连退避、房间号校验（5 位 `[A-Z0-9]`）、房间/成员/消息解析、登录注册校验、token 存取与“不落盘密码”、Mock 后端完整流程。
 
-当前结果：**387 个用例全部通过**（约 1.2s；无 GUI/OCR 依赖时跳过 40 个）。
+当前结果：**395 个用例全部通过**（约 1.2s；无 GUI/OCR 依赖时跳过 40 个）。
 
 ---
 

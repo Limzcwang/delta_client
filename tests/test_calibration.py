@@ -14,7 +14,9 @@ try:  # pragma: no cover
     from PySide6.QtWidgets import QApplication
 
     from core.hud_profile import HudProfile, Roi
+    from capture.window import WindowCandidate
     from ui.calibration_dialog import HudCalibrationDialog
+    from ui.window_picker import WindowPickerDialog
 
     HAS_QT = True
 except Exception:  # noqa: BLE001
@@ -43,6 +45,23 @@ class CalibrationTests(unittest.TestCase):
             self.assertEqual(slots[0].x, 10)
             self.assertEqual(slots[-1].right, 160)
             self.assertIn("技能栏", dialog.info_label.text())
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+            self.app.processEvents()
+
+    def test_window_picker_lists_and_selects(self) -> None:
+        candidates = [
+            WindowCandidate(1, 100, "三角洲行动", "DeltaForceClient-Win64-Shipping.exe", 0, 0, 2560, 1440),
+            WindowCandidate(2, 200, "浏览器", "chrome.exe", 0, 0, 1200, 800),
+        ]
+        dialog = WindowPickerDialog(candidates)
+        try:
+            self.assertEqual(2, dialog.list_widget.count())
+            self.assertEqual(100, dialog.selected_candidate().pid)
+            dialog.list_widget.setCurrentRow(1)
+            self.assertEqual(200, dialog.selected_candidate().pid)
+            self.assertIn("三角洲行动", dialog.list_widget.item(0).text())
         finally:
             dialog.close()
             dialog.deleteLater()

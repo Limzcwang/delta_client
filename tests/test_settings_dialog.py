@@ -114,6 +114,15 @@ class SettingsOperatorTests(unittest.TestCase):
         self.assertIsNone(result.overlay_x)
         self.assertIsNone(result.overlay_y)
 
+    def test_capture_window_selection_persist(self) -> None:
+        dialog = self._dialog("honglang")
+        dialog._capture_process = "DeltaForceClient-Win64-Shipping.exe"
+        dialog._capture_title = "三角洲行动"
+        dialog.accept()
+        result = dialog.config_result()
+        self.assertEqual("DeltaForceClient-Win64-Shipping.exe", result.capture_window_process)
+        self.assertEqual("三角洲行动", result.capture_window_title)
+
     def test_overlay_shortcut_conflict_rejected(self) -> None:
         dialog = self._dialog("honglang")
         dialog.shortcut_toggle_edit.setKeySequence("Ctrl+Shift+X")

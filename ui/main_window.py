@@ -1176,7 +1176,10 @@ class MainWindow(QMainWindow):
         try:
             from capture.sources import open_source
 
-            return open_source()
+            return open_source(
+                process_name=self.config.capture_window_process,
+                title_keyword=self.config.capture_window_title,
+            )
         except Exception as exc:  # noqa: BLE001
             return None, str(exc)
 
@@ -1228,9 +1231,11 @@ class MainWindow(QMainWindow):
 
     def _find_game_window(self):
         try:
-            from capture.window import find_window_by_process
+            from capture.window import find_game_window
 
-            return find_window_by_process()
+            keywords = (self.config.capture_window_title,) if self.config.capture_window_title else None
+            kwargs = {"title_keywords": keywords} if keywords else {}
+            return find_game_window(self.config.capture_window_process, **kwargs).window
         except Exception:  # noqa: BLE001
             return None
 
@@ -1445,7 +1450,10 @@ class MainWindow(QMainWindow):
             from core.hud_pipeline import recognize_frame, to_skill_state
             from core.hud_profile import HudProfile
 
-            source, message = open_source()
+            source, message = open_source(
+                process_name=self.config.capture_window_process,
+                title_keyword=self.config.capture_window_title,
+            )
             if source is None:
                 self.room_view.set_status(f"HUD 识别不可用：{message}", error=True)
                 return
