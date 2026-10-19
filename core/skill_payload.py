@@ -56,19 +56,23 @@ def _clean_state(value: Any) -> str:
     return state if state in SKILL_STATES else SKILL_UNKNOWN
 
 
+def _unknown(index: int) -> dict[str, Any]:
+    return {"slot": index, "state": SKILL_UNKNOWN, "remaining_ms": 0}
+
+
 def sanitize_slot(index: int, slot: Any) -> dict[str, Any]:
     """单个槽 -> 后端可接受字段；任何非法值将该槽降级 unknown。"""
     kind = SLOT_KINDS[index]
     state = _clean_state(getattr(slot, "state", None))
     if state == SKILL_UNKNOWN:
-        return {"slot": index, "state": SKILL_UNKNOWN}
+        return {"slot": index, "state": SKILL_UNKNOWN, "remaining_ms": 0}
     if kind == SLOT_ULTIMATE:
         pct = clean_pct(getattr(slot, "percent", None))
         if state == SKILL_CHARGING and pct is None:
-            return {"slot": index, "state": SKILL_UNKNOWN}
+            return _unknown(index)
         remaining = 0 if state == SKILL_READY else clean_remaining(getattr(slot, "remaining_ms", None))
         if state == SKILL_CHARGING and remaining is None:
-            return {"slot": index, "state": SKILL_UNKNOWN}
+            return _unknown(index)
         item: dict[str, Any] = {"slot": index, "state": state}
         if pct is not None:
             item["pct"] = pct
@@ -76,11 +80,11 @@ def sanitize_slot(index: int, slot: Any) -> dict[str, Any]:
         return item
     remaining = clean_remaining(getattr(slot, "remaining_ms", None))
     if state == SKILL_CHARGING and remaining is None:
-        return {"slot": index, "state": SKILL_UNKNOWN}
+        return _unknown(index)
     raw_max = _finite(getattr(slot, "max_charges", None))
     if raw_max is None or raw_max < MIN_CHARGES:
         # 配置缺失/为 0/非法：该槽降级 unknown，绝不能上报 0 让后端拒绝整条 payload
-        return {"slot": index, "state": SKILL_UNKNOWN}
+        return _unknown(index)
     max_charges = int(round(min(float(MAX_CHARGES), raw_max)))
     charges = clamp_int(getattr(slot, "charges", None), 0, max_charges)
     if charges is None:
@@ -98,6 +102,11 @@ def build_payload_from_state(state: SkillState) -> list[dict[str, Any]]:
     return [sanitize_slot(index, state.slot(kind)) for index, kind in enumerate(SLOT_KINDS)]
 
 
+def serialize_skill_state(state: SkillState) -> list[dict[str, Any]]:
+    """唯一序列化入口：清洗 + 单槽修复；所有 skill_share_update 必须走这里。"""
+    return repair_payload(build_payload_from_state(state))
+
+
 def _validate_slot(item: Any) -> tuple[bool, str]:
     if not isinstance(item, Mapping):
         return False, "槽位必须是对象"
@@ -108,6 +117,9 @@ def _validate_slot(item: Any) -> tuple[bool, str]:
     if state not in SKILL_STATES:
         return False, "state 非法"
     if state == SKILL_UNKNOWN:
+        remaining = item.get("remaining_ms", 0)
+        if not isinstance(remaining, int) or isinstance(remaining, bool) or not (0 <= remaining <= MAX_REMAINING_MS):
+            return False, "unknown 槽 remaining_ms 必须是 0-600000 整数"
         return True, ""
     remaining = item.get("remaining_ms", 0)
     if not isinstance(remaining, int) or isinstance(remaining, bool) or not (0 <= remaining <= MAX_REMAINING_MS):
@@ -155,7 +167,7 @@ def validate_payload(payload: Any) -> tuple[bool, str]:
 def repair_payload(payload: Any) -> list[dict[str, Any]]:
     """单槽非法只降级该槽为 unknown，避免整条 payload 被后端拒绝。"""
     if not isinstance(payload, list):
-        return [{"slot": index, "state": SKILL_UNKNOWN} for index in range(3)]
+        return [{"slot": index, "state": SKILL_UNKNOWN, "remaining_ms": 0} for index in range(3)]
     by_slot: dict[int, Mapping[str, Any]] = {}
     for item in payload:
         if isinstance(item, Mapping):
@@ -169,7 +181,7 @@ def repair_payload(payload: Any) -> list[dict[str, Any]]:
         if ok and int(item["slot"]) == index:
             repaired.append(dict(item))
         else:
-            repaired.append({"slot": index, "state": SKILL_UNKNOWN})
+            repaired.append({"slot": index, "state": SKILL_UNKNOWN, "remaining_ms": 0})
     return repaired
 
 
@@ -186,3 +198,4 @@ def clean_captured_at(value: Any) -> int | None:
     if isinstance(value, str) and value.strip().isdigit():
         return int(value.strip())
     return None
+

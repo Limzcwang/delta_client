@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import ctypes
+import logging
+import sys
 import time
 from typing import Any, Callable, Iterable
 
@@ -11,11 +14,38 @@ from PySide6.QtWidgets import QWidget
 
 from core.operators import OperatorCatalog
 from core.skills import SLOT_ABILITY, SLOT_THROWABLE, SLOT_ULTIMATE, SkillState, format_countdown
+from state.crash_logging import set_current_step
+
+logger = logging.getLogger(__name__)
 
 OVERLAY_WIDTH = 300
 ROW_HEIGHT = 44
 HEADER_HEIGHT = 24
 PADDING = 8
+HWND_TOPMOST = -1
+SWP_NOMOVE = 0x0002
+SWP_NOSIZE = 0x0001
+SWP_NOACTIVATE = 0x0010
+GWL_EXSTYLE = -20
+WS_EX_NOACTIVATE = 0x08000000
+WS_EX_TOOLWINDOW = 0x00000080
+
+
+def _apply_win32_topmost(widget: Any) -> bool:
+    """强制置顶 + WS_EX_NOACTIVATE（Windows）；失败只记录 debug。"""
+    if sys.platform != "win32":
+        return False
+    try:
+        user32 = ctypes.windll.user32
+        hwnd = int(widget.winId())
+        flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+        ok = bool(user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags))
+        style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)
+        return ok
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("悬浮窗置顶失败：%s", exc)
+        return False
 
 
 class SkillOverlay(QWidget):
@@ -186,9 +216,10 @@ class SkillOverlay(QWidget):
 
 
 class OverlayController:
-    """500ms 跟随游戏窗口；无窗口/最小化/独占全屏时隐藏并提示，不做注入。"""
+    """500ms 跟随游戏窗口；无窗口/最小化时隐藏，不预判独占全屏。"""
 
-    FULLSCREEN_HINT = "当前无法显示悬浮窗（可能为独占全屏），请使用房间内面板或切换无边框窗口"
+    #: 说明文字，不再作为 attach 前的错误判定
+    FULLSCREEN_HINT = "若游戏为独占全屏，悬浮窗可能被覆盖，请使用无边框窗口"
 
     def __init__(
         self,
@@ -235,6 +266,7 @@ class OverlayController:
         window = self.window_provider()
         if window is None:
             self.attached = False
+            self.overlay.hide()
             self._reason("等待游戏窗口")
             return
         if getattr(window, "is_minimized", False):
@@ -243,14 +275,6 @@ class OverlayController:
             self._reason("游戏窗口已最小化，悬浮窗已隐藏")
             return
         rect = window.client_rect
-        screen_w, screen_h = self.screen_provider()
-        if rect[2] >= screen_w - 2 and rect[3] >= screen_h - 2:
-            self.attached = False
-            self.overlay.hide()
-            self._reason(self.FULLSCREEN_HINT)
-            return
-        if "独占" in self.last_reason or force:
-            self.overlay.resize(max(160, int(OVERLAY_WIDTH * self.overlay.scale)), self.overlay.height())
         self.overlay.set_status("")
         x = rect[0] + rect[2] - self.overlay.width() - 20
         y = rect[1] + rect[3] - self.overlay.height() - 170
@@ -258,7 +282,13 @@ class OverlayController:
             x, y = self.fixed_position
         self.overlay.move(max(rect[0], x), max(rect[1], y))
         self.overlay.show()
-        self.overlay.raise_()
+        if not self.overlay.edit_mode:
+            if not self.attached:
+                set_current_step("overlay_attach")
+            _apply_win32_topmost(self.overlay)
+            self.overlay.raise_()
+            if not self.attached:
+                set_current_step("running")
         self.attached = True
         self.last_reason = "已附加"
 

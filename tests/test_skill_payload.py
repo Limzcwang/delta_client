@@ -13,6 +13,7 @@ from core.skill_payload import (
     clean_remaining,
     repair_payload,
     sanitize_slot,
+    serialize_skill_state,
     validate_payload,
 )
 from core.skills import SLOT_ABILITY, SLOT_THROWABLE, SLOT_ULTIMATE, SkillSlot, SkillState
@@ -90,6 +91,38 @@ class CleaningTests(unittest.TestCase):
         self.assertEqual("unknown", repaired[2]["state"])
         valid, reason = validate_payload(repaired)
         self.assertTrue(valid, reason)
+
+    def test_serialize_share_state_has_int_remaining_every_slot(self) -> None:
+        # 开启共享时缓存里可能是 ready/unknown 且 remaining_ms 缺省/None
+        state = make_state(
+            ultimate=SkillSlot(SLOT_ULTIMATE, "ready", None, percent=None),
+            ability=SkillSlot(SLOT_ABILITY, "unknown", None),
+            throwable=SkillSlot(SLOT_THROWABLE, "ready", None, charges=None, max_charges=None),
+        )
+        payload = serialize_skill_state(state)
+        valid, reason = validate_payload(payload)
+        self.assertTrue(valid, reason)
+        for item in payload:
+            self.assertIsInstance(item["remaining_ms"], int)
+            self.assertTrue(0 <= item["remaining_ms"] <= MAX_REMAINING_MS)
+            self.assertNotIn(None, item.values())
+        self.assertEqual("unknown", payload[1]["state"])
+        self.assertEqual(0, payload[1]["remaining_ms"])
+        self.assertEqual("unknown", payload[2]["state"])
+
+    def test_serialize_nan_float_and_overrange(self) -> None:
+        state = make_state(
+            ultimate=SkillSlot(SLOT_ULTIMATE, "charging", float("nan"), percent=float("nan")),
+            ability=SkillSlot(SLOT_ABILITY, "charging", float("inf"), charges=99, max_charges=20),
+            throwable=SkillSlot(SLOT_THROWABLE, "charging", 1.5, charges=0.2, max_charges=2.7),
+        )
+        payload = serialize_skill_state(state)
+        valid, reason = validate_payload(payload)
+        self.assertTrue(valid, reason)
+        self.assertEqual("unknown", payload[0]["state"])
+        self.assertEqual("unknown", payload[1]["state"])
+        self.assertIsInstance(payload[2]["remaining_ms"], int)
+        self.assertIsInstance(payload[2]["max_charges"], int)
 
     def test_captured_at_must_be_integer_ms(self) -> None:
         self.assertEqual(1_700_000_000_000, clean_captured_at(1_700_000_000_000.0))

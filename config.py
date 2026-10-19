@@ -143,6 +143,8 @@ class AppConfig:
     auto_sample_ms: int = 2000
     capture_window_process: str = "DeltaForceClient-Win64-Shipping"
     capture_window_title: str = ""
+    auto_operator_enabled: bool = True
+    operator_recognition_threshold: float = 0.70
     request_timeout: float = DEFAULT_TIMEOUT
     source: str = "default"
 
@@ -176,6 +178,8 @@ class AppConfig:
             "auto_sample_ms": self.auto_sample_ms,
             "capture_window_process": self.capture_window_process,
             "capture_window_title": self.capture_window_title,
+            "auto_operator_enabled": self.auto_operator_enabled,
+            "operator_recognition_threshold": self.operator_recognition_threshold,
             "request_timeout": self.request_timeout,
         }
 
@@ -313,6 +317,13 @@ def load_config(
         file_data.get("capture_window_process") or "DeltaForceClient-Win64-Shipping"
     ).strip()
     capture_window_title = str(file_data.get("capture_window_title") or "").strip()
+    auto_operator_enabled = parse_bool(file_data.get("auto_operator_enabled"), True)
+    try:
+        operator_recognition_threshold = min(
+            0.95, max(0.5, float(file_data.get("operator_recognition_threshold", 0.70)))
+        )
+    except (TypeError, ValueError):
+        operator_recognition_threshold = 0.70
 
     timeout = DEFAULT_TIMEOUT
     raw_timeout = file_data.get("request_timeout")
@@ -339,6 +350,8 @@ def load_config(
         auto_sample_ms=auto_sample_ms,
         capture_window_process=capture_window_process,
         capture_window_title=capture_window_title,
+        auto_operator_enabled=auto_operator_enabled,
+        operator_recognition_threshold=operator_recognition_threshold,
         request_timeout=timeout,
         source=source,
     )
