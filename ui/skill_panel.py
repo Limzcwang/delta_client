@@ -151,7 +151,13 @@ class SkillSlotWidget(QWidget):
 class SkillRow(QFrame):
     """一条队友技能行：头像首字母 + 昵称/干员名 + 3 个固定槽位。"""
 
-    def __init__(self, state: SkillState, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        state: SkillState,
+        parent: QWidget | None = None,
+        *,
+        server_now: int | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("Card")
         self.user_id = state.user_id
@@ -188,7 +194,11 @@ class SkillRow(QFrame):
             self.slot_widgets[kind] = widget
             slots.addWidget(widget, stretch=1)
         root.addLayout(slots)
-        self.update_state(state, int(time.time() * 1000), pulse=False)
+        self.update_state(
+            state,
+            int(server_now) if server_now is not None else int(time.time() * 1000),
+            pulse=False,
+        )
 
     def update_state(self, state: SkillState, server_now: int, pulse: bool = False) -> None:
         self.state = state
@@ -209,12 +219,16 @@ class SkillPanel(QWidget):
     sharing_toggled = Signal(bool)
     simulate_requested = Signal()
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self, parent: QWidget | None = None, *, clock=None
+    ) -> None:
         super().__init__(parent)
         self._states: dict[str, SkillState] = {}
         self._rows: dict[str, SkillRow] = {}
         self._clock_offset_ms = 0
         self._pulse = False
+        # 可注入时钟（测试冻结时间）；默认使用本机时间
+        self._clock = clock or (lambda: int(time.time() * 1000))
         self._build()
         self._timer = QTimer(self)
         self._timer.setInterval(1000)
@@ -277,7 +291,7 @@ class SkillPanel(QWidget):
         self._tick()
 
     def server_now_ms(self) -> int:
-        return int(time.time() * 1000) + self._clock_offset_ms
+        return int(self._clock()) + self._clock_offset_ms
 
     def states(self) -> list[SkillState]:
         return list(self._states.values())
@@ -319,7 +333,7 @@ class SkillPanel(QWidget):
         self.set_states([])
 
     def _add_row(self, state: SkillState) -> None:
-        row = SkillRow(state, self.list_widget)
+        row = SkillRow(state, self.list_widget, server_now=self.server_now_ms())
         self._rows[state.user_id] = row
         self.list_layout.insertWidget(self.list_layout.count() - 1, row)
 

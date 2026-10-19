@@ -33,7 +33,7 @@
 | 连通性测试 | 设置页「测试连接」：探测 `/health` + `/api/v1/rooms?page=1`，分别报告可达/鉴权失效/超时/网络错误 |
 | 协议对齐 | PROTOCOL C/D 定稿：`data.error_code`、§7.2/§7.3 实名错误码、WS `room_id_or_code`、聊天字段、画板 `rev`/快照语义 |
 | Mock | `--mock` / `DELTA_MOCK=1`：内置内存后端（昵称/聊天历史/画板快照/房主管理/我的房间），可完整离线演示 |
-| 测试 | 279 个 stdlib unittest（含 20 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑 |
+| 测试 | 280 个 stdlib unittest（含 20 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑 |
 
 ---
 
@@ -177,7 +177,7 @@ python -m unittest discover -s tests -v
 
 覆盖：配置加载与优先级、URL 规范化、协议路径/WS 消息、HTTP 错误映射、WS 重连退避、房间号校验（5 位 `[A-Z0-9]`）、房间/成员/消息解析、登录注册校验、token 存取与“不落盘密码”、Mock 后端完整流程。
 
-当前结果：**279 个用例全部通过**（约 0.9s）。
+当前结果：**280 个用例全部通过**（约 0.9s）。
 
 ---
 
@@ -293,5 +293,6 @@ python -m unittest discover -s tests -v
 - aiohttp / websockets 采用函数内延迟导入，缺失依赖时给出明确安装提示；
 - 新增 UI 页面时沿用 `ui/` + 信号/槽，网络请求统一经 `AsyncBridge` 提交，不在 UI 线程直接 `asyncio.run`；
 - **聊天/画板协议细节、已知限制与 TODO 见 [`CLIENT-NOTES.md`](CLIENT-NOTES.md)**（交接必读）。
+
 
 

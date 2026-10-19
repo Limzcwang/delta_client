@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import time
 import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -17,6 +16,9 @@ try:  # pragma: no cover - 环境相关
     HAS_QT = True
 except Exception:  # noqa: BLE001
     HAS_QT = False
+
+#: 固定服务器时间，禁止测试依赖真实 time.time()
+CAPTURED_AT = 1_700_000_000_000
 
 
 def state(user_id="2", **skills):
@@ -36,7 +38,7 @@ def state(user_id="2", **skills):
             "user_id": user_id,
             "nickname": f"队友{user_id}",
             "operator": "红狼",
-            "captured_at": int(time.time() * 1000),
+            "captured_at": CAPTURED_AT,
             "skills": base,
         }
     )
@@ -57,8 +59,9 @@ class SkillPanelTests(unittest.TestCase):
             panel.deleteLater()
         self.app.processEvents()
 
-    def _panel(self) -> SkillPanel:
-        panel = SkillPanel()
+    def _panel(self, clock=CAPTURED_AT) -> SkillPanel:
+        clock_fn = clock if callable(clock) else (lambda: clock)
+        panel = SkillPanel(clock=clock_fn)
         self.panels.append(panel)
         return panel
 
@@ -79,6 +82,19 @@ class SkillPanelTests(unittest.TestCase):
 
         row.update_state(state(), state().captured_at + 10_000, pulse=False)
         self.assertEqual(("技能", "1/2", "0:20"), ability.text_lines())
+
+    def test_tick_uses_injected_clock_for_each_second(self) -> None:
+        clock = [CAPTURED_AT]
+        panel = self._panel(clock=lambda: clock[0])
+        panel.set_states([state()])
+        ability = panel._rows["2"].slot_widgets[SLOT_ABILITY]
+        self.assertEqual("0:30", ability.text_lines()[2])
+        clock[0] += 1_000
+        panel._tick()
+        self.assertEqual("0:29", ability.text_lines()[2])
+        clock[0] += 5_000
+        panel._tick()
+        self.assertEqual("0:24", ability.text_lines()[2])
 
     def test_ready_vs_unshared_row_status(self) -> None:
         panel = self._panel()

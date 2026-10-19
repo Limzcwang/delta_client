@@ -21,7 +21,7 @@
 
 - 本地工作副本：`.tmp/client-work`，当前分支 `feat/skill-panel`。
 - 远端集成分支：`feat/client-chat`（lead 用 patch 应用，不要直接改远端）。
-- 测试：`python -m unittest discover -s tests -v` → **279 用例**（含 20 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑。
+- 测试：`python -m unittest discover -s tests -v` → **280 用例**（含 20 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑。
 - GUI 冒烟脚本在 `.tmp/client-work-smoke/`（不在仓库内）：`smoke.py`（登录/房间/聊天/设置）、`smoke_canvas.py`（画板保存/恢复）、`smoke_canvas_map.py`（底图比例/坐标/透明层/图标工具栏/截图）、`smoke_skill_panel.py`（技能面板三状态/开关/模拟/移除截图）、`smoke_f.py`（昵称/注册规则/资料/房主管理）、`smoke_username_input.py`（输入过滤/粘贴/光标/IME/注册密码边界）、`smoke_my_rooms.py`（我的房间/退出/关闭/空态）、`smoke_create_room.py`（建房实时校验/失败保留表单/密码 4–32）、`smoke_saved_logins.py`（历史账号/重启带出/删除/失败清密码）、`smoke_kick.py`（右键移出/room_kicked 回大厅）、`smoke_member_menu.py`（多成员/长昵称/行高/右键菜单状态/截图）、`live_*.py`（真实后端联调）。
 - 本机沙箱曾把 PySide6 装到 `.tmp/pydeps` 并用 `PYTHONPATH` 跑 GUI；正常开发直接 `pip install -r requirements.txt`。
 
@@ -119,7 +119,7 @@
 6. 分页 UI：房间列表只有首屏 `items`。
 7. 设置页可加 WS 连通性测试（现在只测 `/health` 与 rooms）。
 8. 服务端若提供幂等去重（client_msg_id 唯一）可去掉 UI 侧重复消息兜底。
-9. 增加 GUI 自动化测试（pytest-qt 等）——当前 279 个测试中 20 个为 PySide6 组件测试，其余为纯逻辑；复杂交互仍用冒烟脚本验证。
+9. 增加 GUI 自动化测试（pytest-qt 等）——当前 280 个测试中 20 个为 PySide6 组件测试，其余为纯逻辑；复杂交互仍用冒烟脚本验证。
 10. E3 干员识别：ROI 为队友列表最底部「自己」；底部左侧头像+名字兜底；按当前对局缓存，换局/重进游戏重置。
 
 ---
@@ -138,3 +138,4 @@ python main.py --server http://114.132.161.169:8000   # 线上（测试账号由
 - `live_chat.py`：双账号聊天收发/历史分页/限频/非法消息/成员校验；
 - `live_canvas.py`：双账号画板实时/无自回显/clear/save ack/后进房快照/错误码；
 - `smoke_canvas.py`、`smoke_canvas_map.py`、`smoke.py`、`smoke_conn_test.py`：离屏 GUI 冒烟。
+
