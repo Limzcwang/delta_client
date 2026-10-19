@@ -47,10 +47,15 @@ class SettingsOperatorTests(unittest.TestCase):
     def test_dropdown_has_16_operators_and_selects_saved(self) -> None:
         dialog = self._dialog("weilong")
         self.assertEqual(3, dialog.tabs.count())
-        self.assertEqual(16, dialog.operator_combo.count())
+        self.assertEqual(17, dialog.operator_combo.count())
         self.assertEqual("weilong", dialog.operator_combo.currentData())
         self.assertIn("威龙", dialog.operator_combo.currentText())
         self.assertIn("虎蹲炮", dialog.operator_detail_label.text())
+        from PySide6.QtWidgets import QLabel
+
+        self.assertTrue(
+            any("版本 v0.1.0" in label.text() for label in dialog.findChildren(QLabel))
+        )
 
     def test_switch_and_result_operator_id(self) -> None:
         dialog = self._dialog("honglang")
@@ -77,3 +82,4 @@ class SettingsOperatorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

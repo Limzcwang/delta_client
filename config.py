@@ -31,10 +31,13 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from core.protocol import ws_url_for
+from state.paths import APP_NAME
 
 DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
 DEFAULT_TIMEOUT = 15.0
 CONFIG_FILENAME = ".delta_client.json"
+APP_VERSION = "0.1.0"
+__version__ = APP_VERSION
 CONFIG_ENV = "DELTA_CLIENT_CONFIG"
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on", "y", "t"})
@@ -101,12 +104,18 @@ def normalize_ws_url(raw: Any) -> str:
 
 
 def config_path_from_env(env: Mapping[str, str] | None = None) -> Path:
-    """配置文件路径：``DELTA_CLIENT_CONFIG`` 优先，否则 ``~/.delta_client.json``。"""
+    """配置文件路径：``DELTA_CLIENT_CONFIG`` 优先，否则 ``%APPDATA%\\DeltaClient\\config.json``。"""
     source = os.environ if env is None else env
     override = str(source.get(CONFIG_ENV, "") or "").strip()
     if override:
         return Path(override).expanduser()
-    return Path.home() / CONFIG_FILENAME
+    data_override = str(source.get("DELTA_DATA_DIR", "") or "").strip()
+    if data_override:
+        return Path(data_override).expanduser() / "config.json"
+    appdata = str(source.get("APPDATA", "") or "").strip()
+    if appdata:
+        return Path(appdata) / APP_NAME / "config.json"
+    return Path.home() / ".delta_client" / "config.json"
 
 
 @dataclass(frozen=True)
@@ -118,6 +127,7 @@ class AppConfig:
     use_mock: bool = False
     persist_token: bool = False
     operator_id: str = ""
+    hud_profile: dict[str, Any] | None = None
     request_timeout: float = DEFAULT_TIMEOUT
     source: str = "default"
 
@@ -138,6 +148,7 @@ class AppConfig:
             "mock": self.use_mock,
             "save_token": self.persist_token,
             "operator_id": self.operator_id,
+            "hud_profile": self.hud_profile,
             "request_timeout": self.request_timeout,
         }
 
@@ -204,6 +215,9 @@ def load_config(
         persist_token = parse_bool(env_map.get("DELTA_SAVE_TOKEN"), persist_token)
 
     operator_id = str(file_data.get("operator_id") or "").strip()
+    hud_profile = file_data.get("hud_profile")
+    if not isinstance(hud_profile, dict):
+        hud_profile = None
 
     timeout = DEFAULT_TIMEOUT
     raw_timeout = file_data.get("request_timeout")
@@ -216,6 +230,7 @@ def load_config(
         use_mock=use_mock,
         persist_token=persist_token,
         operator_id=operator_id,
+        hud_profile=hud_profile,
         request_timeout=timeout,
         source=source,
     )

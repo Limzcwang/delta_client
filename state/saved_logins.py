@@ -22,6 +22,8 @@ from typing import Any, Callable, Mapping
 
 from core.validation import sanitize_username_input
 
+from state.paths import saved_logins_path
+
 SAVED_LOGINS_FILENAME = "saved_logins.json"
 SAVED_LOGINS_VERSION = 1
 MAX_SAVED_LOGINS = 5
@@ -70,13 +72,7 @@ class SavedLogin:
 
 def default_saved_logins_path() -> Path:
     """默认存储路径；``DELTA_SAVED_LOGINS_FILE`` 优先（测试/便携用）。"""
-    override = str(os.environ.get("DELTA_SAVED_LOGINS_FILE", "") or "").strip()
-    if override:
-        return Path(override).expanduser()
-    appdata = str(os.environ.get("APPDATA", "") or "").strip()
-    if appdata:
-        return Path(appdata) / "DeltaClient" / SAVED_LOGINS_FILENAME
-    return Path.home() / ".delta_client" / SAVED_LOGINS_FILENAME
+    return saved_logins_path()
 
 
 # ---------- Windows DPAPI ----------

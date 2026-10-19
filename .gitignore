@@ -10,9 +10,9 @@ env/
 # 运行产物
 /logs/
 *.log
-build/
-dist/
-*.spec
+/build/
+/dist/
+/release/
 
 # 本机配置/会话（正常情况下在用户目录，放仓库内时也不提交）
 .delta_client.json

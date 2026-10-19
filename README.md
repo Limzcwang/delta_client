@@ -30,12 +30,13 @@
 | 聊天（C） | 发送 `chat_send`（带 `room_id` / `client_msg_id`）、`chat_message` 广播认领（发送中→已发送、不重复插入）、失败标红双击重试（复用 `client_msg_id`）、进房拉最近 50 条、上滚 `next_before` 续拉 |
 | 画板（D/H4） | 内置三角洲地图底图（1105×1260）；画布控件锁定底图宽高比、随可用空间等比缩放并居中（宿主剩余空间留白），控件内底图铺满；坐标 0–1 = 画布像素/画布宽高（图外不绘制）；透明笔画层（橡皮 composition Clear，清空只清笔画）；画笔/橡皮/颜色/粗细/撤销/重做/清空图标工具栏（QPainter 矢量图标、快捷键、当前工具高亮）；`canvas_op` 增量（≤512 点自动分段、30 条/秒本地节流）、`room_joined.canvas_snapshot` 初始化（缺失/空时 HTTP fallback）、`(user_id,rev)` 丢弃旧包、离开/关窗前 `canvas_snapshot_save` 等 ack、快照上限 5000 笔/512KB |
 | 技能面板（E2） | 房间侧栏「技能」tab：按队友一行，头像首字母/昵称/干员名 + 大招（百分比环）/技能（n/max+CD）/投掷物（n/max+CD）；ready 高亮、charging 每秒倒计时、unknown「?」、30 分钟未更新「未共享」；缓存 `skill_share_state`/`room_joined.skill_states`，`skill_share_removed` 删除；本地时钟偏移用 `auth_ok.server_time` 估算；默认关闭共享，「模拟我的技能」循环状态，开启后 `skill_share_update`（2 次/秒限频），关闭发 `skill_share_off` |
-| 干员配置（E3a） | 读取 `assets/operators.json`（16 干员，slot 0/1/2 = 大招/战术技能/投掷物），面板显示干员名+技能名（hover）；设置页「干员」下拉手动选择并持久化 `operator_id`；`total_cd_ms` 缺失/0 的槽显示「CD未知」、不画环/不倒计时、上报 `state=unknown`；头像 `assets/operators/<id>.png` 存在则加载、缺失用首字母；上报带 `operator_id/operator_name` |
+| 干员配置（E3a） | 读取 `assets/operators.json`（17 干员，slot 0/1/2 = 大招/战术技能/投掷物），面板显示干员名+技能名（hover）；设置页「干员」下拉手动选择并持久化 `operator_id`；`total_cd_ms` 缺失/0 的槽显示「CD未知」、不画环/不倒计时、上报 `state=unknown`；头像 `assets/operators/<id>.png` 存在则加载、缺失用首字母；上报带 `operator_id/operator_name` |
+| 打包（P1/P2） | 版本单一来源 `config.APP_VERSION=0.1.0`（`--version`/设置页显示）；数据目录 `%APPDATA%\DeltaClient\`（config/session/saved_logins/logs，旧 `~/.delta_client.json` 自动迁移并保留 `.bak`）；日志 2MB×3 轮转 + token/password 脱敏；多尺寸 `assets/app.ico`；`delta_client.spec` one-folder/无控制台/无 UPX；`scripts/build_win.ps1` 一键构建便携 ZIP + Inno Setup 安装包 + SHA256SUMS |
+| HUD 采集/识别（E3b） | 自动查找 DeltaForceClient-Win64-Shipping 窗口；WGC 优先、mss 回退；独立线程 2 FPS + 最小化暂停；HUD profile（2560×1440 默认/缩放/3 槽等分/JSON 导入导出）与「识别 HUD」按钮；RapidOCR 读百分比/秒数/充能，暗色遮罩比例算 CD，17 干员头像灰度多尺度模板匹配（遮左上编号，失败回退手动干员）；ult_pct_meaning=charged（16%=已充能16%）；识别失败槽 unknown；截图仅内存 |
 | 连通性测试 | 设置页「测试连接」：探测 `/health` + `/api/v1/rooms?page=1`，分别报告可达/鉴权失效/超时/网络错误 |
 | 协议对齐 | PROTOCOL C/D 定稿：`data.error_code`、§7.2/§7.3 实名错误码、WS `room_id_or_code`、聊天字段、画板 `rev`/快照语义 |
 | Mock | `--mock` / `DELTA_MOCK=1`：内置内存后端（昵称/聊天历史/画板快照/房主管理/我的房间），可完整离线演示 |
-| 测试 | 295 个 stdlib unittest（含 27 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑 |
-
+| 测试 | 329 个 stdlib unittest（含 29 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑；真实 HUD OCR 测试需 requirements-e3.txt 环境 |`r`n
 ---
 
 ## 2. 目录结构
@@ -54,6 +55,11 @@ delta_client/
 │   ├── canvas_geometry.py   # 画板随底图比例/画布坐标换算（纯逻辑）
 │   ├── skills.py            # E2 技能状态/倒计时/缓存/上报限频（纯逻辑）
 │   ├── operators.py         # E3a 干员配置/槽位技能/CD/头像路径（纯逻辑）
+│   ├── hud_profile.py       # E3b HUD ROI profile/缩放/JSON
+│   ├── hud_recognition.py   # E3b 百分比/秒数/充能/遮罩识别纯逻辑
+│   ├── hud_ocr.py           # E3b RapidOCR 适配（惰性导入）
+│   ├── operator_match.py    # E3b 干员头像模板匹配
+│   ├── hud_pipeline.py      # E3b 单帧 -> 三槽 -> SkillState
 │   ├── room_list.py         # 大厅列表 diff/room_key（自动刷新就地更新）
 │   ├── rooms.py             # 房间号/房间名/可见性/密码校验
 │   ├── models.py            # Room / Member / ChatMessage 与容错解析
@@ -75,22 +81,30 @@ delta_client/
 │   ├── canvas_view.py       # 画板控件（底图/透明层/图标工具栏）
 │   ├── canvas_icons.py      # 画板矢量图标（QPainter）
 │   ├── skill_panel.py       # E2/E3a 技能 CD 面板（三槽/倒计时/干员配置/模拟共享）
+│   ├── calibration_dialog.py# E3b HUD 框选标定/预览/导入导出
 │   ├── dialogs.py           # 创建房间 / 加入房间 / 连接设置 / 干员选择
 │   ├── async_bridge.py      # asyncio 线程 <-> Qt 主线程桥
 │   └── theme.py             # 深色 + 橙色 QSS 主题
 ├── assets/
 │   ├── canvas_map.png       # 内置三角洲地图底图（1105×1260，原图，不重采样）
-│   ├── operators.json       # E3a 16 干员配置（槽位/技能名/total_cd_ms/max_charges）
+│   ├── app.ico              # 多尺寸应用图标（16–256）
+│   ├── operators.json       # E3a 17 干员配置（槽位/技能名/total_cd_ms/max_charges）
 │   ├── operators.README.md  # 配置说明/未知 CD/版本口径
-│   └── operators/           # 干员头像模板（当前缺失，UI 用首字母占位）
-├── tests/                   # stdlib unittest（离线）
+│   └── operators/           # 干员头像模板（17/17）
+├── installer/               # Inno Setup 安装脚本 + 简体中文语言文件
+├── scripts/                 # build_win.ps1 / make_icon.py / write_version_info.py
+├── capture/                 # E3b 窗口查找/WGC+mss/2FPS 工作线程
+├── delta_client.spec        # PyInstaller one-folder 配置
+├── tests/                   # stdlib unittest（离线；fixtures/hud 真实截图）
 ├── requirements.txt
+├── requirements-build.txt   # 打包锁定依赖
+├── requirements-e3.txt      # E3b 采集/OCR 依赖（Python 3.12 wheels）
 └── README.md
 ```
 
-> 打包：`assets/canvas_map.png`、`assets/operators.json` 及 `assets/operators/` 头像需随包分发
-> （PyInstaller `--add-data "assets;assets"` 或分别 add-data），代码同时兼容 `sys._MEIPASS/assets/`；
-> `DELTA_CANVAS_MAP` / `DELTA_OPERATORS_JSON` 可覆盖资源路径（调试用）。
+> 打包：`assets/` 整目录（`canvas_map.png`、`operators.json`、`operators/*.png`、`app.ico`）由
+> `delta_client.spec` 的 `datas` 收录，代码兼容 `sys._MEIPASS/assets/`；
+> `scripts/build_win.ps1` 输出 `release/DeltaClient-Setup-<version>.exe`、便携 ZIP 与 `SHA256SUMS.txt`。
 
 ---
 
@@ -183,7 +197,7 @@ python -m unittest discover -s tests -v
 
 覆盖：配置加载与优先级、URL 规范化、协议路径/WS 消息、HTTP 错误映射、WS 重连退避、房间号校验（5 位 `[A-Z0-9]`）、房间/成员/消息解析、登录注册校验、token 存取与“不落盘密码”、Mock 后端完整流程。
 
-当前结果：**295 个用例全部通过**（约 1.0s）。
+当前结果：**329 个用例全部通过**（约 1.2s；真实 OCR 用例单列）。
 
 ---
 
@@ -281,7 +295,7 @@ python -m unittest discover -s tests -v
 - 历史窗口提示依赖后端返回 `window_days`/`truncated`（字段名兼容多种写法）；未返回时按普通历史展示；
 - 画板 undo/redo 为**纯本地**（服务端无 undo，队友不会看到撤销，保存快照后才持久化）；`clear` 为全房间生效；
 - H4 底图为客户端内置资源 `assets/canvas_map.png`（1105×1260，约 2MB），打包需 add-data；画布控件锁定底图宽高比，随宿主可用空间等比缩放居中（宿主外部留白，控件内部底图铺满、不裁切/不留边）；坐标 0–1 以画布控件为基准，不做旧视口坐标迁移（线上无真实数据）；
-- E3a 干员配置来自 `assets/operators.json`（16 人）；当前 `assets/operators/*.png` 头像模板尚未提供，UI 用首字母占位，文件存在时自动加载；`total_cd_ms` 为 null/0 的 5 个槽位显示「CD未知」，不画环/不倒计时、上报 `state=unknown`；E3b 截图识别尚未开始（显示模式/OCR 依赖待确认）。
+- E3a 干员配置来自 `assets/operators.json`（17 人）；当前 `assets/operators/*.png` 头像 17/17 齐全；缺失时 UI 用首字母占位，文件存在时自动加载；`total_cd_ms` 为 null/0 的 5 个槽位显示「CD未知」，不画环/不倒计时、上报 `state=unknown`；E3b 截图识别尚未开始（显示模式/OCR 依赖待确认）。
 - 画板快照只在离开房间/关闭应用/切服务器时显式保存（服务端无定时快照），进程崩溃可能丢失未保存增量；快照上限 5000 笔 / 512KB，超限会提示「画布已满」；
 - 房间列表暂无分页；只渲染 `items` 首屏；
 - 成员列表以 WS `room_joined` 为准，HTTP 房间详情做兜底（进房一次 + 重连失败时 5s 节流）；
@@ -291,6 +305,7 @@ python -m unittest discover -s tests -v
 - 设置页「测试连接」使用当前登录 token 探测 `/health` 与 `/api/v1/rooms?page=1`，未登录时会显示鉴权失效；
 - Mock 后端只用于演示，不模拟限频/多客户端/持久化（但包含昵称、聊天历史、画板快照、房主管理、我的房间、踢人/room_kicked，可离线演示）；
 - 若后端返回的登录响应没有 token，界面会提示并进入“无 JWT 兼容模式”（聊天仅本地回显）。
+- E3b：采集/标定/识别核心与「识别 HUD」一键按钮已完成；当前机器没有运行游戏窗口，WGC/mss 真实抓帧未实机验证；真实识别单测用 `tests/fixtures/hud/` 截图（16%/15秒/充能2/遮罩），缺 OCR 依赖时跳过；连续 2 FPS 工作线程已实现但未接入自动共享循环（当前单次按钮触发）。
 
 ---
 
@@ -300,6 +315,12 @@ python -m unittest discover -s tests -v
 - aiohttp / websockets 采用函数内延迟导入，缺失依赖时给出明确安装提示；
 - 新增 UI 页面时沿用 `ui/` + 信号/槽，网络请求统一经 `AsyncBridge` 提交，不在 UI 线程直接 `asyncio.run`；
 - **聊天/画板协议细节、已知限制与 TODO 见 [`CLIENT-NOTES.md`](CLIENT-NOTES.md)**（交接必读）。
+
+
+
+
+
+
 
 
 

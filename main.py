@@ -15,9 +15,14 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import logging
 import sys
+import tempfile
+from pathlib import Path
 
-from config import AppConfig, ConfigError, load_config
+from config import APP_VERSION, AppConfig, ConfigError, load_config
+from state.logging_setup import setup_logging
+from state.paths import app_data_dir, migrate_legacy_data
 from state.session import Session, default_session_path
 
 
@@ -39,6 +44,11 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--mock", action="store_true", help="强制使用内置 Mock 后端（不联网）")
     mode.add_argument("--no-mock", action="store_true", help="强制关闭 Mock 后端（连接真实服务器）")
     parser.add_argument(
+        "--version",
+        action="store_true",
+        help="打印版本号后退出",
+    )
+    parser.add_argument(
         "--print-config",
         action="store_true",
         help="打印生效配置后退出（不导入 PySide6，适合排障）",
@@ -47,8 +57,24 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _write_cli(text: str) -> None:
+    """CLI 输出：source 模式 stdout；windowed PyInstaller 回退临时文件。"""
+    if sys.stdout is not None:
+        try:
+            print(text)
+            return
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        target = Path(tempfile.gettempdir()) / "DeltaClient-cli.txt"
+        target.write_text(text + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
 def _effective_config_dict(config: AppConfig) -> dict[str, object]:
     payload = config.public_dict()
+    payload["version"] = APP_VERSION
     payload["effective_ws_url"] = config.effective_ws_url
     payload["source"] = config.source
     return payload
@@ -77,6 +103,16 @@ def _check_dependencies(config: AppConfig) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.version:
+        _write_cli(f"delta-client {APP_VERSION}")
+        return 0
+    migrated = migrate_legacy_data()
+    setup_logging()
+    logging.getLogger(__name__).info(
+        "Delta Client %s starting (data_dir=%s)", APP_VERSION, app_data_dir()
+    )
+    if migrated:
+        logging.getLogger(__name__).info("已迁移旧版数据文件 %s 个", len(migrated))
     mock_override = True if args.mock else (False if args.no_mock else None)
     try:
         config = load_config(
@@ -90,12 +126,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.print_config:
-        print(json.dumps(_effective_config_dict(config), ensure_ascii=False, indent=2))
+        _write_cli(json.dumps(_effective_config_dict(config), ensure_ascii=False, indent=2))
         return 0
     if args.check:
         return _check_dependencies(config)
 
     try:
+        from PySide6.QtGui import QIcon
         from PySide6.QtWidgets import QApplication
     except ImportError:
         print("缺少 PySide6，无法启动图形界面。", file=sys.stderr)
@@ -113,6 +150,10 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication(sys.argv[:1])
     app.setApplicationName("Delta Client")
     app.setOrganizationName("Delta")
+    icon_base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    icon_file = icon_base / "assets" / "app.ico"
+    if icon_file.is_file():
+        app.setWindowIcon(QIcon(str(icon_file)))
     apply_theme(app)
     window = MainWindow(config, session)
     window.show()

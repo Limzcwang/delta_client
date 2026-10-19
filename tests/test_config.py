@@ -161,8 +161,9 @@ class SaveConfigTests(unittest.TestCase):
     def test_config_path_env_override(self) -> None:
         path = config_path_from_env({"DELTA_CLIENT_CONFIG": "~/custom.json"})
         self.assertEqual(path, Path.home() / "custom.json")
-        default = config_path_from_env({})
-        self.assertEqual(default.name, ".delta_client.json")
+        default = config_path_from_env({"APPDATA": str(Path.home() / "AppData/Roaming")})
+        self.assertEqual(default.name, "config.json")
+        self.assertEqual(default.parent.name, "DeltaClient")
 
 
 if __name__ == "__main__":
