@@ -139,15 +139,18 @@ class MockApiTests(unittest.TestCase):
 
             detail = await api.get_room_detail("ab12c")
             self.assertEqual(detail.room.code, "AB12C")
-            self.assertEqual({m.username for m in detail.members}, {"player", "队友-Bravo"})
+            self.assertEqual(
+                {m.display_name for m in detail.members}, {"队友玩家", "队友-Bravo"}
+            )
+            self.assertTrue(all(m.nickname for m in detail.members))
 
             await api.join_room("AB12C")
             after_join = await api.get_room_detail("AB12C")
-            self.assertIn("demo", {m.username for m in after_join.members})
+            self.assertIn("演示玩家", {m.display_name for m in after_join.members})
 
             await api.leave_room("AB12C")
             after_leave = await api.get_room_detail("AB12C")
-            self.assertNotIn("demo", {m.username for m in after_leave.members})
+            self.assertNotIn("演示玩家", {m.display_name for m in after_leave.members})
 
             by_id = await api.get_room_detail("mock-room-ab12c")
             self.assertEqual(by_id.room.code, "AB12C")
@@ -182,10 +185,86 @@ class MockApiTests(unittest.TestCase):
             latest = await api.get_messages("AB12C")
             self.assertEqual("新消息", latest.messages[0].content)
             self.assertEqual("c-new", latest.messages[0].client_msg_id)
+            self.assertEqual(7, latest.window_days)  # F-c5 历史窗口字段
 
             with self.assertRaises(ApiError) as not_found:
                 await api.get_messages("ZZZZZ")
             self.assertEqual(not_found.exception.kind, ErrorKind.ROOM_NOT_FOUND)
+
+        asyncio.run(scenario())
+
+    def test_profile_nickname_and_password(self) -> None:
+        async def scenario() -> None:
+            api = MockApiClient(latency=0)
+            login = await api.login("demo", "demo123")
+            self.assertEqual("演示玩家", login.user["nickname"])
+
+            updated = await api.update_nickname("新昵称")
+            self.assertEqual("新昵称", updated["nickname"])
+            relogin = await api.login("demo", "demo123")
+            self.assertEqual("新昵称", relogin.user["nickname"])
+
+            with self.assertRaises(ApiError) as wrong_old:
+                await api.change_password("wrong-pass", "newpass123")
+            self.assertEqual(wrong_old.exception.kind, ErrorKind.VALIDATION)
+            self.assertEqual("OLD_PASSWORD_INVALID", wrong_old.exception.code)
+
+            await api.change_password("demo123", "newpass123")
+            with self.assertRaises(ApiError):
+                await api.login("demo", "demo123")
+            result = await api.login("demo", "newpass123")
+            self.assertTrue(result.has_token)
+
+            with self.assertRaises(ApiError) as invalid_nickname:
+                await api.update_nickname("")
+            self.assertEqual(invalid_nickname.exception.code, "INVALID_NICKNAME")
+
+        asyncio.run(scenario())
+
+    def test_register_username_rules_flow(self) -> None:
+        async def scenario() -> None:
+            api = MockApiClient(latency=0)
+            with self.assertRaises(ApiError) as invalid:
+                await api.register("abc", "123456")
+            self.assertEqual(invalid.exception.kind, ErrorKind.VALIDATION)
+            self.assertEqual("INVALID_USERNAME", invalid.exception.code)
+
+            created = await api.register("newbie1", "123456")
+            self.assertEqual("newbie1", created["nickname"])
+            result = await api.login("newbie1", "123456")
+            self.assertEqual("newbie1", result.user["nickname"])
+
+            with self.assertRaises(ApiError) as duplicate:
+                await api.register("newbie1", "123456")
+            self.assertEqual(duplicate.exception.kind, ErrorKind.CONFLICT)
+
+        asyncio.run(scenario())
+
+    def test_room_management_owner(self) -> None:
+        async def scenario() -> None:
+            api = MockApiClient(latency=0)
+            await api.login("demo", "demo123")
+            room = await api.create_room("原名", "public")
+
+            renamed = await api.update_room(room.code, name="新名字")
+            self.assertEqual("新名字", renamed.name)
+            secured = await api.update_room(room.code, password="roompass1")
+            self.assertTrue(secured.has_password)
+            self.assertEqual("roompass1", api._find_room(room.code).get("password"))
+
+            # 非房主（同一 Mock 实例切换登录）不能改
+            await api.login("player", "player123")
+            with self.assertRaises(ApiError) as forbidden:
+                await api.update_room(room.code, name="篡改")
+            self.assertEqual(forbidden.exception.kind, ErrorKind.FORBIDDEN)
+            self.assertEqual("NOT_ROOM_OWNER", forbidden.exception.code)
+
+            await api.login("demo", "demo123")
+            self.assertTrue(await api.delete_room(room.code))
+            self.assertNotIn(room.code, {item.code for item in await api.list_rooms()})
+            with self.assertRaises(ApiError) as deleted:
+                await api.get_room_detail(room.code)
+            self.assertEqual(deleted.exception.kind, ErrorKind.ROOM_NOT_FOUND)
 
         asyncio.run(scenario())
 

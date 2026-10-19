@@ -340,6 +340,80 @@ class ApiClient:
         body = await self.request_data("GET", protocol.API_V1_ME)
         return dict(body) if isinstance(body, Mapping) else {}
 
+    # ---------- F：个人资料 / 房间管理 ----------
+    async def update_nickname(self, nickname: str) -> dict[str, Any]:
+        """修改昵称。
+
+        TODO(F/feat-profile): 后端 ``feat/profile`` 分支尚未合并，当前按
+        ``PATCH /api/v1/users/me {nickname}`` 实现；404/405 时回退
+        ``POST /api/v1/users/me/nickname``。联调后按 PROTOCOL 收敛为单一路径。
+        """
+        payload = {"nickname": nickname}
+        try:
+            body = await self.request_data("PATCH", protocol.API_V1_ME, json_body=payload)
+        except ApiError as exc:
+            if exc.status not in (404, 405):
+                raise
+            body = await self.request_data(
+                "POST", protocol.API_V1_ME_NICKNAME, json_body=payload
+            )
+        return dict(body) if isinstance(body, Mapping) else {"nickname": nickname}
+
+    async def change_password(self, old_password: str, new_password: str) -> None:
+        """修改密码（旧密码 + 新密码）；成功后 token 继续有效、不退出登录。
+
+        TODO(F/feat-profile): 路径/字段待后端定稿，优先 ``PATCH /users/me``，
+        404/405 回退 ``POST /users/me/password``；422 时再尝试一次
+        ``current_password`` 字段名（常见后端命名）。
+        """
+        payload = {"old_password": old_password, "new_password": new_password}
+        try:
+            await self._request("PATCH", protocol.API_V1_ME, json_body=payload)
+            return
+        except ApiError as exc:
+            if exc.status not in (404, 405, 422):
+                raise
+            if exc.status == 422:
+                alt = {"current_password": old_password, "new_password": new_password}
+                try:
+                    await self._request("PATCH", protocol.API_V1_ME, json_body=alt)
+                    return
+                except ApiError as alt_exc:
+                    if alt_exc.status not in (404, 405):
+                        raise
+            else:
+                alt = payload
+            await self._request("POST", protocol.API_V1_ME_PASSWORD, json_body=alt)
+
+    async def update_room(
+        self,
+        room_id_or_code: str,
+        *,
+        name: str | None = None,
+        password: str | None = None,
+    ) -> Room:
+        """房主修改房间名/密码：``PATCH /api/v1/rooms/{room_id_or_code}``（F）。"""
+        payload: dict[str, Any] = {}
+        if name is not None:
+            payload["name"] = name
+        if password is not None:
+            payload["password"] = password
+        body = await self.request_data(
+            "PATCH",
+            protocol.room_detail_path(room_reference(room_id_or_code)),
+            json_body=payload,
+        )
+        return self._room_from_payload(body)
+
+    async def delete_room(self, room_id_or_code: str) -> bool:
+        """房主删除/关闭房间：``DELETE /api/v1/rooms/{room_id_or_code}``（F）。"""
+        body = await self.request_data(
+            "DELETE", protocol.room_detail_path(room_reference(room_id_or_code))
+        )
+        if isinstance(body, Mapping):
+            return bool(body.get("closed", True))
+        return True
+
     @staticmethod
     def _room_from_payload(body: Any) -> Room:
         if isinstance(body, Mapping):

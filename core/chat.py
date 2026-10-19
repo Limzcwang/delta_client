@@ -30,6 +30,7 @@ class ChatEntry:
 
     key: str
     sender_name: str = ""
+    sender_id: str = ""
     content: str = ""
     created_at: int | None = None
     message_id: str = ""
@@ -69,6 +70,7 @@ class ChatEntry:
         return cls(
             key=key,
             sender_name=message.sender_name,
+            sender_id=message.sender_id,
             content=message.content,
             created_at=message.created_at,
             message_id=message.message_id,
@@ -122,11 +124,13 @@ class ChatTimeline:
         sender_name: str,
         content: str,
         created_at: int | None = None,
+        sender_id: str = "",
     ) -> ChatEntry:
         """发送前插入本地乐观条目（status=pending）。"""
         entry = ChatEntry(
             key=client_msg_id,
             sender_name=sender_name,
+            sender_id=str(sender_id or ""),
             content=content,
             created_at=created_at,
             client_msg_id=client_msg_id,
@@ -135,6 +139,19 @@ class ChatTimeline:
         )
         self.entries.append(entry)
         return entry
+
+    def rename_sender(self, user_id: str, nickname: str) -> bool:
+        """F-c2：本地修改昵称后立即更新聊天中自己的展示名。"""
+        changed = False
+        target = str(user_id or "")
+        for index, entry in enumerate(self.entries):
+            if entry.system:
+                continue
+            matches = (target and entry.sender_id == target) or (entry.outgoing and not entry.sender_id)
+            if matches:
+                self.entries[index] = replace(entry, sender_name=nickname)
+                changed = True
+        return changed
 
     def merge_remote(self, message: ChatMessage) -> str:
         """合并一条服务端广播/历史消息。
@@ -163,6 +180,7 @@ class ChatTimeline:
                     entry,
                     message_id=message.message_id or entry.message_id,
                     sender_name=message.sender_name or entry.sender_name,
+                    sender_id=message.sender_id or entry.sender_id,
                     content=message.content or entry.content,
                     created_at=message.created_at or entry.created_at,
                     status=STATUS_SENT,

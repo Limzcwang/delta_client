@@ -1,7 +1,7 @@
-# CLIENT-NOTES —— 客户端交接/踩坑记录（聊天 C + 画板 D）
+# CLIENT-NOTES —— 客户端交接/踩坑记录（聊天 C + 画板 D + F 完善）
 
 > 面向后续接手客户端的人。协议以 `delta_service/PROTOCOL.md` 为准，本文件只记录**实现时踩过的坑、易错点、已知限制和 TODO**。
-> 更新时间：2026-10-19；对应客户端 commit：`3d0216c` 之后。
+> 更新时间：2026-10-19；对应客户端 commit：F 完成后。
 
 ---
 
@@ -12,12 +12,13 @@
 | C1 骨架/配置/登录/房间 | 完成 |
 | C 聊天（收发/历史/乐观更新/失败重试） | 完成，已对线上双账号实测 |
 | D 共享画板（实时增量/快照/撤销重做） | 完成，已对线上双账号实测 |
+| F 完善（昵称展示/个人资料/大厅自动刷新/房主管理/历史窗口） | 完成，mock 打通；资料/房间事件接口等后端 `feat/profile` |
 | E 技能共享（截屏/OCR/技能 CD） | **未开始**（等方案拍板；客户端不传截图） |
 
-- 本地工作副本：`.tmp/client-work`，分支 `feat/client-skeleton`（最新 `3d0216c`）。
+- 本地工作副本：`.tmp/client-work`，分支 `feat/client-skeleton`。
 - 远端集成分支：`feat/client-chat`（lead 用 patch 应用，不要直接改远端）。
-- 测试：`python -m unittest discover -s tests -v` → **171 用例**，纯 stdlib、离线可跑。
-- GUI 冒烟脚本在 `.tmp/client-work-smoke/`（不在仓库内）：`smoke.py`（登录/房间/聊天/设置）、`smoke_canvas.py`（画板保存/恢复）、`live_*.py`（真实后端联调）。
+- 测试：`python -m unittest discover -s tests -v` → **197 用例**，纯 stdlib、离线可跑。
+- GUI 冒烟脚本在 `.tmp/client-work-smoke/`（不在仓库内）：`smoke.py`（登录/房间/聊天/设置）、`smoke_canvas.py`（画板保存/恢复）、`smoke_f.py`（昵称/注册规则/资料/房主管理）、`live_*.py`（真实后端联调）。
 - 本机沙箱曾把 PySide6 装到 `.tmp/pydeps` 并用 `PYTHONPATH` 跑 GUI；正常开发直接 `pip install -r requirements.txt`。
 
 ---
@@ -71,6 +72,14 @@
 - `UI` 画板面板固定宽 400px，小窗口下聊天区会被压缩；逻辑画布 16:9 letterbox。
 - 快照保存 ack 只有单条在途；`WsClient.save_canvas_snapshot` 用单 waiter 列表（并发保存请自行串行）。
 
+### F：昵称 / 个人资料 / 大厅自动刷新 / 房主管理 / 历史窗口（新）
+- **昵称兼容**：`user` 对象从 `{id,username}` 变为 `{id,nickname}`；`Member`/`ChatMessage` 解析优先 `nickname`，缺失回退 `username` 并置 `legacy_protocol=True`。展示层一律用 `display_name`（昵称），账号只在个人资料页出现。
+- **注册账号规则**：6–20 位字母/数字、至少 1 个字母；登录不套该规则（兼容老账号）；失败码 `INVALID_USERNAME`。前端 `LoginView` 有实时提示。
+- **个人资料**：`SettingsDialog` 新增「个人资料」tab；昵称 1–20，改密旧密码 + 新密码 8–64 + 确认。**接口路径待后端 `feat/profile` 定稿**：客户端按 `PATCH /users/me {nickname}` / `{old_password,new_password}`，404/405 回退 `/users/me/nickname`、`/users/me/password`；422 再试 `current_password`。成功后只更新本地 session（token 不变、不退登录）。
+- **大厅自动刷新**：QTimer 5s，仅大厅可见且窗口 active 时运行；`core.room_list.diff_rooms` 按 room key 做 added/removed/updated，`RoomListView.update_rooms` 就地改单元格并恢复选中/滚动；失败用 `ReconnectBackoff(base=5,factor=2,max_delay=20)` 退避，成功 reset。手动刷新会 reset 退避。
+- **房主管理**：`RoomSettingsDialog`；改名 1–30、私有房密码 4–64、删除需原样输入房间名。HTTP `PATCH/DELETE /api/v1/rooms/{ref}`（当前 master 已可用）；公开房不能设密码（`ROOM_PASSWORD_NOT_ALLOWED`）。WS `room_updated`/`room_deleted` 当前部署未下发，等 `feat/profile`；客户端已实现处理逻辑。
+- **历史窗口**：`ChatPage.window_days` / `truncated` 从历史接口（键名兼容 `window_days/history_window_days/days` 等）或 `room_joined.history_window_days` 读取，UI 提示「仅显示最近 N 天消息」；后端未返回时不提示。
+
 ### 通用
 - `AsyncBridge` 是单 asyncio 线程 + Qt 30ms 轮询；网络回调一律经 `bridge.post` 回主线程。
 - 关闭窗口时用 `QEventLoop` 轮询等保存协程（最多 3s），期间窗口是卡住的，属预期。
@@ -92,7 +101,7 @@
 6. 分页 UI：房间列表只有首屏 `items`。
 7. 设置页可加 WS 连通性测试（现在只测 `/health` 与 rooms）。
 8. 服务端若提供幂等去重（client_msg_id 唯一）可去掉 UI 侧重复消息兜底。
-9. 增加 GUI 自动化测试（pytest-qt 等）——当前 171 个测试均为纯逻辑；GUI 用一次性冒烟脚本验证。
+9. 增加 GUI 自动化测试（pytest-qt 等）——当前 197 个测试均为纯逻辑；GUI 用一次性冒烟脚本验证。
 
 ---
 

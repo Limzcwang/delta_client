@@ -51,6 +51,13 @@ class BackoffTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ReconnectBackoff(jitter=1.0)
 
+    def test_lobby_auto_refresh_policy(self) -> None:
+        # F-c3：自动刷新失败退避 5→10→20s 封顶，成功后 reset
+        backoff = ReconnectBackoff(base=5.0, factor=2.0, max_delay=20.0)
+        self.assertEqual([5.0, 10.0, 20.0, 20.0], [backoff.next_delay() for _ in range(4)])
+        backoff.reset()
+        self.assertEqual(5.0, backoff.next_delay())
+
 
 if __name__ == "__main__":
     unittest.main()

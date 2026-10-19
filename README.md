@@ -3,11 +3,11 @@
 桌面客户端：**文字聊天、公共/私有房间、房间内共享画板、本地截屏识别技能 CD 后共享给队友（E 占位）**。
 本项目只做桌面端，不做 Web；截屏与识别全部在客户端本地完成，服务端不接收图像。
 
-> 当前进度：**C1（骨架 + JWT 登录 + 房间界面）+ C（聊天）+ D（共享画板）**。技能共享（E）仅为占位。
+> 当前进度：**C1 + C（聊天）+ D（共享画板）+ F（完善：昵称/个人资料/大厅自动刷新/房主管理/历史窗口）**。E（技能共享）仍为占位。
 
 ---
 
-## 1. 已完成能力（C1 + C 聊天 + D 画板）
+## 1. 已完成能力（C1 + C + D + F）
 
 | 模块 | 内容 |
 |---|---|
@@ -15,15 +15,20 @@
 | HTTP 客户端 | `net/api_client.py`：统一 Base URL、`X-Request-Id` / `X-Protocol-Version`、`Authorization: Bearer`、超时、错误映射 |
 | WS 客户端 | `net/ws_client.py`：`/ws` 首消息 `auth`、心跳（25s ping / 90s 失联）、指数退避重连（1s→30s）、消息分发、未知类型忽略 |
 | 会话 | `state/session.py`：token + 用户信息（内存；可选落盘，**不落盘密码**） |
-| 登录/注册 | `POST /api/v1/auth/login`、`POST /api/v1/auth/register`（404 时回退旧接口；注册带 token 自动登录） |
+| 登录/注册 | `POST /api/v1/auth/login`、`POST /api/v1/auth/register`；注册账号 6–20 位字母/数字且至少含 1 个字母（实时提示 + `INVALID_USERNAME` 映射）；注册带 token 自动登录 |
+| 昵称展示（F） | 成员列表/聊天/房主标识/加入离开提示统一显示 **nickname**（缺失时回退 username 并标记旧协议）；账号只在个人资料页对自己可见 |
+| 个人资料（F） | 设置页新增「个人资料」：修改昵称（1–20，立即刷新所有展示，含历史聊天中自己的名字）、修改密码（旧密码 + 新密码 8–64 + 确认；成功后保持登录） |
 | 房间 | 公共房间列表、刷新、创建（公开/私有+密码）、按 5 位房间号加入（私有需密码）、离开 |
+| 大厅自动刷新（F） | 大厅可见且有焦点时每 5s 拉列表；按 room id diff 就地更新（保留选中/滚动）；失败退避 5→10→20s，恢复后重置；进房停止 |
+| 房主管理（F） | 房主房间内「房间设置」：改房间名（1–30）、改私有房密码（4–64）、删除房间（输入房间名二次确认）；处理 `room_updated`/`room_deleted` 实时事件 |
+| 历史窗口（F） | 兼容历史接口 `window_days` / `truncated` 字段，提示「仅显示最近 N 天消息」 |
 | 房间内页 | 成员列表（WS `room_joined` + HTTP 房间详情兜底）、聊天、共享画板 |
 | 聊天（C） | 发送 `chat_send`（带 `room_id` / `client_msg_id`）、`chat_message` 广播认领（发送中→已发送、不重复插入）、失败标红双击重试（复用 `client_msg_id`）、进房拉最近 50 条、上滚 `next_before` 续拉 |
 | 画板（D） | 1920×1080 逻辑画布（0–1 归一化坐标）、画笔/橡皮/颜色/粗细、清空、本地撤销/重做；`canvas_op` 增量（≤512 点自动分段、30 条/秒本地节流）、`room_joined.canvas_snapshot` 初始化（缺失/空时 HTTP fallback）、`(user_id,rev)` 丢弃旧包、离开/关窗前 `canvas_snapshot_save` 等 ack、快照上限 5000 笔/512KB |
 | 连通性测试 | 设置页「测试连接」：探测 `/health` + `/api/v1/rooms?page=1`，分别报告可达/鉴权失效/超时/网络错误 |
 | 协议对齐 | PROTOCOL C/D 定稿：`data.error_code`、§7.2/§7.3 实名错误码、WS `room_id_or_code`、聊天字段、画板 `rev`/快照语义 |
-| Mock | `--mock` / `DELTA_MOCK=1`：内置内存后端（聊天历史 + 画板快照），可完整离线演示 |
-| 测试 | 171 个纯逻辑 stdlib unittest，离线可跑 |
+| Mock | `--mock` / `DELTA_MOCK=1`：内置内存后端（昵称/聊天历史/画板快照/房主管理），可完整离线演示 |
+| 测试 | 197 个纯逻辑 stdlib unittest，离线可跑 |
 
 ---
 
@@ -40,6 +45,7 @@ delta_client/
 │   ├── connection.py        # 连通性测试结果模型（/health + /api/v1/rooms）
 │   ├── chat.py              # 聊天时间线：乐观更新/广播认领/去重/失败重试/历史分页
 │   ├── canvas.py            # 画板逻辑：归一化/op 校验分段/快照上限/撤销重做/限频
+│   ├── room_list.py         # 大厅列表 diff/room_key（自动刷新就地更新）
 │   ├── rooms.py             # 房间号/房间名/可见性/密码校验
 │   ├── models.py            # Room / Member / ChatMessage 与容错解析
 │   └── validation.py        # 登录/注册输入校验、用户信息清洗
@@ -180,6 +186,11 @@ python -m unittest discover -s tests -v
 | 画板快照（D） | `GET /api/v1/rooms/{room_id_or_code}/canvas` | `data.{strokes,rev,updated_at}`；`room_joined.canvas_snapshot` 缺失/为空时 fallback |
 | 画板增量（D） | WS `canvas_op` | `{room_id,rev,op}`；op 为 `stroke{points≤512,color,width,tool}` 或 `clear`；坐标 0–1；服务端只广播给其他人 |
 | 画板快照保存（D） | WS `canvas_snapshot_save` | `{room_id,rev,strokes}`（≤5000 笔 / ≤512KB）；等 `canvas_snapshot_saved` ack 后断开；离开/关窗前必须发 |
+| 修改房间（F） | `PATCH /api/v1/rooms/{room_id_or_code}` | 房主：`{name?}` / `{password?}`（公开房不允许设密码，服务端 `ROOM_PASSWORD_NOT_ALLOWED`）；响应 `data.room` |
+| 删除房间（F） | `DELETE /api/v1/rooms/{room_id_or_code}` | 房主：关闭房间并摘除成员会话；响应 `{closed:true}` |
+| 房间事件（F） | WS `room_updated` / `room_deleted` | 实时更新房名/密码状态；删除后提示并退回大厅（待 feat/profile 后端部署） |
+| 修改昵称（F） | `PATCH /api/v1/users/me`（404/405 回退 `POST /api/v1/users/me/nickname`） | 待 feat/profile 定稿；成功后本地立即更新展示、保持登录 |
+| 修改密码（F） | `PATCH /api/v1/users/me`（回退 `POST /api/v1/users/me/password`） | 旧密码 + 新密码；422 兼容 `current_password`；成功后保持登录 |
 | 心跳 | WS `ping` / 服务端 `heartbeat` | 服务端每 30s 下发；客户端 25s ping，90s 无消息判定失联 |
 
 错误体统一读取 `data.error_code`（§1.4/§7.3），并已映射 §7.2 全部 WS 错误码（`NOT_AUTHENTICATED`/`AUTH_INVALID`/`AUTH_EXPIRED`/`NOT_ROOM_MEMBER`/`ROOM_CLOSED`/`INVALID_MESSAGE`/`INVALID_CANVAS_OP`/`CANVAS_OUT_OF_ORDER`/`RATE_LIMITED` 等）。
@@ -203,13 +214,16 @@ python -m unittest discover -s tests -v
 - 连通性自检：真实后端 `/health` 与 `/api/v1/rooms?page=1` 均通过，设置页「测试连接」可区分可达/鉴权失效/超时/网络错误。
 - 聊天（C，部署后实测）：双账号 `dsh_test`/`dsh_test2` 收发（A 发 A/B 都收到、B 发 A 收到）；`chat_message` 字段 `id/room_id/user/content/client_msg_id/created_at` 正确，`client_msg_id` 原样回传；历史分页 4 页 7 条无重复、顺序新→旧；5 条/秒限频第 6 条返回 `RATE_LIMITED`；2001 字返回 `INVALID_MESSAGE`；HTTP leave 后 WS 发送返回 `NOT_ROOM_MEMBER`。
 - 画板（D，部署后实测）：A 画 B 实时收到 `canvas_op`（含 `user_id/rev/op`），A 无自回显；B 画 A 收到；`clear` 生效；`canvas_snapshot_save` 收到 `canvas_snapshot_saved{rev,updated_at}`，HTTP canvas 与后进房 `room_joined.canvas_snapshot` 均能恢复已保存笔画；非法 op→`INVALID_CANVAS_OP`、rev 回退→`CANVAS_OUT_OF_ORDER`、超 30 条/秒→`RATE_LIMITED`、HTTP leave 后→`NOT_ROOM_MEMBER`。
+- 房间管理（F，当前 master 实测）：`PATCH /rooms/{ref}` 改名成功；私有房改密码后旧密码失效、新密码可加入；`DELETE /rooms/{ref}` 成功且删除后房间不可访问（返回 409 + `ROOM_NOT_FOUND`）；公开房设置密码返回 `ROOM_PASSWORD_NOT_ALLOWED`（UI 只对私有房展示密码修改）。
+- 个人资料/房间事件（F）：当前部署尚无 `PATCH /api/v1/users/me`（405）与 `/users/me/nickname`、`/users/me/password`（404），`room_updated` 事件未下发；这些等后端 `feat/profile` 合并部署后再联调（客户端 mock 已打通）。
 - 房间对象比 PROTOCOL 多 `visibility/updated_at/closed_at/background` 等字段，客户端忽略未知字段。
 
 ### 6.4 后续里程碑
 
 1. C 聊天、D 画板均已部署并通过真实双账号联调。
-2. 列表分页 UI：C1 只渲染首屏 `items`，后续视需要加分页/滚动加载。
-3. 技能共享（E）`skill_report`/`skill_state` 仍为占位，等 E 协议/通知后实现。
+2. F 客户端已完成并 mock 打通；待后端 `feat/profile` 部署后联调昵称/改密/`room_updated`/`room_deleted`/历史窗口字段。
+3. 列表分页 UI：只渲染首屏 `items`，后续视需要加分页/滚动加载。
+4. 技能共享（E）`skill_report`/`skill_state` 仍为占位，等 E 协议/通知后实现。
 
 ---
 
@@ -226,15 +240,20 @@ python -m unittest discover -s tests -v
 ## 8. 已知限制 / TODO
 
 - 技能共享（E）未实现，房间内技能卡片仅为占位；截屏/识别尚未接入；
+- F 个人资料/房间事件接口等后端 `feat/profile`：当前部署的昵称修改、改密、`room_updated`/`room_deleted` 事件尚未联调，客户端已按约定实现并 mock 通过；
+- 修改密码要求 8–64 位且新旧不同（服务端规则以后端为准）；修改昵称 1–20 字符，成功后立即更新本地展示（含聊天历史中自己的名字），不退出登录；
+- 房主改房名 1–30、私有房密码 4–64；删除房间必须原样输入房间名确认；非房主看不到入口（服务端仍会校验）；
+- 大厅自动刷新仅在大厅可见且窗口有焦点时运行；失败按 5→10→20s 退避；手动刷新会重置退避；
+- 历史窗口提示依赖后端返回 `window_days`/`truncated`（字段名兼容多种写法）；未返回时按普通历史展示；
 - 画板 undo/redo 为**纯本地**（服务端无 undo，队友不会看到撤销，保存快照后才持久化）；`clear` 为全房间生效；
 - 画板快照只在离开房间/关闭应用/切服务器时显式保存（服务端无定时快照），进程崩溃可能丢失未保存增量；快照上限 5000 笔 / 512KB，超限会提示「画布已满」；
-- 房间列表暂无分页/自动定时刷新（提供手动刷新）；只渲染 `items` 首屏；
+- 房间列表暂无分页；只渲染 `items` 首屏；
 - 成员列表以 WS `room_joined` 为准，HTTP 房间详情做兜底（进房一次 + 重连失败时 5s 节流）；
 - 聊天：进房拉最近 50 条，上滚按 `next_before` 续拉（服务端 `items` 新→旧）；发送失败/超时标红，双击重试复用同一 `client_msg_id`；`RATE_LIMITED` 会保留输入内容；
 - 断线重连后自动重新 `join_room`，画板以 `room_joined.canvas_snapshot` 为准（不保留旧增量）；
 - 离开房间/退出登录/关闭窗口会先保存画板快照、再发 WS `leave_room` 与 HTTP leave；
 - 设置页「测试连接」使用当前登录 token 探测 `/health` 与 `/api/v1/rooms?page=1`，未登录时会显示鉴权失效；
-- Mock 后端只用于演示，不模拟限频、多客户端并发与持久化（但包含聊天历史/画板快照，可离线演示）；
+- Mock 后端只用于演示，不模拟限频/多客户端/持久化（但包含昵称、聊天历史、画板快照、房主管理，可离线演示）；
 - 若后端返回的登录响应没有 token，界面会提示并进入“无 JWT 兼容模式”（聊天仅本地回显）。
 
 ---
