@@ -28,11 +28,11 @@
 | 房间内页 | 成员列表（标准行 + 固定 40px 行高/右侧省略，右键菜单；WS `room_joined` + HTTP 房间详情兜底）、聊天、共享画板 |
 | 房主移出（H3） | 成员行右键菜单「移出房间」：仅房主对非房主成员可用，自己/非房主 disabled；二次确认后 `POST /rooms/{ref}/kick`；成功刷新成员并提示，失败按错误码提示；处理 `room_kicked` 定向事件（自己被踢则提示并回大厅），他人被踢走 `user_left(reason=kicked)` |
 | 聊天（C） | 发送 `chat_send`（带 `room_id` / `client_msg_id`）、`chat_message` 广播认领（发送中→已发送、不重复插入）、失败标红双击重试（复用 `client_msg_id`）、进房拉最近 50 条、上滚 `next_before` 续拉 |
-| 画板（D） | 1920×1080 逻辑画布（0–1 归一化坐标）、画笔/橡皮/颜色/粗细、清空、本地撤销/重做；`canvas_op` 增量（≤512 点自动分段、30 条/秒本地节流）、`room_joined.canvas_snapshot` 初始化（缺失/空时 HTTP fallback）、`(user_id,rev)` 丢弃旧包、离开/关窗前 `canvas_snapshot_save` 等 ack、快照上限 5000 笔/512KB |
+| 画板（D/H4） | 内置三角洲地图底图（1105×1260）；画布控件锁定底图宽高比、随可用空间等比缩放并居中（宿主剩余空间留白），控件内底图铺满；坐标 0–1 = 画布像素/画布宽高（图外不绘制）；透明笔画层（橡皮 composition Clear，清空只清笔画）；画笔/橡皮/颜色/粗细/撤销/重做/清空图标工具栏（QPainter 矢量图标、快捷键、当前工具高亮）；`canvas_op` 增量（≤512 点自动分段、30 条/秒本地节流）、`room_joined.canvas_snapshot` 初始化（缺失/空时 HTTP fallback）、`(user_id,rev)` 丢弃旧包、离开/关窗前 `canvas_snapshot_save` 等 ack、快照上限 5000 笔/512KB |
 | 连通性测试 | 设置页「测试连接」：探测 `/health` + `/api/v1/rooms?page=1`，分别报告可达/鉴权失效/超时/网络错误 |
 | 协议对齐 | PROTOCOL C/D 定稿：`data.error_code`、§7.2/§7.3 实名错误码、WS `room_id_or_code`、聊天字段、画板 `rev`/快照语义 |
 | Mock | `--mock` / `DELTA_MOCK=1`：内置内存后端（昵称/聊天历史/画板快照/房主管理/我的房间），可完整离线演示 |
-| 测试 | 250 个 stdlib unittest（含 10 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑 |
+| 测试 | 264 个 stdlib unittest（含 16 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑 |
 
 ---
 
@@ -49,6 +49,7 @@ delta_client/
 │   ├── connection.py        # 连通性测试结果模型（/health + /api/v1/rooms）
 │   ├── chat.py              # 聊天时间线：乐观更新/广播认领/去重/失败重试/历史分页
 │   ├── canvas.py            # 画板逻辑：归一化/op 校验分段/快照上限/撤销重做/限频
+│   ├── canvas_geometry.py   # 底图 letterbox / 图片区域坐标换算（纯逻辑）
 │   ├── room_list.py         # 大厅列表 diff/room_key（自动刷新就地更新）
 │   ├── rooms.py             # 房间号/房间名/可见性/密码校验
 │   ├── models.py            # Room / Member / ChatMessage 与容错解析
@@ -67,14 +68,20 @@ delta_client/
 │   ├── room_list_view.py    # 房间大厅（公共 + 我的房间 tab）
 │   ├── my_rooms_view.py     # 我的房间列表（diff/退出/关闭）
 │   ├── room_view.py         # 房间内页（成员/聊天/画板）
-│   ├── canvas_view.py       # 画板控件（画笔/橡皮/颜色/粗细/清空/撤销重做）
+│   ├── canvas_view.py       # 画板控件（底图/透明层/图标工具栏）
+│   ├── canvas_icons.py      # 画板矢量图标（QPainter）
 │   ├── dialogs.py           # 创建房间 / 加入房间 / 连接设置
 │   ├── async_bridge.py      # asyncio 线程 <-> Qt 主线程桥
 │   └── theme.py             # 深色 + 橙色 QSS 主题
+├── assets/
+│   └── canvas_map.png       # 内置三角洲地图底图（1105×1260，原图，不重采样）
 ├── tests/                   # stdlib unittest（离线）
 ├── requirements.txt
 └── README.md
 ```
+
+> 打包：`assets/canvas_map.png` 需随包分发（PyInstaller `--add-data "assets/canvas_map.png;assets"`），
+> 代码同时兼容 `sys._MEIPASS/assets/`；`DELTA_CANVAS_MAP` 可覆盖底图路径（调试用）。
 
 ---
 
@@ -261,6 +268,7 @@ python -m unittest discover -s tests -v
 - 大厅自动刷新仅在大厅可见且窗口有焦点时运行；失败按 5→10→20s 退避；手动刷新会重置退避；
 - 历史窗口提示依赖后端返回 `window_days`/`truncated`（字段名兼容多种写法）；未返回时按普通历史展示；
 - 画板 undo/redo 为**纯本地**（服务端无 undo，队友不会看到撤销，保存快照后才持久化）；`clear` 为全房间生效；
+- H4 底图为客户端内置资源 `assets/canvas_map.png`（1105×1260，约 2MB），打包需 add-data；画布控件锁定底图宽高比，随宿主可用空间等比缩放居中（宿主外部留白，控件内部底图铺满、不裁切/不留边）；坐标 0–1 以画布控件为基准，不做旧视口坐标迁移（线上无真实数据）；
 - 画板快照只在离开房间/关闭应用/切服务器时显式保存（服务端无定时快照），进程崩溃可能丢失未保存增量；快照上限 5000 笔 / 512KB，超限会提示「画布已满」；
 - 房间列表暂无分页；只渲染 `items` 首屏；
 - 成员列表以 WS `room_joined` 为准，HTTP 房间详情做兜底（进房一次 + 重连失败时 5s 节流）；
