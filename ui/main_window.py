@@ -40,6 +40,7 @@ from core.models import (
     parse_history_window_days,
     parse_members,
 )
+from core.operators import Operator, OperatorCatalog, load_operator_catalog
 from core.protocol import extract_token, extract_user, make_client_msg_id, message_type
 from core.rooms import ValidationError, validate_room_delete_confirmation
 from core.skills import (
@@ -141,6 +142,7 @@ class MainWindow(QMainWindow):
         self._skill_share_enabled = False
         self._skill_sim_index = 0
         self._self_skill_state: SkillState | None = None
+        self.operator_catalog: OperatorCatalog = load_operator_catalog()
         # F-c5：历史窗口文案（room_joined / 历史接口可选字段）
         self._history_window_days: int | None = None
 
@@ -165,6 +167,7 @@ class MainWindow(QMainWindow):
         self.login_view = LoginView()
         self.room_list_view = RoomListView()
         self.room_view = RoomView()
+        self.room_view.skill_panel.set_operator_catalog(self.operator_catalog)
         self.stack.addWidget(self.login_view)
         self.stack.addWidget(self.room_list_view)
         self.stack.addWidget(self.room_view)
@@ -1106,46 +1109,83 @@ class MainWindow(QMainWindow):
         else:
             self.room_view.set_status("已模拟本地技能状态（技能共享未开启，未上报）")
 
+    def _selected_operator(self) -> Operator | None:
+        operator = self.operator_catalog.get(self.config.operator_id)
+        if operator is not None:
+            return operator
+        return next(iter(self.operator_catalog), None)
+
     def _build_simulated_skill(self) -> SkillState:
         self._skill_sim_index = (self._skill_sim_index + 1) % 3
         index = self._skill_sim_index
+        operator = self._selected_operator()
+        if operator is not None:
+            skills: list[dict[str, Any]] = []
+            for slot in (0, 1, 2):
+                meta = operator.skill(slot)
+                if meta is None:
+                    skills.append({"slot": slot, "state": "unknown"})
+                    continue
+                if not meta.cd_known:
+                    # 配置缺 CD：不参与倒计时/上报数值，只报 unknown
+                    skills.append({"slot": slot, "state": "unknown"})
+                    continue
+                if index == 0:
+                    item: dict[str, Any] = {
+                        "slot": slot,
+                        "state": "ready",
+                        "charges": meta.max_charges,
+                        "max_charges": meta.max_charges,
+                        "pct": 100,
+                    }
+                elif index == 1:
+                    item = {
+                        "slot": slot,
+                        "state": "charging",
+                        "remaining_ms": meta.total_cd_ms//2,
+                        "charges": max(0, meta.max_charges - 1),
+                        "max_charges": meta.max_charges,
+                        "pct": 60 if slot == 0 else 40,
+                    }
+                else:
+                    item = {
+                        "slot": slot,
+                        "state": "charging" if slot != 0 else "ready",
+                        "remaining_ms": meta.total_cd_ms//4 if slot != 0 else 0,
+                        "charges": 0 if slot != 0 else meta.max_charges,
+                        "max_charges": meta.max_charges,
+                        "pct": 100 if slot == 0 else 25,
+                    }
+                skills.append(item)
+            return SkillState.from_ws(
+                {
+                    "user_id": self._user_id(),
+                    "nickname": self._username(),
+                    "operator_id": operator.id,
+                    "operator_name": operator.display_name,
+                    "captured_at": self._server_now_ms(),
+                    "skills": skills,
+                }
+            )
+        # 没有干员配置时保留旧的手动模拟数据
         if index == 0:
-            skills = {
-                "ultimate": {"state": "ready", "percent": 100},
-                "ability": {"state": "ready", "charges": 2, "max_charges": 2},
-                "throwable": {"state": "ready", "charges": 1, "max_charges": 1},
-            }
+            skills = [
+                {"slot": 0, "state": "ready", "pct": 100},
+                {"slot": 1, "state": "ready", "charges": 2, "max_charges": 2},
+                {"slot": 2, "state": "ready", "charges": 1, "max_charges": 1},
+            ]
         elif index == 1:
-            skills = {
-                "ultimate": {
-                    "state": "charging",
-                    "percent": 60,
-                    "remaining_ms": 30000,
-                },
-                "ability": {
-                    "state": "charging",
-                    "charges": 1,
-                    "max_charges": 2,
-                    "remaining_ms": 12000,
-                },
-                "throwable": {
-                    "state": "charging",
-                    "charges": 0,
-                    "max_charges": 1,
-                    "remaining_ms": 25000,
-                },
-            }
+            skills = [
+                {"slot": 0, "state": "charging", "pct": 60, "remaining_ms": 30000},
+                {"slot": 1, "state": "charging", "charges": 1, "max_charges": 2, "remaining_ms": 12000},
+                {"slot": 2, "state": "charging", "charges": 0, "max_charges": 1, "remaining_ms": 25000},
+            ]
         else:
-            skills = {
-                "ultimate": {"state": "ready", "percent": 100},
-                "ability": {
-                    "state": "charging",
-                    "charges": 0,
-                    "max_charges": 1,
-                    "remaining_ms": 5000,
-                },
-                "throwable": {"state": "unknown"},
-            }
+            skills = [
+                {"slot": 0, "state": "ready", "pct": 100},
+                {"slot": 1, "state": "charging", "charges": 0, "max_charges": 1, "remaining_ms": 5000},
+                {"slot": 2, "state": "unknown"},
+            ]
         return SkillState.from_ws(
             {
                 "user_id": self._user_id(),
@@ -1193,6 +1233,8 @@ class MainWindow(QMainWindow):
                 room.id or room.code,
                 state.captured_at,
                 payload,
+                state.operator_id,
+                state.operator,
             )
         )
 
@@ -1203,19 +1245,19 @@ class MainWindow(QMainWindow):
         self._safe_submit(self._ws.send_skill_off(room.id or room.code))
 
     @staticmethod
-    def _skill_payload(state: SkillState) -> dict[str, Any]:
-        payload: dict[str, Any] = {}
-        for kind in SLOT_KINDS:
+    def _skill_payload(state: SkillState) -> list[dict[str, Any]]:
+        payload: list[dict[str, Any]] = []
+        for index, kind in enumerate(SLOT_KINDS):
             slot = state.slot(kind)
-            item: dict[str, Any] = {"state": slot.state}
+            item: dict[str, Any] = {"slot": index, "state": slot.state}
             if slot.remaining_ms:
                 item["remaining_ms"] = slot.remaining_ms
-            if kind == "ultimate":
-                item["percent"] = slot.percent
+            if kind == "ultimate" and slot.state != "unknown":
+                item["pct"] = slot.percent
             if slot.max_charges:
                 item["charges"] = slot.charges
                 item["max_charges"] = slot.max_charges
-            payload[kind] = item
+            payload.append(item)
         return payload
 
     # ---------- 聊天 ----------
@@ -1634,11 +1676,25 @@ class MainWindow(QMainWindow):
         self._show_rooms()
 
     # ---------- 设置 ----------
+    def _on_operator_changed(self) -> None:
+        """设置页切换干员后：刷新自己的模拟状态；开启共享时立即按新干员上报。"""
+        self._self_skill_state = None
+        if self._current_room is None:
+            return
+        state = self._build_simulated_skill()
+        self._self_skill_state = state
+        self._skills.update(state)
+        self.room_view.skill_panel.upsert(state)
+        if self._skill_share_enabled:
+            self._send_skill_state(state)
+        else:
+            self.room_view.set_status(f"已切换干员：{state.operator or state.operator_id}")
+
     def _on_settings(self) -> None:
         self._open_settings(start_tab=0)
 
     def _open_settings(self, start_tab: int = 0) -> None:
-        dialog = SettingsDialog(self.config, self)
+        dialog = SettingsDialog(self.config, self, self.operator_catalog)
         dialog.test_requested.connect(
             lambda server_text, ws_text: self._on_test_connection(dialog, server_text, ws_text)
         )
@@ -1656,6 +1712,7 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         new_config = dialog.config_result()
+        old_operator_id = self.config.operator_id
         try:
             saved_path = save_config(new_config)
         except OSError as exc:
@@ -1667,7 +1724,10 @@ class MainWindow(QMainWindow):
             or new_config.ws_url != self.config.ws_url
             or new_config.use_mock != self.config.use_mock
         )
+        operator_changed = new_config.operator_id != old_operator_id
         self.config = new_config
+        if operator_changed:
+            self._on_operator_changed()
         self._refresh_status_bar()
         self.login_view.set_server_text(new_config.server_url, new_config.mode_label)
         self.room_list_view.set_mode(new_config.use_mock, new_config.server_url)

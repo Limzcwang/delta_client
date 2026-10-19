@@ -8,6 +8,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from config import AppConfig, ConfigError, normalize_server_url, normalize_ws_url
 from core.models import Room
+from core.operators import OperatorCatalog, load_operator_catalog
 from state.saved_logins import SavedLoginInfo
 from core.rooms import ValidationError, validate_room_code, validate_room_name, validate_visibility
 from core.rooms import (
@@ -302,10 +304,16 @@ class SettingsDialog(QDialog):
     nickname_save_requested = Signal(str)
     password_change_requested = Signal(str, str)  # (旧密码, 新密码)
 
-    def __init__(self, config: AppConfig, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        parent: QWidget | None = None,
+        catalog: OperatorCatalog | None = None,
+    ) -> None:
         super().__init__(parent)
         self._config = config
         self._result: AppConfig | None = None
+        self._catalog = catalog if catalog is not None else load_operator_catalog()
         self._build()
 
     def _build(self) -> None:
@@ -324,6 +332,7 @@ class SettingsDialog(QDialog):
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_connection_tab(), "连接")
         self.tabs.addTab(self._build_profile_tab(), "个人资料")
+        self.tabs.addTab(self._build_operator_tab(), "干员")
         root.addWidget(self.tabs, stretch=1)
 
         self.error_label = _error_label(root)
@@ -374,6 +383,57 @@ class SettingsDialog(QDialog):
         layout.addWidget(hint)
         layout.addStretch(1)
         return page
+
+    def _build_operator_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(4, 10, 4, 4)
+        layout.setSpacing(8)
+
+        layout.addWidget(QLabel("我的干员（用于技能面板与上报；E3b 识别结果会覆盖）"))
+        self.operator_combo = QComboBox()
+        for operator in self._catalog:
+            self.operator_combo.addItem(operator.display_name, operator.id)
+        current = self._config.operator_id
+        index = self.operator_combo.findData(current) if current else -1
+        if index < 0 and self.operator_combo.count():
+            index = 0
+        if index >= 0:
+            self.operator_combo.setCurrentIndex(index)
+        layout.addWidget(self.operator_combo)
+
+        self.operator_detail_label = QLabel()
+        self.operator_detail_label.setObjectName("Hint")
+        self.operator_detail_label.setWordWrap(True)
+        layout.addWidget(self.operator_detail_label)
+        self.operator_combo.currentIndexChanged.connect(self._refresh_operator_detail)
+        self._refresh_operator_detail()
+
+        hint = QLabel(
+            "干员配置来自 assets/operators.json；无秒数的槽位会显示「CD未知」，不参与倒计时与上报。"
+            "头像模板缺失时使用首字母占位。"
+        )
+        hint.setObjectName("Hint")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        layout.addStretch(1)
+        return page
+
+    def _refresh_operator_detail(self) -> None:
+        operator = self._catalog.get(str(self.operator_combo.currentData() or ""))
+        if operator is None:
+            self.operator_detail_label.setText("未找到干员配置")
+            return
+        lines = [f"{operator.display_name}（{operator.id}）"]
+        for slot in (0, 1, 2):
+            skill = operator.skill(slot)
+            if skill is None:
+                lines.append(f"槽位{slot}：未配置")
+            elif skill.cd_known:
+                lines.append(f"{skill.slot_name}：{skill.name or '-'}，CD {skill.total_cd_ms / 1000:.0f}s")
+            else:
+                lines.append(f"{skill.slot_name}：{skill.name or '-'}，CD未知")
+        self.operator_detail_label.setText("\n".join(lines))
 
     def _build_profile_tab(self) -> QWidget:
         page = QWidget()
@@ -533,6 +593,7 @@ class SettingsDialog(QDialog):
             ws_url=ws_url,
             use_mock=self.mock_check.isChecked(),
             persist_token=self.save_token_check.isChecked(),
+            operator_id=str(self.operator_combo.currentData() or ""),
             source="file",
         )
         super().accept()
