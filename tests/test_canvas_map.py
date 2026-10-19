@@ -153,9 +153,8 @@ class CanvasAspectTests(unittest.TestCase):
 
     def test_toolbar_icon_buttons_and_highlight(self) -> None:
         view = self._view(420, 600)
-        buttons = view.findChildren(QToolButton)
-        self.assertGreaterEqual(len(buttons), 7)
-        for button in buttons:
+        self.assertEqual(6, len(view.tool_buttons))
+        for button in view.tool_buttons:
             self.assertFalse(button.icon().isNull(), f"{button.toolTip()} 缺少图标")
             self.assertGreaterEqual(button.height(), 40)
             self.assertTrue(button.toolTip())
@@ -165,10 +164,7 @@ class CanvasAspectTests(unittest.TestCase):
         view.eraser_button.click()
         self.assertTrue(view.eraser_button.isChecked())
         self.assertFalse(view.pen_button.isChecked())
-        old_width = view.surface.stroke_width
-        view.width_button.click()
-        self.assertNotEqual(old_width, view.surface.stroke_width)
-        self.assertIn(str(view.surface.stroke_width), view.width_button.toolTip())
+        self.assertFalse(hasattr(view, "width_button"))
         self.assertEqual("Ctrl+Z", view.undo_button.shortcut().toString())
 
 

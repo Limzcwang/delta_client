@@ -28,7 +28,7 @@
 | 房间内页 | 成员列表（标准行 + 固定 40px 行高/右侧省略，右键菜单；WS `room_joined` + HTTP 房间详情兜底）、聊天、共享画板 |
 | 房主移出（H3） | 成员行右键菜单「移出房间」：仅房主对非房主成员可用，自己/非房主 disabled；二次确认后 `POST /rooms/{ref}/kick`；成功刷新成员并提示，失败按错误码提示；处理 `room_kicked` 定向事件（自己被踢则提示并回大厅），他人被踢走 `user_left(reason=kicked)` |
 | 聊天（C） | 发送 `chat_send`（带 `room_id` / `client_msg_id`）、`chat_message` 广播认领（发送中→已发送、不重复插入）、失败标红双击重试（复用 `client_msg_id`）、进房拉最近 50 条、上滚 `next_before` 续拉 |
-| 画板（D/H4） | 内置三角洲地图底图（1105×1260）；画布控件锁定底图宽高比、随可用空间等比缩放并居中（宿主剩余空间留白），控件内底图铺满；坐标 0–1 = 画布像素/画布宽高（图外不绘制）；透明笔画层（橡皮 composition Clear，清空只清笔画）；画笔/橡皮/颜色/粗细/撤销/重做/清空图标工具栏（QPainter 矢量图标、快捷键、当前工具高亮）；`canvas_op` 增量（≤512 点自动分段、30 条/秒本地节流）、`room_joined.canvas_snapshot` 初始化（缺失/空时 HTTP fallback）、`(user_id,rev)` 丢弃旧包、离开/关窗前 `canvas_snapshot_save` 等 ack、快照上限 5000 笔/512KB |
+| 画板（D/H4） | 内置三角洲地图底图（1105×1260）；画布控件锁定底图宽高比、随可用空间等比缩放并居中（宿主剩余空间留白），控件内底图铺满；坐标 0–1 = 画布像素/画布宽高（图外不绘制）；透明笔画层（橡皮 composition Clear，清空只清笔画）；画笔/橡皮/颜色/撤销/重做/清空 6 图标工具栏（QPainter 矢量图标、快捷键、当前工具高亮）；画笔圆点/橡皮方块尺寸浮层（3 档，角标提示）；`canvas_op` 增量（≤512 点自动分段、30 条/秒本地节流）、`room_joined.canvas_snapshot` 初始化（缺失/空时 HTTP fallback）、`(user_id,rev)` 丢弃旧包、离开/关窗前 `canvas_snapshot_save` 等 ack、快照上限 5000 笔/512KB |
 | 技能面板（E2） | 房间侧栏「技能」tab：按队友一行，头像首字母/昵称/干员名 + 大招（百分比环）/技能（n/max+CD）/投掷物（n/max+CD）；ready 高亮、charging 每秒倒计时、unknown「?」、30 分钟未更新「未共享」；缓存 `skill_share_state`/`room_joined.skill_states`，`skill_share_removed` 删除；本地时钟偏移用 `auth_ok.server_time` 估算；默认关闭共享，「模拟我的技能」循环状态，开启后 `skill_share_update`（2 次/秒限频），关闭发 `skill_share_off` |
 | 干员配置（E3a） | 读取 `assets/operators.json`（17 干员，slot 0/1/2 = 大招/战术技能/投掷物），面板显示干员名+技能名（hover）；设置页「干员」下拉手动选择并持久化 `operator_id`；`total_cd_ms` 缺失/0 的槽显示「CD未知」、不画环/不倒计时、上报 `state=unknown`；头像 `assets/operators/<id>.png` 存在则加载、缺失用首字母；上报带 `operator_id/operator_name` |
 | 打包（P1/P2） | 版本单一来源 `config.APP_VERSION=0.1.1`（`--version`/设置页显示）；数据目录 `%APPDATA%\DeltaClient\`（config/session/saved_logins/logs，旧 `~/.delta_client.json` 自动迁移并保留 `.bak`）；日志 2MB×3 轮转 + token/password 脱敏；多尺寸 `assets/app.ico`；`delta_client.spec` one-folder/无控制台/无 UPX；`scripts/build_win.ps1` 一键构建便携 ZIP + Inno Setup 安装包 + SHA256SUMS |
@@ -37,7 +37,7 @@
 | 连通性测试 | 设置页「测试连接」：探测 `/health` + `/api/v1/rooms?page=1`，分别报告可达/鉴权失效/超时/网络错误 |
 | 协议对齐 | PROTOCOL C/D 定稿：`data.error_code`、§7.2/§7.3 实名错误码、WS `room_id_or_code`、聊天字段、画板 `rev`/快照语义 |
 | Mock | `--mock` / `DELTA_MOCK=1`：内置内存后端（昵称/聊天历史/画板快照/房主管理/我的房间），可完整离线演示 |
-| 测试 | 359 个 stdlib unittest（含 40 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑；真实 HUD OCR 测试需 requirements-e3.txt 环境 |`r`n
+| 测试 | 367 个 stdlib unittest（含 40 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑；真实 HUD OCR 测试需 requirements-e3.txt 环境 |`r`n
 ---
 
 ## 2. 目录结构
@@ -198,7 +198,7 @@ python -m unittest discover -s tests -v
 
 覆盖：配置加载与优先级、URL 规范化、协议路径/WS 消息、HTTP 错误映射、WS 重连退避、房间号校验（5 位 `[A-Z0-9]`）、房间/成员/消息解析、登录注册校验、token 存取与“不落盘密码”、Mock 后端完整流程。
 
-当前结果：**359 个用例全部通过**（约 1.2s；无 GUI/OCR 依赖时跳过 40 个）。
+当前结果：**367 个用例全部通过**（约 1.2s；无 GUI/OCR 依赖时跳过 40 个）。
 
 ---
 
