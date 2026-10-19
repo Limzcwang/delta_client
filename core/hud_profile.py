@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 DEFAULT_CLIENT_SIZE = (2560, 1440)
-DEFAULT_SKILL_BAR = (1900, 1246, 309, 167)
-DEFAULT_AVATAR_ROI = (38, 1240, 72, 82)
+DEFAULT_SKILL_BAR = (1922, 1262, 252, 84)
+DEFAULT_AVATAR_ROI = (40, 1284, 78, 80)
 DEFAULT_ULT_TOTAL_CD_MS = 90_000
 SLOT_COUNT = 3
 SLOT_MEANING = {0: "大招", 1: "战术技能", 2: "投掷物"}

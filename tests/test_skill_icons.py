@@ -26,6 +26,24 @@ class _EmptyOcr:
 
 
 @unittest.skipUnless(HAS_CV, "opencv/numpy 未安装，跳过图标模板测试")
+class AvatarAutoScanTests(unittest.TestCase):
+    def test_honglang_avatar_in_left_bottom_region(self) -> None:
+        from core.operator_match import recognize_operator_auto
+        from core.operators import load_operator_catalog
+
+        catalog = load_operator_catalog()
+        operator = catalog.get("honglang")
+        avatar = cv2.imread(str(operator.avatar_path()))
+        frame = np.zeros((1440, 2560, 3), dtype=np.uint8)
+        frame[1284 : 1284 + avatar.shape[0], 40 : 40 + avatar.shape[1]] = avatar
+        operator_id, score, box, top3 = recognize_operator_auto(frame, catalog, 0.65)
+        self.assertEqual("honglang", operator_id)
+        self.assertGreaterEqual(score, 0.65)
+        self.assertIsNotNone(box)
+        self.assertEqual("honglang", top3[0]["operator_id"])
+
+
+@unittest.skipUnless(HAS_CV, "opencv/numpy 未安装，跳过图标模板测试")
 class SkillIconRecognitionTests(unittest.TestCase):
     def _operator(self) -> Operator:
         skills = {
@@ -78,7 +96,34 @@ class SkillIconRecognitionTests(unittest.TestCase):
         self.assertIn(ultimate.state, ("ready", "charging", "unknown"))
         self.assertIsInstance(result.slots["ultimate"].remaining_ms, int)
 
+    def test_honglang_templates_and_charge_digit_mask(self) -> None:
+        from core.hud_profile import HudProfile
+        from core.operators import load_operator_catalog
+
+        operator = load_operator_catalog().get("honglang")
+        self.assertIsNotNone(operator)
+        templates = load_skill_icon_templates("honglang")
+        self.assertEqual(3, len(templates))
+        profile = HudProfile()
+        frame = np.zeros((1440, 2560, 3), dtype=np.uint8)
+        for index, roi in enumerate(profile.slot_rois()):
+            frame[roi.y : roi.bottom, roi.x : roi.right] = cv2.resize(
+                templates[index], (roi.width, roi.height)
+            )
+        clean = recognize_frame(frame, profile, operator=operator, ocr=_EmptyOcr())
+        clean_scores = [item.icon_score for item in clean.diagnostics]
+        for score in clean_scores:
+            self.assertGreaterEqual(score, 0.90)
+        dirty = frame.copy()
+        for roi in profile.slot_rois():
+            dirty[roi.y : roi.y + 28, roi.right - 28 : roi.right] = 255
+        masked = recognize_frame(dirty, profile, operator=operator, ocr=_EmptyOcr())
+        for before, after in zip(clean_scores, [item.icon_score for item in masked.diagnostics]):
+            self.assertGreaterEqual(after, 0.90)
+            self.assertLess(abs(before - after), 0.05)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

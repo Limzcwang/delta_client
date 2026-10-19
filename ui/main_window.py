@@ -1298,18 +1298,29 @@ class MainWindow(QMainWindow):
         ):
             return self.operator_catalog.get(self._recognized_operator_id)
         try:
-            from core.hud_profile import HudProfile
-            from core.operator_match import recognize_operator
+            from core.operator_match import recognize_operator_auto
 
-            profile = HudProfile.from_dict(self.config.hud_profile or {})
+            search = None
             if image is not None and getattr(image, "shape", None):
                 height, width = int(image.shape[0]), int(image.shape[1])
-                profile = profile.scaled(width, height)
-            operator_id, score = recognize_operator(
+                search = (
+                    0,
+                    int(height * 1200 / 1440),
+                    int(width * 260 / 2560),
+                    int(height * 240 / 1440),
+                )
+            operator_id, score, _box, top3 = recognize_operator_auto(
                 image,
-                profile.avatar_roi,
                 self.operator_catalog,
                 float(self.config.operator_recognition_threshold),
+                search_region=search or (0, 1200, 260, 240),
+            )
+            logger.info(
+                "干员识别 top3：%s",
+                [
+                    {"id": item["operator_id"], "score": round(item["score"], 3), "box": item["box"]}
+                    for item in top3
+                ],
             )
             self._operator_scan_at = now
         except Exception as exc:  # noqa: BLE001

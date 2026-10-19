@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -11,9 +12,10 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 from core.hud_ocr import HudOcr
 from core.hud_pipeline import RecognitionFrame, recognize_frame
 from core.hud_profile import HudProfile
-from core.operator_match import recognize_operator
+from core.operator_match import recognize_operator_auto
 from core.operators import Operator, OperatorCatalog
 
+logger = logging.getLogger(__name__)
 _OCR_SINGLETON: HudOcr | None = None
 
 
@@ -76,11 +78,25 @@ class _HudTask(QRunnable):
             operator_id = ""
             score = 0.0
             if self.detect_operator:
-                operator_id, score = recognize_operator(
+                height, width = int(self.frame.shape[0]), int(self.frame.shape[1])
+                search = (
+                    0,
+                    int(height * 1200 / 1440),
+                    int(width * 260 / 2560),
+                    int(height * 240 / 1440),
+                )
+                operator_id, score, _box, top3 = recognize_operator_auto(
                     self.frame,
-                    self.profile.avatar_roi,
                     self.catalog,
                     self.threshold,
+                    search_region=search,
+                )
+                logger.info(
+                    "干员识别 top3：%s",
+                    [
+                        {"id": item["operator_id"], "score": round(item["score"], 3), "box": item["box"]}
+                        for item in top3
+                    ],
                 )
                 if operator_id:
                     operator = self.catalog.get(operator_id) or operator

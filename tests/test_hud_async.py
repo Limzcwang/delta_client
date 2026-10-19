@@ -48,7 +48,7 @@ class HudAsyncTests(unittest.TestCase):
             time.sleep(0.2)
             return SimpleNamespace(payload=lambda: [])
 
-        with mock.patch("ui.hud_async.recognize_operator", return_value=("", 0.0)), mock.patch(
+        with mock.patch("ui.hud_async.recognize_operator_auto", return_value=("", 0.0, None, [])), mock.patch(
             "ui.hud_async.recognize_frame", side_effect=slow_recognize
         ):
             started = time.monotonic()
@@ -66,7 +66,7 @@ class HudAsyncTests(unittest.TestCase):
     def test_second_submit_ignored_while_busy(self) -> None:
         service = HudRecognitionService()
         results = []
-        with mock.patch("ui.hud_async.recognize_operator", return_value=("", 0.0)), mock.patch(
+        with mock.patch("ui.hud_async.recognize_operator_auto", return_value=("", 0.0, None, [])), mock.patch(
             "ui.hud_async.recognize_frame", side_effect=lambda *a, **k: (time.sleep(0.2), SimpleNamespace(payload=lambda: []))[1]
         ):
             first = service.submit(object(), HudProfile(), None, OperatorCatalog(), 0.7, detect_operator=False, callback=results.append)
@@ -79,7 +79,7 @@ class HudAsyncTests(unittest.TestCase):
     def test_cancel_drops_late_result(self) -> None:
         service = HudRecognitionService()
         results = []
-        with mock.patch("ui.hud_async.recognize_operator", return_value=("", 0.0)), mock.patch(
+        with mock.patch("ui.hud_async.recognize_operator_auto", return_value=("", 0.0, None, [])), mock.patch(
             "ui.hud_async.recognize_frame", side_effect=lambda *a, **k: (time.sleep(0.2), SimpleNamespace(payload=lambda: []))[1]
         ):
             service.submit(object(), HudProfile(), None, OperatorCatalog(), 0.7, detect_operator=False, callback=results.append)
@@ -111,4 +111,5 @@ class HudAsyncTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 

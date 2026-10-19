@@ -256,7 +256,7 @@ def recognize_frame(
     """识别一帧；有图标模板时图标优先，否则回退 OCR 规则。"""
     ocr = ocr or HudOcr()
     templates = load_skill_icon_templates(operator.id) if operator is not None else {}
-    if templates and len(templates) == 3:
+    if templates and len(templates) == 3 and hasattr(frame, "shape") and len(getattr(frame, "shape", ())) >= 2:
         return _recognize_frame_icons(frame, profile, operator, ocr, templates)
     rois = profile.slot_rois()
     result = RecognitionFrame(operator_id=operator.id if operator else "", operator_name=operator.display_name if operator else "")

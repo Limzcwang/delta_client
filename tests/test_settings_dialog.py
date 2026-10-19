@@ -65,7 +65,7 @@ class SettingsOperatorTests(unittest.TestCase):
         self.assertIsNotNone(dialog.calibration_button)
         self.assertIsNotNone(dialog.detect_window_button)
         self.assertTrue(dialog.auto_operator_check.isChecked())
-        self.assertAlmostEqual(0.70, dialog.operator_threshold_spin.value())
+        self.assertAlmostEqual(0.65, dialog.operator_threshold_spin.value())
         self.assertFalse(dialog.hud_debug_check.isChecked())
         self.assertIn("skill_bar", dialog.hud_profile_label.text())
         self.assertIn("avatar_roi", dialog.hud_profile_label.text())
@@ -174,6 +174,7 @@ class SettingsOperatorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 
 
 

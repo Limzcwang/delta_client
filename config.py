@@ -144,7 +144,7 @@ class AppConfig:
     capture_window_process: str = "DeltaForceClient-Win64-Shipping"
     capture_window_title: str = ""
     auto_operator_enabled: bool = True
-    operator_recognition_threshold: float = 0.70
+    operator_recognition_threshold: float = 0.65
     hud_debug_export: bool = False
     request_timeout: float = DEFAULT_TIMEOUT
     source: str = "default"
@@ -323,10 +323,10 @@ def load_config(
     hud_debug_export = parse_bool(file_data.get("hud_debug_export"), False)
     try:
         operator_recognition_threshold = min(
-            0.95, max(0.5, float(file_data.get("operator_recognition_threshold", 0.70)))
+            0.95, max(0.5, float(file_data.get("operator_recognition_threshold", 0.65)))
         )
     except (TypeError, ValueError):
-        operator_recognition_threshold = 0.70
+        operator_recognition_threshold = 0.65
 
     timeout = DEFAULT_TIMEOUT
     raw_timeout = file_data.get("request_timeout")
