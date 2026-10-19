@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QWidget
 
 from core.operators import OperatorCatalog
 from core.skills import SLOT_ABILITY, SLOT_THROWABLE, SLOT_ULTIMATE, SkillState, format_countdown
+from state.crash_logging import set_current_step
 
 logger = logging.getLogger(__name__)
 
@@ -282,8 +283,12 @@ class OverlayController:
         self.overlay.move(max(rect[0], x), max(rect[1], y))
         self.overlay.show()
         if not self.overlay.edit_mode:
+            if not self.attached:
+                set_current_step("overlay_attach")
             _apply_win32_topmost(self.overlay)
             self.overlay.raise_()
+            if not self.attached:
+                set_current_step("running")
         self.attached = True
         self.last_reason = "已附加"
 

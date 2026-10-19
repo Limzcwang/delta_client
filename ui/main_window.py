@@ -60,6 +60,7 @@ from net.api_client import ApiClient, LoginResult
 from net.mock_backend import MockApiClient, MockWsClient
 from net.ws_client import WsClient
 from state.session import Session, default_session_path
+from state.crash_logging import set_current_step
 from state.saved_logins import SavedLoginInfo, SavedLogins
 from ui.async_bridge import AsyncBridge
 from ui.dialogs import (
@@ -1134,34 +1135,41 @@ class MainWindow(QMainWindow):
     # ---------- 干员配置中心 ----------
     def _refresh_operator_config(self, silent: bool = True, dialog=None) -> None:
         manager = self.operator_config
+        set_current_step("config_refresh")
 
         def success(response) -> None:
-            status = int(getattr(response, "status", 0))
-            message = ""
-            if status == 304:
-                message = "已是最新"
-            elif status == 200:
-                if manager.apply_server_payload(response.payload, getattr(response, "etag", "")):
-                    message = f"已更新到版本 {manager.state.version}"
+            try:
+                status = int(getattr(response, "status", 0))
+                message = ""
+                if status == 304:
+                    message = "已是最新"
+                elif status == 200:
+                    if manager.apply_server_payload(response.payload, getattr(response, "etag", "")):
+                        message = f"已更新到版本 {manager.state.version}"
+                    else:
+                        message = "服务器配置异常，已保留本地配置"
                 else:
-                    message = "服务器配置异常，已保留本地配置"
-            else:
-                message = f"服务器返回异常状态 {status}"
-            self._apply_operator_catalog()
-            if dialog is not None:
-                dialog.refresh_operator_catalog(manager.catalog)
-                dialog.refresh_operator_config_info(manager)
-                dialog.set_config_check_result(message, ok=(status in (200, 304)))
-            if status == 200 and not silent:
-                self.room_view.set_status(message)
+                    message = f"服务器返回异常状态 {status}"
+                self._apply_operator_catalog()
+                if dialog is not None:
+                    dialog.refresh_operator_catalog(manager.catalog)
+                    dialog.refresh_operator_config_info(manager)
+                    dialog.set_config_check_result(message, ok=(status in (200, 304)))
+                if status == 200 and not silent:
+                    self.room_view.set_status(message)
+            finally:
+                set_current_step("running")
 
         def error(exc: BaseException) -> None:
-            message = "网络失败，请稍后"
-            if dialog is not None:
-                dialog.set_config_check_result(message, ok=False)
-            if not silent:
-                self.room_view.set_status(message, error=True)
-            logger.debug("干员配置更新失败：%s", exc)
+            try:
+                message = "网络失败，请稍后"
+                if dialog is not None:
+                    dialog.set_config_check_result(message, ok=False)
+                if not silent:
+                    self.room_view.set_status(message, error=True)
+                logger.debug("干员配置更新失败：%s", exc)
+            finally:
+                set_current_step("running")
 
         try:
             coro = self.api.get_operator_config(manager.state.etag)
@@ -1195,11 +1203,15 @@ class MainWindow(QMainWindow):
         from core.hud_pipeline import recognize_frame
         from core.hud_profile import HudProfile
 
-        self._recognize_operator_frame(frame.image)
-        profile = HudProfile.from_dict(self.config.hud_profile or {})
-        if frame.width and frame.height:
-            profile = profile.scaled(frame.width, frame.height)
-        return recognize_frame(frame.image, profile, operator=self._selected_operator())
+        set_current_step("auto_capture")
+        try:
+            self._recognize_operator_frame(frame.image)
+            profile = HudProfile.from_dict(self.config.hud_profile or {})
+            if frame.width and frame.height:
+                profile = profile.scaled(frame.width, frame.height)
+            return recognize_frame(frame.image, profile, operator=self._selected_operator())
+        finally:
+            set_current_step("running")
 
     def _apply_auto_config(self) -> None:
         enabled = bool(self.config.auto_capture_enabled and self.config.auto_loop_enabled)
@@ -1567,6 +1579,7 @@ class MainWindow(QMainWindow):
         """E3b：一次性抓取游戏窗口 + 识别技能栏，更新自己的状态/上报。"""
         if self._current_room is None:
             return
+        set_current_step("hud_capture")
         try:
             from capture.sources import open_source
             from core.hud_pipeline import recognize_frame, to_skill_state
@@ -1616,6 +1629,8 @@ class MainWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001
             logger.warning("HUD 识别失败", exc_info=True)
             self.room_view.set_status(f"HUD 识别失败：{exc}", error=True)
+        finally:
+            set_current_step("running")
 
     def _on_skill_sharing_toggled(self, enabled: bool) -> None:
         self._skill_share_enabled = bool(enabled)
@@ -2180,11 +2195,13 @@ class MainWindow(QMainWindow):
             self._current_room = None
             self._clear_room_state()
             self.session.clear()
+            self._close_api()
             self.api = self._build_api()
             self._show_login()
             self.login_view.show_success(f"配置已保存到 {saved_path}，请重新登录")
             return
 
+        self._close_api()
         self.api = self._build_api()
         if self.stack.currentWidget() is self.room_view:
             self._on_leave_room()
@@ -2332,12 +2349,24 @@ class MainWindow(QMainWindow):
             )
             # 等待「画板快照保存 → WS leave → 关闭」完成，避免未保存增量丢失
             self._wait_future(shutdown, 3000)
-            self._safe_submit(self.api.close())
+            self._close_api()
             self._current_room = None
             self._clear_room_state()
         finally:
             self.bridge.stop()
             super().closeEvent(event)
+
+    def _close_api(self, timeout: float = 2.0) -> None:
+        """关闭 aiohttp ClientSession，避免 Unclosed client session 泄漏。"""
+        api = getattr(self, "api", None)
+        if api is None:
+            return
+        try:
+            future = self._safe_submit(api.close())
+            if future is not None:
+                future.result(timeout=timeout)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("关闭 HTTP 连接池失败：%s", exc)
 
 
 async def _run_connection_check(server_url: str, token: str | None, timeout: float = 8.0) -> Any:

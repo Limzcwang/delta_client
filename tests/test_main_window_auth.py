@@ -36,6 +36,28 @@ class WsFatalSessionTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
 
+    def test_close_api_closes_http_session(self) -> None:
+        class FakeApi:
+            def __init__(self):
+                self.closed = False
+
+            async def close(self):
+                self.closed = True
+
+        config = AppConfig(use_mock=True, persist_token=False, server_migrated=False)
+        session = Session(persist_token=False)
+        window = MainWindow(config, session)
+        try:
+            fake = FakeApi()
+            window.api = fake
+            window._close_api()
+            self.assertTrue(fake.closed)
+        finally:
+            window.bridge.stop()
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
     def test_auth_failure_clears_session_and_returns_login(self) -> None:
         config = AppConfig(use_mock=True, persist_token=False, server_migrated=False)
         session = Session(persist_token=False)

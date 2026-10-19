@@ -131,6 +131,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.check:
         return _check_dependencies(config)
 
+    from state.crash_logging import (
+        clear_current_step,
+        crash_log_path,
+        install_crash_logging,
+        install_qt_message_handler,
+        read_previous_step,
+        set_current_step,
+        shutdown_crash_logging,
+    )
+
+    previous_crash = read_previous_step()
+    install_crash_logging(APP_VERSION)
+    install_qt_message_handler()
+
     if sys.platform == "win32":
         try:
             from capture.window import ensure_dpi_aware
@@ -143,6 +157,7 @@ def main(argv: list[str] | None = None) -> int:
         from PySide6.QtGui import QIcon
         from PySide6.QtWidgets import QApplication, QMessageBox
     except ImportError:
+        shutdown_crash_logging()
         print("缺少 PySide6，无法启动图形界面。", file=sys.stderr)
         print("请执行：python -m pip install -r requirements.txt", file=sys.stderr)
         print("若只想查看配置，可运行：python main.py --print-config", file=sys.stderr)
@@ -160,6 +175,7 @@ def main(argv: list[str] | None = None) -> int:
     lock = SingleInstance("DeltaClient")
     if not lock.acquire():
         lock.activate_existing()
+        shutdown_crash_logging()
         QMessageBox.information(None, "Delta Client", "Delta Client 已在运行")
         return 1
     app.setApplicationName("Delta Client")
@@ -171,7 +187,18 @@ def main(argv: list[str] | None = None) -> int:
     apply_theme(app)
     window = MainWindow(config, session)
     window.show()
-    return int(app.exec())
+    if previous_crash:
+        try:
+            from ui.crash_notice import show_previous_crash_notice
+
+            show_previous_crash_notice(window, previous_crash, crash_log_path())
+        except Exception:  # noqa: BLE001
+            pass
+    clear_current_step()
+    set_current_step("running")
+    exit_code = int(app.exec())
+    shutdown_crash_logging()
+    return exit_code
 
 
 if __name__ == "__main__":

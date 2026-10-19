@@ -672,6 +672,9 @@ class SettingsDialog(QDialog):
             self.capture_stats_label.setText(f"帧尺寸/均值：-；最后错误：{exc}")
 
     def _open_calibration(self) -> None:
+        from state.crash_logging import set_current_step
+
+        set_current_step("calibration")
         try:
             from capture.sources import open_source
             from core.hud_profile import HudProfile
@@ -714,6 +717,8 @@ class SettingsDialog(QDialog):
                     return
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "HUD 标定失败", str(exc))
+        finally:
+            set_current_step("running")
 
     def _build_overlay_tab(self) -> QWidget:
         page = QWidget()
