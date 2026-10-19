@@ -195,14 +195,14 @@ python -m unittest discover -s tests -v
 - 断线重连：同账号新连接顶号后，客户端自动重连 → 重新 auth → 重新 `join_room` 成功。
 - 离开：WS `leave_room`（填 code 或内部 id 均可）会广播 `user_left(reason=left)`；B2b 当前直接断连不广播，PR#9 起断连会清理并广播 `reason=disconnected`（客户端已按 `left/disconnected/kicked/replaced` 展示原因）。
 - 连通性自检：真实后端 `/health` 与 `/api/v1/rooms?page=1` 均通过，设置页「测试连接」可区分可达/鉴权失效/超时/网络错误。
-- 聊天（C）：客户端按 C 定稿实现（乐观更新、广播认领、历史分页、失败重试），mock + 单测已打通；真实双账号联调待 C 部署完成后执行（本机检查部署 OpenAPI 时仍为 B2b）。
+- 聊天（C，部署后实测）：双账号 `dsh_test`/`dsh_test2` 收发（A 发 A/B 都收到、B 发 A 收到）；`chat_message` 字段 `id/room_id/user/content/client_msg_id/created_at` 正确，`client_msg_id` 原样回传；历史分页 4 页 7 条无重复、顺序新→旧；5 条/秒限频第 6 条返回 `RATE_LIMITED`；2001 字返回 `INVALID_MESSAGE`；HTTP leave 后 WS 发送返回 `NOT_ROOM_MEMBER`。
 - 房间对象比 PROTOCOL 多 `visibility/updated_at/closed_at/background` 等字段，客户端忽略未知字段。
 
-### 6.4 后续里程碑 / 待部署
+### 6.4 后续里程碑
 
-1. C 聊天代码已合并（bebb15e）但部署尚需确认：部署前 `/api/v1/rooms/{ref}/messages` 返回 404、`chat_send` 仍为 B2b 行为；客户端实现已就绪，部署后按双账号清单复验。
+1. C 聊天已部署并通过真实双账号联调（收发/历史分页/限频/非法消息/成员校验）。
 2. 列表分页 UI：C1 只渲染首屏 `items`，后续视需要加分页/滚动加载。
-3. 画板（D）`canvas_*` 与技能（E）`skill_*` 本轮仅占位。
+3. 画板（D）`canvas_*` 与技能（E）`skill_*` 本轮仅占位，等 D 协议/通知后实现。
 
 ---
 
