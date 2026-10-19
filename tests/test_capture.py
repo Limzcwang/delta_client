@@ -7,7 +7,13 @@ import time
 import unittest
 from dataclasses import dataclass
 
-from capture.sources import CaptureWorker, Frame, open_source
+from capture.sources import (
+    CaptureWorker,
+    Frame,
+    MssSource,
+    open_source,
+    validate_frame,
+)
 from capture.window import (
     WindowCandidate,
     find_game_window,
@@ -33,6 +39,87 @@ class _FakeSource:
 
     def close(self) -> None:
         self.closed = True
+
+
+try:
+    import numpy as _np  # noqa: F401
+
+    HAS_NUMPY = True
+except Exception:  # noqa: BLE001
+    HAS_NUMPY = False
+
+
+class _FakeImage:
+    def __init__(self, shape, mean):
+        self.shape = shape
+        self._mean = mean
+
+    def mean(self):
+        return self._mean
+
+
+class CaptureValidationTests(unittest.TestCase):
+    def test_black_empty_and_normal_frames(self) -> None:
+        black = _FakeImage((600, 800, 3), 0.0)
+        valid, reason, stats = validate_frame(black, "mss")
+        self.assertFalse(valid)
+        self.assertIn("全黑", reason)
+        self.assertEqual(800, stats.width)
+
+        empty = _FakeImage((0, 0, 3), 0.0)
+        valid, reason, _stats = validate_frame(empty, "mss")
+        self.assertFalse(valid)
+        self.assertIn("尺寸", reason)
+
+        normal = _FakeImage((600, 800, 3), 45.0)
+        valid, reason, stats = validate_frame(normal, "mss")
+        self.assertTrue(valid, reason)
+        self.assertEqual((800, 600), (stats.width, stats.height))
+        self.assertAlmostEqual(45.0, stats.mean, places=1)
+
+    def _source_with_shot(self, shot) -> MssSource:
+        class FakeSct:
+            monitors = [{"left": 0, "top": 0, "width": 2560, "height": 1440}]
+
+            def grab(self, region):
+                if isinstance(shot, Exception):
+                    raise shot
+                return shot
+
+            def close(self):
+                return None
+
+        class FakeWindow:
+            is_minimized = False
+            client_left = 0
+            client_top = 0
+            client_width = 2560
+            client_height = 1440
+
+        source = MssSource(FakeWindow())
+        source._mss = object()
+        source._sct = FakeSct()
+        return source
+
+    @unittest.skipUnless(HAS_NUMPY, "numpy 未安装，跳过 mss 帧测试")
+    def test_mss_black_frame_returns_reason(self) -> None:
+        source = self._source_with_shot(_np.zeros((1440, 2560, 3), dtype=_np.uint8))
+        self.assertIsNone(source.grab())
+        self.assertIn("全黑", source.last_error)
+
+    @unittest.skipUnless(HAS_NUMPY, "numpy 未安装，跳过 mss 帧测试")
+    def test_mss_exception_is_logged_reason(self) -> None:
+        source = self._source_with_shot(RuntimeError("boom"))
+        self.assertIsNone(source.grab())
+        self.assertIn("RuntimeError", source.last_error)
+        self.assertIn("boom", source.last_error)
+
+    @unittest.skipUnless(HAS_NUMPY, "numpy 未安装，跳过 mss 帧测试")
+    def test_mss_normal_frame(self) -> None:
+        source = self._source_with_shot(_np.full((1440, 2560, 3), 45, dtype=_np.uint8))
+        frame = source.grab()
+        self.assertIsNotNone(frame)
+        self.assertEqual((2560, 1440), (frame.width, frame.height))
 
 
 class CaptureTests(unittest.TestCase):

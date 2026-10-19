@@ -55,7 +55,7 @@ from core.skills import (
     parse_room_joined_skill_states,
     parse_skill_state_list,
 )
-from core.skill_payload import build_payload_from_state, clean_captured_at, validate_payload
+from core.skill_payload import build_payload_from_state, clean_captured_at, repair_payload, validate_payload
 from net.api_client import ApiClient, LoginResult
 from net.mock_backend import MockApiClient, MockWsClient
 from net.ws_client import WsClient
@@ -1460,9 +1460,14 @@ class MainWindow(QMainWindow):
             try:
                 frame = source.grab()
             finally:
+                last_error = str(getattr(source, "last_error", "") or "")
                 source.close()
             if frame is None:
-                self.room_view.set_status("HUD 识别失败：未取到游戏画面（最小化/遮挡？）", error=True)
+                reason = last_error or "未取到游戏画面（最小化/遮挡？）"
+                if "全黑" in reason:
+                    reason += "；如为独占全屏请切换无边框窗口模式"
+                self.room_view.set_status(f"HUD 识别失败：{reason}", error=True)
+                logger.warning("HUD 抓帧失败：%s", reason)
                 return
             profile = HudProfile.from_dict(self.config.hud_profile or {})
             operator = self._selected_operator()
@@ -1524,7 +1529,7 @@ class MainWindow(QMainWindow):
         self._skills.update(state)
         self.room_view.skill_panel.upsert(state)
         self._sync_overlay_states()
-        payload = build_payload_from_state(state)
+        payload = repair_payload(build_payload_from_state(state))
         valid, reason = validate_payload(payload)
         if not valid:
             logger.warning("技能 payload 自检失败，已取消发送：%s", reason)

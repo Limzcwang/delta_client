@@ -44,6 +44,23 @@ _kernel32.QueryFullProcessImageNameW.argtypes = (
 )
 
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_DPI_READY = False
+
+
+def ensure_dpi_aware() -> None:
+    """让 GetClientRect 与 mss 截图都使用物理像素，避免 DPI 缩放错位。"""
+    global _DPI_READY
+    if _DPI_READY:
+        return
+    try:
+        # PER_MONITOR_AWARE_V2；已设置过会失败，忽略即可
+        _user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+    except Exception:  # noqa: BLE001
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception:  # noqa: BLE001
+            pass
+    _DPI_READY = True
 
 
 def normalize_process_name(name: str) -> str:

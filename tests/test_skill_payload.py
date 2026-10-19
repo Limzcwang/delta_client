@@ -11,6 +11,7 @@ from core.skill_payload import (
     clean_captured_at,
     clean_pct,
     clean_remaining,
+    repair_payload,
     sanitize_slot,
     validate_payload,
 )
@@ -65,6 +66,31 @@ class CleaningTests(unittest.TestCase):
         self.assertEqual("unknown", payload[1]["state"])
         self.assertEqual("unknown", payload[2]["state"])
 
+    def test_max_charges_clamped_and_missing_unknown(self) -> None:
+        state = make_state(
+            ability=SkillSlot(SLOT_ABILITY, "charging", 5_000, charges=20, max_charges=20),
+            throwable=SkillSlot(SLOT_THROWABLE, "ready", 0, charges=0, max_charges=0),
+        )
+        payload = build_payload_from_state(state)
+        self.assertEqual(9, payload[1]["max_charges"])
+        self.assertEqual(9, payload[1]["charges"])
+        self.assertEqual("unknown", payload[2]["state"])
+        self.assertNotIn("max_charges", payload[2])
+
+    def test_repair_only_demotes_invalid_slots(self) -> None:
+        good = build_payload_from_state(make_state())
+        broken = [
+            good[0],
+            {**good[1], "max_charges": 0},
+            {**good[2], "max_charges": 99},
+        ]
+        repaired = repair_payload(broken)
+        self.assertEqual("charging", repaired[0]["state"])
+        self.assertEqual("unknown", repaired[1]["state"])
+        self.assertEqual("unknown", repaired[2]["state"])
+        valid, reason = validate_payload(repaired)
+        self.assertTrue(valid, reason)
+
     def test_captured_at_must_be_integer_ms(self) -> None:
         self.assertEqual(1_700_000_000_000, clean_captured_at(1_700_000_000_000.0))
         self.assertEqual(123, clean_captured_at("123"))
@@ -100,6 +126,10 @@ class ValidationTests(unittest.TestCase):
             ([{**good[0], "pct": 150}, good[1], good[2]], "pct"),
             ([{**good[0], "remaining_ms": -1}, good[1], good[2]], "remaining_ms"),
             ([{**good[0], "state": "wat"}, good[1], good[2]], "state"),
+            ([good[0], {**good[1], "max_charges": 0}, good[2]], "max_charges"),
+            ([good[0], {**good[1], "max_charges": 10}, good[2]], "max_charges"),
+            ([good[0], {**good[1], "charges": 4}, good[2]], "charges"),
+            ([good[0], good[1], {**good[2], "max_charges": None}], "max_charges"),
         ]
         for payload, fragment in cases:
             valid, reason = validate_payload(payload)
