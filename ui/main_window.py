@@ -55,7 +55,7 @@ from core.skills import (
     parse_room_joined_skill_states,
     parse_skill_state_list,
 )
-from core.skill_payload import build_payload_from_state, clean_captured_at, repair_payload, validate_payload
+from core.skill_payload import clean_captured_at, serialize_skill_state, validate_payload
 from net.api_client import ApiClient, LoginResult
 from net.mock_backend import MockApiClient, MockWsClient
 from net.ws_client import WsClient
@@ -1529,10 +1529,10 @@ class MainWindow(QMainWindow):
         self._skills.update(state)
         self.room_view.skill_panel.upsert(state)
         self._sync_overlay_states()
-        payload = repair_payload(build_payload_from_state(state))
+        payload = serialize_skill_state(state)
         valid, reason = validate_payload(payload)
         if not valid:
-            logger.warning("技能 payload 自检失败，已取消发送：%s", reason)
+            logger.warning("技能 payload 自检失败，已降级后取消发送：%s", reason)
             self.room_view.set_status(f"技能上报已取消：{reason}", error=True)
             return
         self._safe_submit(

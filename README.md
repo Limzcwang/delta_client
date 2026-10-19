@@ -40,7 +40,7 @@
 | 连通性测试 | 设置页「测试连接」：探测 `/health` + `/api/v1/rooms?page=1`，分别报告可达/鉴权失效/超时/网络错误 |
 | 协议对齐 | PROTOCOL C/D 定稿：`data.error_code`、§7.2/§7.3 实名错误码、WS `room_id_or_code`、聊天字段、画板 `rev`/快照语义 |
 | Mock | `--mock` / `DELTA_MOCK=1`：内置内存后端（昵称/聊天历史/画板快照/房主管理/我的房间），可完整离线演示 |
-| 测试 | 405 个 stdlib unittest（含 40 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑；真实 HUD OCR 测试需 requirements-e3.txt 环境 |
+| 测试 | 408 个 stdlib unittest（含 40 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑；真实 HUD OCR 测试需 requirements-e3.txt 环境 |
 ---
 
 ## 2. 目录结构
@@ -201,7 +201,7 @@ python -m unittest discover -s tests -v
 
 覆盖：配置加载与优先级、URL 规范化、协议路径/WS 消息、HTTP 错误映射、WS 重连退避、房间号校验（5 位 `[A-Z0-9]`）、房间/成员/消息解析、登录注册校验、token 存取与“不落盘密码”、Mock 后端完整流程。
 
-当前结果：**405 个用例全部通过**（约 1.2s；无 GUI/OCR 依赖时跳过 40 个）。
+当前结果：**408 个用例全部通过**（约 1.2s；无 GUI/OCR 依赖时跳过 40 个）。
 
 ---
 
@@ -234,7 +234,7 @@ python -m unittest discover -s tests -v
 | 移出成员（H3） | `POST /api/v1/rooms/{room_id_or_code}/kick` | body `{"user_id": <成员id>}`；房主专用，错误码 `NOT_ROOM_OWNER`/`MEMBER_NOT_FOUND`/`CANNOT_KICK_OWNER`；成功响应含最新 `members` |
 | 被踢事件（H3） | WS `room_kicked` | `{room_id, room_code, by:{id,nickname}, reason:"kicked"}`；当前房间被踢时提示、清空房间状态并回大厅 |
 | 技能状态（E2/E2b） | WS `skill_share_state` / `room_joined.skill_states`：顶层 `server_received_at`，每槽 `ready_at` 绝对服务器毫秒；接收端优先 `ready_at - server_now_est` 倒计时（≤0 就绪），缺失时回退旧 remaining+captured_at 公式 || 技能移除（E2） | WS `skill_share_removed` | `{user_id}`；从面板移除该队友 |
-| 服务器时钟（E2b） | `auth_ok.server_time` + pong RTT/2 估计 offset（EMA α=0.2）；本地 tick 用 `time.monotonic()`，系统时间跳变不影响 || 技能上报（max_charges 1–9，单槽非法降级 unknown）（E2/E3a） | WS `skill_share_update` / `skill_share_off` | `{room_id,captured_at,skills:[{slot,state,remaining_ms,charges,max_charges,pct}],operator_id,operator_name}` / `{room_id}`；默认关闭，开启后 2 次/秒本地节流，关闭时发 off；未知 CD 槽 `state=unknown` |
+| 服务器时钟（E2b） | `auth_ok.server_time` + pong RTT/2 估计 offset（EMA α=0.2）；本地 tick 用 `time.monotonic()`，系统时间跳变不影响 || 技能上报统一 serialize_skill_state（所有槽 remaining_ms 必为 0–600000 int；max_charges 1–9；单槽非法降级 unknown）（E2/E3a） | WS `skill_share_update` / `skill_share_off` | `{room_id,captured_at,skills:[{slot,state,remaining_ms,charges,max_charges,pct}],operator_id,operator_name}` / `{room_id}`；默认关闭，开启后 2 次/秒本地节流，关闭时发 off；未知 CD 槽 `state=unknown` |
 | 修改昵称（F） | `PATCH /api/v1/users/me` | body `{"nickname": "新昵称"}`；响应 `{"user": {...}}`；成功后本地立即更新展示、保持登录 |
 | 修改密码（F） | `POST /api/v1/users/me/password` | body `{"old_password","new_password"}`；旧密码错 `WRONG_OLD_PASSWORD`、新密码不合规 `INVALID_NEW_PASSWORD`（8–32，前端先校验）；成功后 token 继续有效 |
 | 心跳 | WS `ping` / 服务端 `heartbeat` | 服务端每 30s 下发；客户端 25s ping，90s 无消息判定失联 |
