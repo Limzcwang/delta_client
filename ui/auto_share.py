@@ -20,16 +20,22 @@ class AutoShareController(QObject):
     payload_ready = Signal(object)  # list[dict]
     status_changed = Signal(str)
     capture_failed = Signal(str)
+    operator_detected = Signal(str, float)
 
     def __init__(
         self,
         frame_source_factory: Callable[[], tuple[Any, str]],
         recognizer: Callable[[Any], RecognitionFrame],
         parent: QObject | None = None,
+        *,
+        hud_service: Any = None,
+        context_provider: Callable[[Any], dict[str, Any]] | None = None,
     ) -> None:
         super().__init__(parent)
         self._factory = frame_source_factory
         self._recognizer = recognizer
+        self._hud_service = hud_service
+        self._context_provider = context_provider
         self._source = None
         self._tracker = ChangeTracker()
         self._timer = QTimer(self)
@@ -122,6 +128,23 @@ class AutoShareController(QObject):
             self._close_source()
             return
         self.frames += 1
+        if self._hud_service is not None:
+            if self._hud_service.active:
+                self.status_changed.emit("识别中…")
+                return
+            context = self._context_provider(frame) if self._context_provider else {}
+            accepted = self._hud_service.submit(
+                frame.image,
+                context["profile"],
+                context.get("operator"),
+                context["catalog"],
+                context["threshold"],
+                detect_operator=bool(context.get("detect_operator", True)),
+                callback=self._on_async_result,
+            )
+            if not accepted:
+                self.status_changed.emit("识别中…")
+            return
         try:
             recognized = self._recognizer(frame)
             if hasattr(recognized, "payload"):
@@ -132,6 +155,24 @@ class AutoShareController(QObject):
             self.capture_failed.emit(str(exc))
             self.status_changed.emit(f"识别失败：{exc}")
             return
+        self._emit_payload(payload)
+
+    def _on_async_result(self, result: Any) -> None:
+        if not (self._enabled and self._sharing and self._room_active):
+            return
+        if getattr(result, "error", ""):
+            self.capture_failed.emit(result.error)
+            self.status_changed.emit(f"识别失败：{result.error}")
+            return
+        if result.operator_id:
+            self.operator_detected.emit(result.operator_id, float(result.operator_score))
+        recognized = result.recognized
+        if recognized is None:
+            self.capture_failed.emit("识别无结果")
+            return
+        self._emit_payload(recognized.payload())
+
+    def _emit_payload(self, payload: list[dict[str, Any]]) -> None:
         now = time.monotonic() * 1000
         if self._tracker.should_emit(payload, now):
             self._tracker.mark_sent(payload, now)

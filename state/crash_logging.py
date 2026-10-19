@@ -184,7 +184,11 @@ def install_crash_logging(version: str = "", path: str | Path | None = None, ste
 
 
 def shutdown_crash_logging() -> None:
-    global _crash_file, _installed
+    global _crash_file, _installed, _stall_thread
+    _stall_stop.set()
+    if _stall_thread is not None:
+        _stall_thread.join(timeout=1.0)
+        _stall_thread = None
     clear_current_step()
     if _crash_file is not None:
         try:
@@ -201,3 +205,36 @@ def shutdown_crash_logging() -> None:
 
 
 _version = ""
+_stall_thread: threading.Thread | None = None
+_stall_stop = threading.Event()
+_last_heartbeat = 0.0
+
+
+def heartbeat() -> None:
+    global _last_heartbeat
+    _last_heartbeat = time.monotonic()
+
+
+def start_stall_watchdog(threshold: float = 2.0) -> None:
+    """主线程心跳超过 threshold 未更新时把全部线程栈写入 crash.log。"""
+    global _stall_thread, _last_heartbeat
+    if not _installed or _stall_thread is not None:
+        return
+    heartbeat()
+    _stall_stop.clear()
+
+    def loop() -> None:
+        last_dump = 0.0
+        while not _stall_stop.wait(0.5):
+            now = time.monotonic()
+            if now - _last_heartbeat >= threshold and now - last_dump >= threshold:
+                _write(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] STALL >{threshold:.0f}s step={_current_step()}\n")
+                try:
+                    if _crash_file is not None:
+                        faulthandler.dump_traceback(file=_crash_file, all_threads=True)
+                except Exception:  # noqa: BLE001
+                    pass
+                last_dump = now
+
+    _stall_thread = threading.Thread(target=loop, name="delta-stall-watchdog", daemon=True)
+    _stall_thread.start()

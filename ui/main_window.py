@@ -73,6 +73,7 @@ from ui.login_view import LoginView
 from ui.room_list_view import RoomListView
 from ui.room_view import RoomView
 from ui.auto_share import AutoShareController
+from ui.hud_async import HudRecognitionResult, HudRecognitionService
 from ui.skill_overlay import OverlayController, SkillOverlay
 
 logger = logging.getLogger(__name__)
@@ -202,11 +203,20 @@ class MainWindow(QMainWindow):
         self._edit_shortcut = QShortcut(QKeySequence(self.config.shortcut_edit), self)
         self._edit_shortcut.activated.connect(self._toggle_overlay_edit)
         self._apply_overlay_config()
+        self._hud_service = HudRecognitionService(self)
+        self._hud_timeout = QTimer(self)
+        self._hud_timeout.setSingleShot(True)
+        self._hud_timeout.setInterval(10_000)
+        self._hud_timeout.timeout.connect(self._on_hud_timeout)
         self._auto_controller = AutoShareController(
-            self._open_capture_source, self._recognize_auto_frame
+            self._open_capture_source,
+            self._recognize_auto_frame,
+            hud_service=self._hud_service,
+            context_provider=self._auto_recognition_context,
         )
         self._auto_controller.payload_ready.connect(self._on_auto_payload)
         self._auto_controller.status_changed.connect(self._on_auto_status)
+        self._auto_controller.operator_detected.connect(self._on_auto_operator_detected)
         self._apply_auto_config()
 
         self._server_label = QLabel()
@@ -1231,6 +1241,25 @@ class MainWindow(QMainWindow):
         if self.stack.currentWidget() is self.room_view:
             self.room_view.set_status(text)
 
+    def _auto_recognition_context(self, frame) -> dict[str, Any]:
+        from core.hud_profile import HudProfile
+
+        profile = HudProfile.from_dict(self.config.hud_profile or {})
+        if frame.width and frame.height:
+            profile = profile.scaled(frame.width, frame.height)
+        return {
+            "profile": profile,
+            "operator": self._selected_operator(),
+            "catalog": self.operator_catalog,
+            "threshold": float(self.config.operator_recognition_threshold),
+            "detect_operator": bool(self.config.auto_operator_enabled),
+        }
+
+    def _on_auto_operator_detected(self, operator_id: str, score: float) -> None:
+        operator = self.operator_catalog.get(operator_id)
+        if operator is not None:
+            self._adopt_recognized_operator(operator, score)
+
     def _on_auto_payload(self, payload) -> None:
         if self._current_room is None:
             return
@@ -1288,6 +1317,10 @@ class MainWindow(QMainWindow):
         operator = self.operator_catalog.get(operator_id)
         if operator is None:
             return None
+        self._adopt_recognized_operator(operator, float(score))
+        return operator
+
+    def _adopt_recognized_operator(self, operator: Operator, score: float) -> None:
         changed = operator.id != self.config.operator_id
         self.config = replace(self.config, operator_id=operator.id)
         try:
@@ -1296,11 +1329,10 @@ class MainWindow(QMainWindow):
             pass
         self._recognized_operator_id = operator.id
         self._recognized_operator_score = float(score)
-        self._operator_recognized_at = now
+        self._operator_recognized_at = time.monotonic()
         self._apply_operator_identity(operator, float(score))
         if changed:
             logger.info("自动识别干员：%s（%.2f）", operator.display_name, score)
-        return operator
 
     def _apply_operator_identity(self, operator: Operator, score: float) -> None:
         state = self._self_skill_state
@@ -1459,38 +1491,26 @@ class MainWindow(QMainWindow):
 
     def _on_manual_operator_recognition(self, dialog: SettingsDialog) -> None:
         try:
-            from capture.sources import open_source
-            from ui.capture_utils import grab_frame_hidden
-
             self._apply_recognition_ui_settings(dialog)
-            source, message = open_source(
-                process_name=self.config.capture_window_process,
-                title_keyword=self.config.capture_window_title,
-            )
-            if source is None:
-                dialog.set_operator_recognition_status(f"识别失败：{message}")
+            if self._hud_service.active:
+                dialog.set_operator_recognition_status("识别中…")
                 return
-            game_window = self._find_game_window()
-            try:
-                frame = grab_frame_hidden(
-                    self,
-                    source,
-                    game_rect=game_window.client_rect if game_window is not None else None,
-                )
-            finally:
-                source.close()
+            frame, error = self._capture_hud_frame()
             if frame is None:
-                dialog.set_operator_recognition_status("识别失败：未取到游戏画面")
+                dialog.set_operator_recognition_status(f"识别失败：{error}")
                 return
-            operator = self._recognize_operator_frame(frame.image, force=True)
-            if operator is None:
-                dialog.set_operator_recognition_status(
-                    "当前识别：未命中，使用手动选择"
-                )
-            else:
-                dialog.set_operator_recognition_status(
-                    f"当前识别：{operator.display_name}（置信度 {self._recognized_operator_score:.2f}）"
-                )
+            self._hud_service.submit(
+                frame.image,
+                self._auto_recognition_context(frame)["profile"],
+                self._selected_operator(),
+                self.operator_catalog,
+                float(self.config.operator_recognition_threshold),
+                detect_operator=True,
+                callback=self._finish_manual_operator_result,
+            )
+            self._hud_timeout.start()
+            dialog.operator_recheck_button.setEnabled(False)
+            dialog.set_operator_recognition_status("识别中…")
         except Exception as exc:  # noqa: BLE001
             dialog.set_operator_recognition_status(f"识别失败：{exc}")
 
@@ -1593,15 +1613,10 @@ class MainWindow(QMainWindow):
             }
         )
 
-    def _on_hud_capture(self) -> None:
-        """E3b：一次性抓取游戏窗口 + 识别技能栏，更新自己的状态/上报。"""
-        if self._current_room is None:
-            return
-        set_current_step("hud_capture")
+    def _capture_hud_frame(self):
+        """UI 线程只负责隐藏相交窗口/抓帧；识别交由 HudRecognitionService。"""
         try:
             from capture.sources import open_source
-            from core.hud_pipeline import recognize_frame, to_skill_state
-            from core.hud_profile import HudProfile
             from ui.capture_utils import grab_frame_hidden
 
             source, message = open_source(
@@ -1609,8 +1624,7 @@ class MainWindow(QMainWindow):
                 title_keyword=self.config.capture_window_title,
             )
             if source is None:
-                self.room_view.set_status(f"HUD 识别不可用：{message}", error=True)
-                return
+                return None, f"HUD 识别不可用：{message}"
             game_window = self._find_game_window()
             try:
                 frame = grab_frame_hidden(
@@ -1626,34 +1640,124 @@ class MainWindow(QMainWindow):
                 reason = last_error or "未取到游戏画面（最小化/遮挡？）"
                 if "全黑" in reason:
                     reason += "；如为独占全屏请切换无边框窗口模式"
-                self.room_view.set_status(f"HUD 识别失败：{reason}", error=True)
                 logger.warning("HUD 抓帧失败：%s", reason)
-                return
-            self._recognize_operator_frame(frame.image)
-            profile = HudProfile.from_dict(self.config.hud_profile or {})
-            if frame.width and frame.height:
-                profile = profile.scaled(frame.width, frame.height)
-            operator = self._selected_operator()
-            recognized = recognize_frame(frame.image, profile, operator=operator)
-            state = to_skill_state(
-                recognized,
-                user_id=self._user_id(),
-                nickname=self._username(),
-                captured_at=self._server_now_ms(),
-                operator_id=operator.id if operator is not None else "",
-                operator_name=operator.display_name if operator is not None else "",
-            )
-            self._self_skill_state = state
-            self._skills.update(state)
-            self.room_view.skill_panel.upsert(state)
-            if self._skill_share_enabled:
-                self._send_skill_state(state)
-            count = sum(1 for slot in state.slots.values() if slot.state != "unknown")
-            self.room_view.set_status(f"HUD 识别完成：{count}/3 槽有结果")
+                return None, reason
+            return frame, ""
         except Exception as exc:  # noqa: BLE001
-            logger.warning("HUD 识别失败", exc_info=True)
-            self.room_view.set_status(f"HUD 识别失败：{exc}", error=True)
-        finally:
+            logger.warning("HUD 抓帧异常", exc_info=True)
+            return None, str(exc)
+
+    def _submit_hud_task(self, frame, callback, dialog=None) -> bool:
+        from core.hud_profile import HudProfile
+
+        if self._hud_service.active:
+            self.room_view.set_status("识别中…", error=False)
+            return False
+        profile = HudProfile.from_dict(self.config.hud_profile or {})
+        if frame.width and frame.height:
+            profile = profile.scaled(frame.width, frame.height)
+        self._hud_timeout.start()
+        self.room_view.skill_panel.capture_button.setEnabled(False)
+        if dialog is not None:
+            dialog.operator_recheck_button.setEnabled(False)
+            dialog.set_operator_recognition_status("识别中…")
+        self.room_view.set_status("识别中…")
+        set_current_step("hud_recognize")
+        accepted = self._hud_service.submit(
+            frame.image,
+            profile,
+            self._selected_operator(),
+            self.operator_catalog,
+            float(self.config.operator_recognition_threshold),
+            detect_operator=bool(self.config.auto_operator_enabled),
+            callback=callback,
+        )
+        if not accepted:
+            self._hud_timeout.stop()
+            self.room_view.skill_panel.capture_button.setEnabled(True)
+            if dialog is not None:
+                dialog.operator_recheck_button.setEnabled(True)
+            return False
+        return True
+
+    def _on_hud_timeout(self) -> None:
+        self._hud_service.cancel()
+        self._hud_timeout.stop()
+        self.room_view.skill_panel.capture_button.setEnabled(True)
+        self.room_view.set_status("识别超时（超过 10s），请重试", error=True)
+        if self.settings_dialog is not None:
+            self.settings_dialog.operator_recheck_button.setEnabled(True)
+            self.settings_dialog.set_operator_recognition_status("识别超时，请重试")
+        set_current_step("running")
+
+    def _finish_hud_capture(self, result: HudRecognitionResult) -> None:
+        self._hud_timeout.stop()
+        self.room_view.skill_panel.capture_button.setEnabled(True)
+        set_current_step("running")
+        if result.error:
+            self.room_view.set_status(f"HUD 识别失败：{result.error}", error=True)
+            return
+        if result.operator_id and result.operator_score >= float(self.config.operator_recognition_threshold):
+            operator = self.operator_catalog.get(result.operator_id)
+            if operator is not None:
+                self._adopt_recognized_operator(operator, result.operator_score)
+        from core.hud_pipeline import to_skill_state
+
+        operator = self._selected_operator()
+        state = to_skill_state(
+            result.recognized,
+            user_id=self._user_id(),
+            nickname=self._username(),
+            captured_at=self._server_now_ms(),
+            operator_id=operator.id if operator is not None else "",
+            operator_name=operator.display_name if operator is not None else "",
+        )
+        self._self_skill_state = state
+        self._skills.update(state)
+        self.room_view.skill_panel.upsert(state)
+        if self._skill_share_enabled:
+            self._send_skill_state(state)
+        count = sum(1 for slot in state.slots.values() if slot.state != "unknown")
+        self.room_view.set_status(f"HUD 识别完成：{count}/3 槽有结果")
+
+    def _finish_manual_operator_result(self, result: HudRecognitionResult) -> None:
+        self._hud_timeout.stop()
+        self.room_view.skill_panel.capture_button.setEnabled(True)
+        dialog = self.settings_dialog
+        if dialog is not None:
+            dialog.operator_recheck_button.setEnabled(True)
+        set_current_step("running")
+        if result.error:
+            if dialog is not None:
+                dialog.set_operator_recognition_status(f"识别失败：{result.error}")
+            return
+        operator = None
+        if result.operator_id and result.operator_score >= float(self.config.operator_recognition_threshold):
+            operator = self.operator_catalog.get(result.operator_id)
+            if operator is not None:
+                self._adopt_recognized_operator(operator, result.operator_score)
+        if dialog is not None:
+            if operator is None:
+                dialog.set_operator_recognition_status("当前识别：未命中，使用手动选择")
+            else:
+                dialog.set_operator_recognition_status(
+                    f"当前识别：{operator.display_name}（置信度 {result.operator_score:.2f}）"
+                )
+
+    def _on_hud_capture(self) -> None:
+        """一次性 HUD 识别：UI 抓帧后把 OCR/模板匹配放到线程池。"""
+        if self._current_room is None:
+            return
+        if self._hud_service.active:
+            self.room_view.set_status("识别中…", error=False)
+            return
+        set_current_step("hud_capture")
+        frame, error = self._capture_hud_frame()
+        if frame is None:
+            self.room_view.set_status(f"HUD 识别失败：{error}", error=True)
+            set_current_step("running")
+            return
+        if not self._submit_hud_task(frame, self._finish_hud_capture):
             set_current_step("running")
 
     def _on_skill_sharing_toggled(self, enabled: bool) -> None:
@@ -2377,6 +2481,8 @@ class MainWindow(QMainWindow):
             self._current_room = None
             self._clear_room_state()
         finally:
+            self._hud_timeout.stop()
+            self._hud_service.shutdown()
             self.bridge.stop()
             super().closeEvent(event)
 

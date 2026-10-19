@@ -41,7 +41,7 @@ def grab_frame_hidden(
     *,
     game_rect: Any = None,
     windows: Iterable[Any] | None = None,
-    delay: float = 0.12,
+    delay: float = 0.08,
     only_if_active: bool = False,
     sleep: Callable[[float], None] | None = None,
     process_events: Callable[[], None] | None = None,

@@ -134,11 +134,13 @@ def main(argv: list[str] | None = None) -> int:
     from state.crash_logging import (
         clear_current_step,
         crash_log_path,
+        heartbeat,
         install_crash_logging,
         install_qt_message_handler,
         read_previous_step,
         set_current_step,
         shutdown_crash_logging,
+        start_stall_watchdog,
     )
 
     previous_crash = read_previous_step()
@@ -196,7 +198,15 @@ def main(argv: list[str] | None = None) -> int:
             pass
     clear_current_step()
     set_current_step("running")
+    from PySide6.QtCore import QTimer
+
+    heartbeat_timer = QTimer()
+    heartbeat_timer.setInterval(1000)
+    heartbeat_timer.timeout.connect(heartbeat)
+    heartbeat_timer.start()
+    start_stall_watchdog(2.0)
     exit_code = int(app.exec())
+    heartbeat_timer.stop()
     shutdown_crash_logging()
     return exit_code
 
