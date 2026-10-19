@@ -57,6 +57,11 @@ class _FakeImage:
     def mean(self):
         return self._mean
 
+    def __array__(self, dtype=None):
+        import numpy as np
+
+        return np.full(self.shape, self._mean, dtype=dtype or np.uint8)
+
 
 class CaptureValidationTests(unittest.TestCase):
     def test_black_empty_and_normal_frames(self) -> None:
