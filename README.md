@@ -11,7 +11,7 @@
 
 | 模块 | 内容 |
 |---|---|
-| 配置 | 服务器地址可配置（`DELTA_SERVER` / `~/.delta_client.json` / `--server`），默认 `http://127.0.0.1:8000`，无硬编码 IP |
+| 配置 | 服务器地址可配置（`DELTA_SERVER` / `%APPDATA%\\DeltaClient\\config.json` / `--server`），默认 `https://deltachat.icu:8443`（WSS 自动推导 `wss://deltachat.icu:8443/ws`） |
 | HTTP 客户端 | `net/api_client.py`：统一 Base URL、`X-Request-Id` / `X-Protocol-Version`、`Authorization: Bearer`、超时、错误映射 |
 | WS 客户端 | `net/ws_client.py`：`/ws` 首消息 `auth`、心跳（25s ping / 90s 失联）、指数退避重连（1s→30s）、消息分发、未知类型忽略 |
 | 会话 | `state/session.py`：token + 用户信息（内存；可选落盘，**不落盘密码**） |
@@ -31,13 +31,13 @@
 | 画板（D/H4） | 内置三角洲地图底图（1105×1260）；画布控件锁定底图宽高比、随可用空间等比缩放并居中（宿主剩余空间留白），控件内底图铺满；坐标 0–1 = 画布像素/画布宽高（图外不绘制）；透明笔画层（橡皮 composition Clear，清空只清笔画）；画笔/橡皮/颜色/撤销/重做/清空 6 图标工具栏（QPainter 矢量图标、快捷键、当前工具高亮）；画笔圆点/橡皮方块尺寸浮层（3 档，角标提示）；`canvas_op` 增量（≤512 点自动分段、30 条/秒本地节流）、`room_joined.canvas_snapshot` 初始化（缺失/空时 HTTP fallback）、`(user_id,rev)` 丢弃旧包、离开/关窗前 `canvas_snapshot_save` 等 ack、快照上限 5000 笔/512KB |
 | 技能面板（E2） | 房间侧栏「技能」tab：按队友一行，头像首字母/昵称/干员名 + 大招（百分比环）/技能（n/max+CD）/投掷物（n/max+CD）；ready 高亮、charging 每秒倒计时、unknown「?」、30 分钟未更新「未共享」；缓存 `skill_share_state`/`room_joined.skill_states`，`skill_share_removed` 删除；本地时钟偏移用 `auth_ok.server_time` 估算；默认关闭共享，「模拟我的技能」循环状态，开启后 `skill_share_update`（2 次/秒限频），关闭发 `skill_share_off` |
 | 干员配置（E3a） | 读取 `assets/operators.json`（17 干员，slot 0/1/2 = 大招/战术技能/投掷物），面板显示干员名+技能名（hover）；设置页「干员」下拉手动选择并持久化 `operator_id`；`total_cd_ms` 缺失/0 的槽显示「CD未知」、不画环/不倒计时、上报 `state=unknown`；头像 `assets/operators/<id>.png` 存在则加载、缺失用首字母；上报带 `operator_id/operator_name` |
-| 打包（P1/P2） | 版本单一来源 `config.APP_VERSION=0.1.1`（`--version`/设置页显示）；数据目录 `%APPDATA%\DeltaClient\`（config/session/saved_logins/logs，旧 `~/.delta_client.json` 自动迁移并保留 `.bak`）；日志 2MB×3 轮转 + token/password 脱敏；多尺寸 `assets/app.ico`；`delta_client.spec` one-folder/无控制台/无 UPX；`scripts/build_win.ps1` 一键构建便携 ZIP + Inno Setup 安装包 + SHA256SUMS |
+| 打包（P1/P2） | 版本单一来源 `config.APP_VERSION=0.1.2`（`--version`/设置页显示）；数据目录 `%APPDATA%\DeltaClient\`（config/session/saved_logins/logs，旧 `~/.delta_client.json` 自动迁移并保留 `.bak`）；日志 2MB×3 轮转 + token/password 脱敏；多尺寸 `assets/app.ico`；`delta_client.spec` one-folder/无控制台/无 UPX；`scripts/build_win.ps1` 一键构建便携 ZIP + Inno Setup 安装包 + SHA256SUMS |
 | HUD 采集/识别（E3b） | 自动查找 DeltaForceClient-Win64-Shipping 窗口；WGC 优先、mss 回退；独立线程 2 FPS + 最小化暂停；HUD profile（2560×1440 默认/缩放/3 槽等分/JSON 导入导出）与「识别 HUD」按钮；RapidOCR 读百分比/秒数/充能，暗色遮罩比例算 CD，17 干员头像灰度多尺度模板匹配（遮左上编号，失败回退手动干员）；ult_pct_meaning=charged（16%=已充能16%）；识别失败槽 unknown；截图仅内存 |
 | 悬浮窗/自动循环（E4） | 可选技能 CD 悬浮窗（默认关闭）：无边框/置顶/鼠标穿透/WS_EX_TOOLWINDOW；跟随游戏窗口 500ms，最小化隐藏、独占全屏回落提示；透明度默认 30%、缩放、位置重置、快捷键可自定义（录制+冲突）；自动识别 2s 采样+变化去抖+2 次/秒限频；房间面板原样保留 |
 | 连通性测试 | 设置页「测试连接」：探测 `/health` + `/api/v1/rooms?page=1`，分别报告可达/鉴权失效/超时/网络错误 |
 | 协议对齐 | PROTOCOL C/D 定稿：`data.error_code`、§7.2/§7.3 实名错误码、WS `room_id_or_code`、聊天字段、画板 `rev`/快照语义 |
 | Mock | `--mock` / `DELTA_MOCK=1`：内置内存后端（昵称/聊天历史/画板快照/房主管理/我的房间），可完整离线演示 |
-| 测试 | 367 个 stdlib unittest（含 40 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑；真实 HUD OCR 测试需 requirements-e3.txt 环境 |`r`n
+| 测试 | 371 个 stdlib unittest（含 40 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑；真实 HUD OCR 测试需 requirements-e3.txt 环境 |
 ---
 
 ## 2. 目录结构
@@ -152,29 +152,29 @@ Mock 模式可正常走完「登录 → 房间列表 → 创建/加入 → 房�
 
 ```powershell
 # 方式一：命令行
-python main.py --server http://127.0.0.1:8000
+python main.py --server https://deltachat.icu:8443
 
 # 方式二：环境变量（当前终端有效）
-$env:DELTA_SERVER = "http://127.0.0.1:8000"
+$env:DELTA_SERVER = "https://deltachat.icu:8443"
 python main.py
 
-# 方式三：界面右上角「连接设置」，保存到 ~/.delta_client.json
+# 方式三：界面右上角「连接设置」，保存到 %APPDATA%\DeltaClient\config.json
 python main.py
 ```
 
-服务器地址优先级：**CLI `--server` > 环境变量 `DELTA_SERVER` > 配置文件 > 默认 `http://127.0.0.1:8000`**。
+服务器地址优先级：**CLI `--server` > 环境变量 `DELTA_SERVER` > 配置文件 > 默认 `https://deltachat.icu:8443`**。
 
 WebSocket 地址：
 
 - 默认由 HTTP 地址推导：`http(s)://host[/path]` → `ws(s)://host[/path]/ws`（PROTOCOL B 阶段目标）；
-- A 现状后端 WS 在 **8765** 端口，需要显式指定：`$env:DELTA_WS = "ws://127.0.0.1:8765"`，或在「连接设置」里填写。
+- 生产 WS 与 HTTP 同域：`https://deltachat.icu:8443` 自动推导 `wss://deltachat.icu:8443/ws`；旧 `http://114.132.161.169:8000` 配置首次启动自动迁移并保留其它字段，设置页会提示。
 - 地址支持反代路径前缀，例如 `https://example.com/delta` → `wss://example.com/delta/ws`。
 
-### 4.3 配置文件 `~/.delta_client.json`
+### 4.3 配置文件 `%APPDATA%\DeltaClient\config.json`
 
 ```json
 {
-  "server_url": "http://127.0.0.1:8000",
+  "server_url": "https://deltachat.icu:8443",
   "ws_url": null,
   "mock": false,
   "save_token": false,
@@ -183,7 +183,7 @@ WebSocket 地址：
 ```
 
 - `mock`：是否默认使用内置 Mock 后端（也可用 `DELTA_MOCK=1/0`）；
-- `save_token`：是否把 JWT 落盘到 `~/.delta_client_session.json`（默认关闭；**任何时候都不保存密码**）；
+- `save_token`：是否把 JWT 落盘到 `%APPDATA%\DeltaClient\session.json`（默认关闭；**任何时候都不保存密码**）；
 - 相应环境变量：`DELTA_SERVER` / `DELTA_WS` / `DELTA_MOCK` / `DELTA_SAVE_TOKEN` / `DELTA_CLIENT_CONFIG`（自定义配置文件路径）/ `DELTA_SESSION_FILE`（自定义会话文件路径）。
 
 ---
@@ -198,7 +198,7 @@ python -m unittest discover -s tests -v
 
 覆盖：配置加载与优先级、URL 规范化、协议路径/WS 消息、HTTP 错误映射、WS 重连退避、房间号校验（5 位 `[A-Z0-9]`）、房间/成员/消息解析、登录注册校验、token 存取与“不落盘密码”、Mock 后端完整流程。
 
-当前结果：**367 个用例全部通过**（约 1.2s；无 GUI/OCR 依赖时跳过 40 个）。
+当前结果：**371 个用例全部通过**（约 1.2s；无 GUI/OCR 依赖时跳过 40 个）。
 
 ---
 
@@ -230,8 +230,8 @@ python -m unittest discover -s tests -v
 | 房间事件（F） | WS `room_updated` / `room_deleted` | 实时更新房名/密码状态；删除后提示并退回大厅 |
 | 移出成员（H3） | `POST /api/v1/rooms/{room_id_or_code}/kick` | body `{"user_id": <成员id>}`；房主专用，错误码 `NOT_ROOM_OWNER`/`MEMBER_NOT_FOUND`/`CANNOT_KICK_OWNER`；成功响应含最新 `members` |
 | 被踢事件（H3） | WS `room_kicked` | `{room_id, room_code, by:{id,nickname}, reason:"kicked"}`；当前房间被踢时提示、清空房间状态并回大厅 |
-| 技能状态（E2/E2b） | WS `skill_share_state` / `room_joined.skill_states`：顶层 `server_received_at`，每槽 `ready_at` 绝对服务器毫秒；接收端优先 `ready_at - server_now_est` 倒计时（≤0 就绪），缺失时回退旧 remaining+captured_at 公式 |`r`n| 技能移除（E2） | WS `skill_share_removed` | `{user_id}`；从面板移除该队友 |
-| 服务器时钟（E2b） | `auth_ok.server_time` + pong RTT/2 估计 offset（EMA α=0.2）；本地 tick 用 `time.monotonic()`，系统时间跳变不影响 |`r`n| 技能上报（E2/E3a） | WS `skill_share_update` / `skill_share_off` | `{room_id,captured_at,skills:[{slot,state,remaining_ms,charges,max_charges,pct}],operator_id,operator_name}` / `{room_id}`；默认关闭，开启后 2 次/秒本地节流，关闭时发 off；未知 CD 槽 `state=unknown` |
+| 技能状态（E2/E2b） | WS `skill_share_state` / `room_joined.skill_states`：顶层 `server_received_at`，每槽 `ready_at` 绝对服务器毫秒；接收端优先 `ready_at - server_now_est` 倒计时（≤0 就绪），缺失时回退旧 remaining+captured_at 公式 || 技能移除（E2） | WS `skill_share_removed` | `{user_id}`；从面板移除该队友 |
+| 服务器时钟（E2b） | `auth_ok.server_time` + pong RTT/2 估计 offset（EMA α=0.2）；本地 tick 用 `time.monotonic()`，系统时间跳变不影响 || 技能上报（E2/E3a） | WS `skill_share_update` / `skill_share_off` | `{room_id,captured_at,skills:[{slot,state,remaining_ms,charges,max_charges,pct}],operator_id,operator_name}` / `{room_id}`；默认关闭，开启后 2 次/秒本地节流，关闭时发 off；未知 CD 槽 `state=unknown` |
 | 修改昵称（F） | `PATCH /api/v1/users/me` | body `{"nickname": "新昵称"}`；响应 `{"user": {...}}`；成功后本地立即更新展示、保持登录 |
 | 修改密码（F） | `POST /api/v1/users/me/password` | body `{"old_password","new_password"}`；旧密码错 `WRONG_OLD_PASSWORD`、新密码不合规 `INVALID_NEW_PASSWORD`（8–32，前端先校验）；成功后 token 继续有效 |
 | 心跳 | WS `ping` / 服务端 `heartbeat` | 服务端每 30s 下发；客户端 25s ping，90s 无消息判定失联 |
@@ -277,7 +277,7 @@ python -m unittest discover -s tests -v
 - 服务器地址可配置，仓库内**无硬编码 IP**；
 - 密码只在登录请求体内发送，**不落盘、不写日志、不进配置文件**（H2 历史账号密码例外：仅 DPAPI 加密密文落盘，绝不明文）；
 - H2 历史账号：密码用 Windows DPAPI（`CRYPTPROTECT_UI_FORBIDDEN`）加密后 base64 存入 `%APPDATA%\DeltaClient\saved_logins.json`；DPAPI 失败/非 Windows 时降级为**只存账号、不存密码**，无明文回退；
-- JWT 默认只存内存；开启 `save_token` 时才落盘到 `~/.delta_client_session.json`，并用 `core.validation.sanitize_user` 清洗用户信息（去掉 password/token/secret 类字段）；
+- JWT 默认只存内存；开启 `save_token` 时才落盘到 `%APPDATA%\DeltaClient\session.json`，并用 `core.validation.sanitize_user` 清洗用户信息（去掉 password/token/secret 类字段）；
 - 错误提示只展示服务端 `message` 或客户端兜底文案，5xx 不展示内部细节；
 - 画板只收发矢量操作/快照（坐标+颜色+粗细），**不上传截图或图像**；截屏/OCR（E）未实现。
 

@@ -33,10 +33,12 @@ from typing import Any, Mapping
 from core.protocol import ws_url_for
 from state.paths import APP_NAME
 
-DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
+DEFAULT_SERVER_URL = "https://deltachat.icu:8443"
+LEGACY_DEFAULT_SERVER_URL = "http://114.132.161.169:8000"
+LEGACY_WS_URL = "ws://114.132.161.169:8000/ws"
 DEFAULT_TIMEOUT = 15.0
 CONFIG_FILENAME = ".delta_client.json"
-APP_VERSION = "0.1.1"
+APP_VERSION = "0.1.2"
 __version__ = APP_VERSION
 CONFIG_ENV = "DELTA_CLIENT_CONFIG"
 
@@ -128,6 +130,7 @@ class AppConfig:
     persist_token: bool = False
     operator_id: str = ""
     hud_profile: dict[str, Any] | None = None
+    server_migrated: bool = False
     overlay_enabled: bool = False
     overlay_opacity: int = 30
     overlay_scale: float = 1.0
@@ -185,6 +188,46 @@ def _read_config_file(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _write_config_data(path: Path, data: Mapping[str, Any]) -> bool:
+    """保留字段原子写回配置；失败不阻塞启动。"""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_name(path.name + ".tmp")
+        with temp.open("w", encoding="utf-8") as handle:
+            json.dump(dict(data), handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+        os.replace(temp, path)
+        return True
+    except OSError:
+        return False
+
+
+def _migrate_legacy_server(path: Path, file_data: dict[str, Any]) -> bool:
+    """旧 HTTP 默认地址 -> HTTPS 默认；仅迁移该精确旧值，保留其它字段。"""
+    raw = file_data.get("server_url")
+    if not isinstance(raw, str) or not raw.strip():
+        return False
+    try:
+        normalized = normalize_server_url(raw)
+    except ConfigError:
+        return False
+    if normalized != LEGACY_DEFAULT_SERVER_URL:
+        return False
+    updated = dict(file_data)
+    updated["server_url"] = DEFAULT_SERVER_URL
+    old_ws = str(updated.get("ws_url") or "").strip()
+    if old_ws:
+        try:
+            if normalize_ws_url(old_ws) == LEGACY_WS_URL:
+                updated.pop("ws_url", None)
+        except ConfigError:
+            pass
+    _write_config_data(path, updated)
+    file_data.clear()
+    file_data.update(updated)
+    return True
+
+
 def load_config(
     path: str | os.PathLike[str] | None = None,
     env: Mapping[str, str] | None = None,
@@ -196,9 +239,10 @@ def load_config(
     env_map: Mapping[str, str] = os.environ if env is None else env
     config_path = Path(path).expanduser() if path is not None else config_path_from_env(env_map)
     file_data = _read_config_file(config_path)
+    server_migrated = _migrate_legacy_server(config_path, file_data)
 
     server = DEFAULT_SERVER_URL
-    source = "default"
+    source = "file-migrated" if server_migrated else "default"
 
     file_server = file_data.get("server_url")
     if isinstance(file_server, str) and file_server.strip():
@@ -274,6 +318,7 @@ def load_config(
         persist_token=persist_token,
         operator_id=operator_id,
         hud_profile=hud_profile,
+        server_migrated=server_migrated,
         overlay_enabled=overlay_enabled,
         overlay_opacity=overlay_opacity,
         overlay_scale=overlay_scale,

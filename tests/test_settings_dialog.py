@@ -54,8 +54,14 @@ class SettingsOperatorTests(unittest.TestCase):
         from PySide6.QtWidgets import QLabel
 
         self.assertTrue(
-            any("版本 v0.1.1" in label.text() for label in dialog.findChildren(QLabel))
+            any("版本 v0.1.2" in label.text() for label in dialog.findChildren(QLabel))
         )
+
+    def test_server_migration_hint(self) -> None:
+        dialog = self._dialog("honglang")
+        self.assertTrue(dialog.server_migrated_label.isHidden())
+        dialog.set_server_migrated(True)
+        self.assertFalse(dialog.server_migrated_label.isHidden())
 
     def test_switch_and_result_operator_id(self) -> None:
         dialog = self._dialog("honglang")
@@ -109,5 +115,6 @@ class SettingsOperatorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 
 

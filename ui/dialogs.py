@@ -354,9 +354,16 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(4, 10, 4, 4)
         layout.setSpacing(8)
 
-        layout.addWidget(QLabel("HTTP 服务器地址"))
+        self.server_migrated_label = QLabel("已切换到 HTTPS 服务器（旧 HTTP 默认地址已自动迁移）")
+        self.server_migrated_label.setObjectName("Hint")
+        self.server_migrated_label.setStyleSheet("color:#8be3a8;")
+        self.server_migrated_label.setWordWrap(True)
+        self.server_migrated_label.hide()
+        layout.addWidget(self.server_migrated_label)
+
+        layout.addWidget(QLabel("HTTP(S) 服务器地址"))
         self.server_edit = QLineEdit(self._config.server_url)
-        self.server_edit.setPlaceholderText("http://127.0.0.1:8000")
+        self.server_edit.setPlaceholderText("https://deltachat.icu:8443")
         layout.addWidget(self.server_edit)
 
         layout.addWidget(QLabel("WebSocket 地址（留空则自动推导为 ws(s)://host/ws）"))
@@ -557,6 +564,9 @@ class SettingsDialog(QDialog):
 
     def set_overlay_status(self, text: str) -> None:
         self.overlay_status_label.setText(f"当前状态：{text}")
+
+    def set_server_migrated(self, migrated: bool) -> None:
+        self.server_migrated_label.setVisible(bool(migrated))
 
     def _build_profile_tab(self) -> QWidget:
         page = QWidget()

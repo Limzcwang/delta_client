@@ -158,6 +158,8 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._wire_views()
         self._refresh_status_bar()
+        if self.config.server_migrated:
+            self._set_status("已切换到 HTTPS 服务器：https://deltachat.icu:8443")
 
         if self.session.is_logged_in:
             self._show_rooms()
@@ -1921,6 +1923,7 @@ class MainWindow(QMainWindow):
         dialog.set_account(self._account())
         dialog.set_nickname(self.session.nickname or self.session.username)
         dialog.set_overlay_status(self.overlay_controller.last_reason or "未附加")
+        dialog.set_server_migrated(self.config.server_migrated)
         dialog.tabs.setCurrentIndex(0 if start_tab <= 0 else 1)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
