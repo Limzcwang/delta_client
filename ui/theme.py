@@ -391,7 +391,6 @@ QTableWidget {
     outline: none;
 }
 QTableWidget::item { padding: 12px 14px; border-bottom: 1px solid #1c2940; }
-QTableWidget::item:hover { background-color: #182235; }
 QTableWidget::item:selected { background-color: #373224; color: #e8eef7; border: none; }
 QTableWidget::item:focus { border: none; }
 QHeaderView::section {

@@ -36,6 +36,8 @@ class _RoomRowDelegate(QStyledItemDelegate):
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
         opt = QStyleOptionViewItem(option)
         self.initStyleOption(opt, index)
+        # 房间列表不要 hover 变色；鼠标状态一律清掉，选中态保留。
+        opt.state &= ~QStyle.StateFlag.State_MouseOver
         if selected:
             opt.state &= ~(QStyle.StateFlag.State_Selected | QStyle.StateFlag.State_HasFocus)
             opt.showDecorationSelected = False

@@ -85,7 +85,7 @@ class LobbyLayoutTests(unittest.TestCase):
             self.assertEqual(380, view.table.minimumHeight())
             self.assertEqual(380, view.table.maximumHeight())
             self.assertIsInstance(view.table.itemDelegate(), _RoomRowDelegate)
-            self.assertIn("QTableWidget::item:hover", APP_STYLESHEET)
+            self.assertNotIn("QTableWidget::item:hover", APP_STYLESHEET)
         finally:
             view.close()
             view.deleteLater()
