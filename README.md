@@ -31,18 +31,18 @@
 | 画板（D/H4） | 内置三角洲地图底图（1105×1260）；画布控件锁定底图宽高比、随可用空间等比缩放并居中（宿主剩余空间留白），控件内底图铺满；坐标 0–1 = 画布像素/画布宽高（图外不绘制）；透明笔画层（橡皮 composition Clear，清空只清笔画）；画笔/橡皮/颜色/撤销/重做/清空 6 图标工具栏（QPainter 矢量图标、快捷键、当前工具高亮）；画笔圆点/橡皮方块尺寸浮层（3 档，角标提示）；`canvas_op` 增量（≤512 点自动分段、30 条/秒本地节流）、`room_joined.canvas_snapshot` 初始化（缺失/空时 HTTP fallback）、`(user_id,rev)` 丢弃旧包、离开/关窗前 `canvas_snapshot_save` 等 ack、快照上限 5000 笔/512KB |
 | 技能面板（E2） | 房间侧栏「技能」tab：按队友一行，头像首字母/昵称/干员名 + 大招（百分比环）/技能（n/max+CD）/投掷物（n/max+CD）；ready 高亮、charging 每秒倒计时、unknown「?」、30 分钟未更新「未共享」；缓存 `skill_share_state`/`room_joined.skill_states`，`skill_share_removed` 删除；本地时钟偏移用 `auth_ok.server_time` 估算；默认关闭共享，「模拟我的技能」循环状态，开启后 `skill_share_update`（2 次/秒限频），关闭发 `skill_share_off` |
 | 干员配置（E3a） | 读取 `assets/operators.json`（17 干员，slot 0/1/2 = 大招/战术技能/投掷物），面板显示干员名+技能名（hover）；设置页「干员」下拉手动选择并持久化 `operator_id`；`total_cd_ms` 缺失/0 的槽显示「CD未知」、不画环/不倒计时、上报 `state=unknown`；头像 `assets/operators/<id>.png` 存在则加载、缺失用首字母；上报带 `operator_id/operator_name` |
-| 打包（P1/P2） | 版本单一来源 `config.APP_VERSION=0.1.3`（`--version`/设置页显示）；数据目录 `%APPDATA%\DeltaClient\`（config/session/saved_logins/logs，旧 `~/.delta_client.json` 自动迁移并保留 `.bak`）；日志 2MB×3 轮转 + token/password 脱敏；多尺寸 `assets/app.ico`；`delta_client.spec` one-folder/无控制台/无 UPX；`scripts/build_win.ps1` 一键构建便携 ZIP + Inno Setup 安装包 + SHA256SUMS |
+| 打包（P1/P2） | 版本单一来源 `config.APP_VERSION=0.1.4`（`--version`/设置页显示）；数据目录 `%APPDATA%\DeltaClient\`（config/session/saved_logins/logs，旧 `~/.delta_client.json` 自动迁移并保留 `.bak`）；日志 2MB×3 轮转 + token/password 脱敏；多尺寸 `assets/app.ico`；`delta_client.spec` one-folder/无控制台/无 UPX；`scripts/build_win.ps1` 一键构建便携 ZIP + Inno Setup 安装包 + SHA256SUMS |
 | HUD 采集/识别（E3b） | 自动查找 DeltaForceClient-Win64-Shipping 窗口；WGC 优先、mss 回退；独立线程 2 FPS + 最小化暂停；HUD profile（2560×1440 默认/缩放/3 槽等分/JSON 导入导出）与「识别 HUD」按钮；RapidOCR 读百分比/秒数/充能，暗色遮罩比例算 CD，17 干员头像灰度多尺度模板匹配（遮左上编号，失败回退手动干员）；ult_pct_meaning=charged（16%=已充能16%）；识别失败槽 unknown；截图仅内存 |
 | 干员配置中心（E5） | 启动/登录后/进房前 `GET /api/v1/config/operators`（If-None-Match）：304 用缓存，200 校验后写 `%APPDATA%\DeltaClient\operators.json` 并热更新面板/识别/上报；损坏/缺失/非法回退内置 `assets/operators.json`；网络失败静默；设置页显示版本/来源/更新时间+手动检查 |
 | WS 重连保护 | 单实例文件锁（重复启动提示「Delta Client 已在运行」）；close 4001/replaced、认证失效停止自动重连并清会话回登录；401/403 握手认证失败不重连并清会话；1001/1012/网络错误继续指数退避 1→2→4→8→…→30s；server_restarting 提示服务器更新中 |
-| HUD / 采屏 + 干员识别 | 独立「HUD / 采屏」tab（识别全异步 QThreadPool/10s 超时；事件驱动（亮度/充能数跳变+2帧去抖）+ 文字NN秒优先 + ready_at 本地倒计时；只按状态/充能/ready_at重同步上报；左下角头像自动扫描（不依赖技能图标模板））（采集开关、窗口检测/选窗/帧统计、标定、自动识别干员/阈值/重新识别）；抓帧前仅隐藏与游戏 rect 相交的客户端窗口（grab_frame_hidden，副屏不闪）；标定预览用连续内存 tobytes 转 QImage，非黑屏；头像 ROI 模板匹配命中后持久化 operator_id 并刷新面板/悬浮窗/上报，30s 缓存 |
+| HUD / 采屏 + 干员识别 | 独立「HUD / 采屏」tab（识别全异步 QThreadPool/10s 超时）（采集开关、窗口检测/选窗/帧统计、标定、自动识别干员/阈值/重新识别）；抓帧前仅隐藏与游戏 rect 相交的客户端窗口（grab_frame_hidden，副屏不闪）；标定预览用连续内存 tobytes 转 QImage，非黑屏；头像 ROI 模板匹配命中后持久化 operator_id 并刷新面板/悬浮窗/上报，30s 缓存 |
 | 崩溃可观测性 | `faulthandler` + `sys/threading.excepthook` + Qt message handler 写 `%APPDATA%\DeltaClient\logs\crash.log`；last_step 标记异常退出，下次启动提示并打开日志目录；关闭/切服时主动 close aiohttp session |
 | 窗口检测兜底 | 进程名忽略 `.exe`/大小写；标题「三角洲/Delta Force」+客户区 ≥800×600 兜底；设置页选择/检测窗口与匹配方式/失败原因；排除自身客户端窗口；候选窗口日志；默认 mss，WGC 可选；帧尺寸/均值/异常日志/全黑诊断 |
 | 悬浮窗（强制 topmost / 不预判独占全屏）/自动循环（E4） | 可选技能 CD 悬浮窗（默认关闭）：无边框/置顶/鼠标穿透/WS_EX_TOOLWINDOW；跟随游戏窗口 500ms，最小化隐藏、独占全屏回落提示；透明度默认 30%、缩放、位置重置、快捷键可自定义（录制+冲突）；自动识别 2s 采样+变化去抖+2 次/秒限频；房间面板原样保留 |
 | 连通性测试 | 设置页「测试连接」：探测 `/health` + `/api/v1/rooms?page=1`，分别报告可达/鉴权失效/超时/网络错误 |
 | 协议对齐 | PROTOCOL C/D 定稿：`data.error_code`、§7.2/§7.3 实名错误码、WS `room_id_or_code`、聊天字段、画板 `rev`/快照语义 |
 | Mock | `--mock` / `DELTA_MOCK=1`：内置内存后端（昵称/聊天历史/画板快照/房主管理/我的房间），可完整离线演示 |
-| 测试 | 457 个 stdlib unittest（含 40 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑；真实 HUD OCR 测试需 requirements-e3.txt 环境 |
+| 测试 | 436 个 stdlib unittest（含 40 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑；真实 HUD OCR 测试需 requirements-e3.txt 环境 |
 ---
 
 ## 2. 目录结构
@@ -203,7 +203,7 @@ python -m unittest discover -s tests -v
 
 覆盖：配置加载与优先级、URL 规范化、协议路径/WS 消息、HTTP 错误映射、WS 重连退避、房间号校验（5 位 `[A-Z0-9]`）、房间/成员/消息解析、登录注册校验、token 存取与“不落盘密码”、Mock 后端完整流程。
 
-当前结果：**457 个用例全部通过**（构建 venv 含真实头像/文字/亮度 fixture 462 个）（约 1.2s；无 GUI/OCR 依赖时跳过 40 个）。
+当前结果：**458 个用例全部通过**（构建 venv 含真实头像/OCR 463 个）（约 2s；无 GUI/OCR 依赖时跳过 6 个）。
 
 ---
 
@@ -236,7 +236,7 @@ python -m unittest discover -s tests -v
 | 移出成员（H3） | `POST /api/v1/rooms/{room_id_or_code}/kick` | body `{"user_id": <成员id>}`；房主专用，错误码 `NOT_ROOM_OWNER`/`MEMBER_NOT_FOUND`/`CANNOT_KICK_OWNER`；成功响应含最新 `members` |
 | 被踢事件（H3） | WS `room_kicked` | `{room_id, room_code, by:{id,nickname}, reason:"kicked"}`；当前房间被踢时提示、清空房间状态并回大厅 |
 | 技能状态（E2/E2b） | WS `skill_share_state` / `room_joined.skill_states`：顶层 `server_received_at`，每槽 `ready_at` 绝对服务器毫秒；接收端优先 `ready_at - server_now_est` 倒计时（≤0 就绪），缺失时回退旧 remaining+captured_at 公式 || 技能移除（E2） | WS `skill_share_removed` | `{user_id}`；从面板移除该队友 |
-| 服务器时钟（E2b） | `auth_ok.server_time` + pong RTT/2 估计 offset（EMA α=0.2）；本地 tick 用 `time.monotonic()`，系统时间跳变不影响 || 技能上报统一 serialize_skill_state（所有槽必带 remaining_ms/charges/max_charges（大招/unknown 也带 1/0）；max_charges 1–9；单槽非法降级 unknown）（E2/E3a） | WS `skill_share_update` / `skill_share_off` | `{room_id,captured_at,skills:[{slot,state,remaining_ms,charges,max_charges,pct}],operator_id,operator_name}` / `{room_id}`；默认关闭，开启后 2 次/秒本地节流，关闭时发 off；未知 CD 槽 `state=unknown` |
+| 服务器时钟（E2b） | `auth_ok.server_time` + pong RTT/2 估计 offset（EMA α=0.2）；本地 tick 用 `time.monotonic()`，系统时间跳变不影响 || 技能上报统一 serialize_skill_state（所有槽 remaining_ms 必为 0–600000 int；max_charges 1–9；单槽非法降级 unknown）（E2/E3a） | WS `skill_share_update` / `skill_share_off` | `{room_id,captured_at,skills:[{slot,state,remaining_ms,charges,max_charges,pct}],operator_id,operator_name}` / `{room_id}`；默认关闭，开启后 2 次/秒本地节流，关闭时发 off；未知 CD 槽 `state=unknown` |
 | 修改昵称（F） | `PATCH /api/v1/users/me` | body `{"nickname": "新昵称"}`；响应 `{"user": {...}}`；成功后本地立即更新展示、保持登录 |
 | 修改密码（F） | `POST /api/v1/users/me/password` | body `{"old_password","new_password"}`；旧密码错 `WRONG_OLD_PASSWORD`、新密码不合规 `INVALID_NEW_PASSWORD`（8–32，前端先校验）；成功后 token 继续有效 |
 | 心跳 | WS `ping` / 服务端 `heartbeat` | 服务端每 30s 下发；客户端 25s ping，90s 无消息判定失联 |

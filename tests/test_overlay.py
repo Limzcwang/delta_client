@@ -28,6 +28,13 @@ class FakeWindow:
     is_minimized: bool = False
 
 
+
+def _widget_visible_safe(widget):
+    try:
+        return bool(widget.isVisible())
+    except RuntimeError:
+        return False
+
 @unittest.skipUnless(HAS_QT, "PySide6 未安装，跳过 GUI 单测")
 class OverlayTests(unittest.TestCase):
     @classmethod
@@ -92,20 +99,63 @@ class OverlayTests(unittest.TestCase):
         finally:
             ctl.stop()
 
-    def test_topmost_each_follow_but_not_edit_mode(self) -> None:
+    def test_topmost_only_on_state_or_geometry_change(self) -> None:
         window = [FakeWindow(client_rect=(0, 0, 1920, 1080))]
         ctl = OverlayController(self.overlay, lambda: window[0], lambda: (1920, 1080))
         try:
             with mock.patch("ui.skill_overlay._apply_win32_topmost", return_value=True) as topmost:
                 ctl.start()
+                calls_after_start = topmost.call_count
+                self.assertGreaterEqual(calls_after_start, 1)
                 ctl.follow()
-                self.assertGreaterEqual(topmost.call_count, 2)
+                ctl.follow()
+                self.assertEqual(calls_after_start, topmost.call_count)  # 同几何不重复 SetWindowPos
+                window[0] = FakeWindow(client_rect=(0, 0, 1600, 900))
+                ctl.follow()
+                self.assertGreater(topmost.call_count, calls_after_start)  # 几何变化才调用
                 self.overlay.set_edit_mode(True)
                 before = topmost.call_count
                 ctl.follow()
                 self.assertEqual(before, topmost.call_count)
         finally:
             ctl.stop()
+
+    def test_pause_stops_and_resume_restarts_timer(self) -> None:
+        window = [FakeWindow()]
+        ctl = OverlayController(self.overlay, lambda: window[0], lambda: (1920, 1080))
+        try:
+            ctl.start()
+            self.assertTrue(ctl._timer.isActive())
+            ctl.pause("settings")
+            self.assertTrue(ctl.paused)
+            self.assertFalse(ctl._timer.isActive())
+            ctl.resume(delay_ms=0)
+            self.assertFalse(ctl.paused)
+            self.assertTrue(ctl._timer.isActive())
+        finally:
+            ctl.stop()
+
+    def test_modal_guard_does_not_touch_native_window(self) -> None:
+        window = [FakeWindow()]
+        ctl = OverlayController(self.overlay, lambda: window[0], lambda: (1920, 1080))
+        try:
+            ctl.start()
+            with mock.patch("ui.skill_overlay.QApplication.activeModalWidget", return_value=object()):
+                with mock.patch("ui.skill_overlay._apply_win32_topmost") as topmost:
+                    ctl.follow(force=True)
+                    topmost.assert_not_called()
+            self.assertIn("模态", ctl.last_reason)
+        finally:
+            ctl.stop()
+
+    def test_invalid_widget_is_not_native_called(self) -> None:
+        from ui.skill_overlay import _widget_alive
+
+        class Dead:
+            def isVisible(self):
+                raise RuntimeError("deleted")
+
+        self.assertFalse(_widget_visible_safe(Dead()))
 
     def test_fixed_position_after_edit(self) -> None:
         window = [FakeWindow()]

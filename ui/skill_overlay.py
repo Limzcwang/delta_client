@@ -10,7 +10,7 @@ from typing import Any, Callable, Iterable
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPen
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QApplication, QWidget
 
 from core.operators import OperatorCatalog
 from core.skills import SLOT_ABILITY, SLOT_THROWABLE, SLOT_ULTIMATE, SkillState, format_countdown
@@ -31,9 +31,30 @@ WS_EX_NOACTIVATE = 0x08000000
 WS_EX_TOOLWINDOW = 0x00000080
 
 
+def _widget_alive(widget: Any) -> bool:
+    """PySide 对象已被 C++ 销毁时返回 False，避免解引用失效 HWND。"""
+    try:
+        from shiboken6 import isValid  # type: ignore[import-not-found]
+
+        if not bool(isValid(widget)):
+            return False
+    except Exception:  # noqa: BLE001
+        pass
+    return True
+
+
+def _widget_visible(widget: Any) -> bool:
+    try:
+        return bool(widget.isVisible())
+    except (RuntimeError, AttributeError):
+        return False
+
+
 def _apply_win32_topmost(widget: Any) -> bool:
     """强制置顶 + WS_EX_NOACTIVATE（Windows）；失败只记录 debug。"""
     if sys.platform != "win32":
+        return False
+    if not _widget_alive(widget) or not _widget_visible(widget):
         return False
     try:
         user32 = ctypes.windll.user32
@@ -239,17 +260,63 @@ class OverlayController:
         self.last_reason = ""
         self.fixed_position: tuple[int, int] | None = None
         self._base_opacity = 0.30
+        self.paused = False
+        self.pause_reason = ""
+        self._pause_depth = 0
+        self._last_geometry: tuple[tuple[int, int, int, int], tuple[int, int]] | None = None
+        self._last_position: tuple[int, int] | None = None
+        self._last_follow_reason = ""
+        self._last_log_reason = ""
 
     def start(self) -> None:
         self.enabled = True
+        self.paused = False
+        self.pause_reason = ""
+        self._pause_depth = 0
         self._timer.start()
-        self.follow()
+        self.follow(force=True)
 
     def stop(self) -> None:
         self.enabled = False
+        self.paused = False
+        self._pause_depth = 0
         self._timer.stop()
-        self.overlay.hide()
+        if _widget_alive(self.overlay):
+            try:
+                self.overlay.hide()
+            except RuntimeError:
+                pass
         self.attached = False
+
+    def pause(self, reason: str = "modal") -> None:
+        """模态对话框/抓帧 hide 前暂停 follow 定时器（可嵌套）。"""
+        self._pause_depth += 1
+        self.paused = True
+        self.pause_reason = str(reason)
+        self._timer.stop()
+
+    def resume(self, delay_ms: int = 100) -> None:
+        """恢复 follow；延迟 100ms 避开 hide/show 重建 HWND 的窗口。"""
+        if self._pause_depth > 0:
+            self._pause_depth -= 1
+        if self._pause_depth > 0:
+            return
+        if not self.enabled:
+            self.paused = False
+            self.pause_reason = ""
+            return
+        self.paused = False
+        self.pause_reason = ""
+
+        def _resume_follow() -> None:
+            if self.enabled and not self.paused:
+                self._timer.start()
+                self.follow(force=True)
+
+        if delay_ms > 0:
+            QTimer.singleShot(int(delay_ms), _resume_follow)
+        else:
+            _resume_follow()
 
     def set_opacity(self, opacity: float) -> None:
         self._base_opacity = float(opacity)
@@ -261,40 +328,63 @@ class OverlayController:
         self.follow(force=True)
 
     def follow(self, force: bool = False) -> None:
-        if not self.enabled:
+        if not self.enabled or self.paused:
+            return
+        if not _widget_alive(self.overlay):
+            self._timer.stop()
+            return
+        # 防御：模态对话框（设置/标定/弹窗）期间不碰原生窗口
+        if QApplication.activeModalWidget() is not None:
+            self.last_reason = "模态对话框打开，悬浮窗跟随暂停"
+            if _widget_alive(self.overlay):
+                self.overlay.set_status(self.last_reason)
             return
         window = self.window_provider()
         if window is None:
             self.attached = False
-            self.overlay.hide()
             self._reason("等待游戏窗口")
             return
         if getattr(window, "is_minimized", False):
             self.attached = False
-            self.overlay.hide()
             self._reason("游戏窗口已最小化，悬浮窗已隐藏")
             return
-        rect = window.client_rect
-        self.overlay.set_status("")
-        x = rect[0] + rect[2] - self.overlay.width() - 20
-        y = rect[1] + rect[3] - self.overlay.height() - 170
+        rect = tuple(int(value) for value in window.client_rect)
+        target = (rect[0] + rect[2] - self.overlay.width() - 20,
+                  rect[1] + rect[3] - self.overlay.height() - 170)
         if self.fixed_position is not None:
-            x, y = self.fixed_position
-        self.overlay.move(max(rect[0], x), max(rect[1], y))
-        self.overlay.show()
-        if not self.overlay.edit_mode:
+            target = (int(self.fixed_position[0]), int(self.fixed_position[1]))
+        target = (max(rect[0], target[0]), max(rect[1], target[1]))
+        geometry_changed = self._last_geometry != (rect, (self.overlay.width(), self.overlay.height()))
+        position_changed = self._last_position != target
+        if position_changed:
+            self.overlay.move(*target)
+            self._last_position = target
+        if not self.overlay.isVisible():
+            self.overlay.show()
+        self.overlay.set_status("")
+        if not self.overlay.edit_mode and (force or not self.attached or geometry_changed):
             if not self.attached:
                 set_current_step("overlay_attach")
-            _apply_win32_topmost(self.overlay)
-            self.overlay.raise_()
+            if _widget_alive(self.overlay):
+                _apply_win32_topmost(self.overlay)
+                self.overlay.raise_()
+            self._last_geometry = (rect, (self.overlay.width(), self.overlay.height()))
             if not self.attached:
                 set_current_step("running")
         self.attached = True
         self.last_reason = "已附加"
+        if self._last_log_reason != self.last_reason:
+            logger.debug("overlay_attach 状态：%s", self.last_reason)
+            self._last_log_reason = self.last_reason
 
     def _reason(self, text: str) -> None:
         self.last_reason = text
+        if self._last_log_reason != text:
+            logger.debug("overlay_attach 状态：%s", text)
+            self._last_log_reason = text
+        if not _widget_alive(self.overlay):
+            return
         if text:
             self.overlay.set_status(text)
-        if not self.overlay.isVisible():
+        if _widget_visible(self.overlay):
             self.overlay.hide()
