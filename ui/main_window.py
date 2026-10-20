@@ -166,8 +166,8 @@ class MainWindow(QMainWindow):
         self._history_window_days: int | None = None
 
         self.setWindowTitle("Delta Client - 三角洲行动队友房间")
-        self.resize(1200, 780)
-        self.setMinimumSize(1020, 680)
+        self.resize(1120, 720)
+        self.setMinimumSize(1024, 680)
         self._build_ui()
         self._wire_views()
         self._refresh_status_bar()
@@ -225,9 +225,13 @@ class MainWindow(QMainWindow):
         self._auto_controller.operator_detected.connect(self._on_auto_operator_detected)
         self._apply_auto_config()
 
+        self._status_text = QLabel("未登录")
+        self._status_text.setObjectName("Muted")
+        self.statusBar().addWidget(self._status_text, 1)
         self._server_label = QLabel()
         self._server_label.setObjectName("Muted")
         self.statusBar().addPermanentWidget(self._server_label)
+        self.statusBar().setSizeGripEnabled(False)
 
     def _wire_views(self) -> None:
         self.login_view.login_requested.connect(self._on_login)
@@ -280,7 +284,10 @@ class MainWindow(QMainWindow):
         return self.session.user_id
 
     def _set_status(self, message: str) -> None:
-        self.statusBar().showMessage(str(message), 8000)
+        text = str(message)
+        if hasattr(self, "_status_text"):
+            self._status_text.setText(text)
+        self.statusBar().clearMessage()
 
     def _refresh_status_bar(self) -> None:
         self._server_label.setText(
@@ -426,7 +433,7 @@ class MainWindow(QMainWindow):
             self.saved_logins.upsert(account, password)
             self._refresh_saved_login_view()
         if result.token:
-            self._set_status(f"登录成功：{self._username()}")
+            self._set_status(f"✓ 登录成功：{self._username()}")
         else:
             # 后端 B 阶段前 /api/users/login 不返回 JWT，保留兼容分支
             self._set_status("登录成功，但服务器未返回 JWT（PROTOCOL B 阶段才上线）")

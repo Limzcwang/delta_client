@@ -38,14 +38,14 @@ class RoomListView(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(30, 24, 30, 20)
+        root.setContentsMargins(26, 18, 26, 14)
         root.setSpacing(14)
 
+        # 表头：标题/副标题 + LIVE + 用户 + 连接设置/个人资料
         header = QHBoxLayout()
         header.setSpacing(12)
-
         titles = QVBoxLayout()
-        titles.setSpacing(4)
+        titles.setSpacing(3)
         title = QLabel("房间大厅")
         title.setObjectName("PageTitle")
         self.subtitle = QLabel("选择公共房间，或用房间号加入私有房间")
@@ -55,39 +55,48 @@ class RoomListView(QWidget):
         header.addLayout(titles)
         header.addStretch(1)
 
-        self.mode_badge = QLabel("MOCK")
-        self.mode_badge.setObjectName("BadgeMock")
+        self.mode_badge = QLabel("LIVE")
+        self.mode_badge.setObjectName("BadgeLive")
         header.addWidget(self.mode_badge, alignment=Qt.AlignmentFlag.AlignVCenter)
-
         self.user_label = QLabel("当前用户：-")
         self.user_label.setObjectName("Muted")
         header.addWidget(self.user_label, alignment=Qt.AlignmentFlag.AlignVCenter)
+        from PySide6.QtWidgets import QFrame
+
+        sep = QFrame()
+        sep.setObjectName("VSeparator")
+        sep.setFixedWidth(1)
+        sep.setFixedHeight(22)
+        header.addWidget(sep)
+        self.settings_button = QPushButton("连接设置")
+        self.settings_button.setObjectName("Ghost")
+        self.settings_button.clicked.connect(self.settings_requested.emit)
+        self.profile_button = QPushButton("个人资料")
+        self.profile_button.setObjectName("Outline")
+        self.profile_button.clicked.connect(self.profile_requested.emit)
+        header.addWidget(self.settings_button)
+        header.addWidget(self.profile_button)
         root.addLayout(header)
 
+        # 工具栏
         actions = QHBoxLayout()
         actions.setSpacing(10)
         self.refresh_button = QPushButton("刷新列表")
+        self.refresh_button.setObjectName("Ghost")
         self.refresh_button.clicked.connect(self.refresh_requested.emit)
         self.create_button = QPushButton("创建房间")
         self.create_button.setObjectName("Primary")
         self.create_button.clicked.connect(self.create_requested.emit)
-        self.join_button = QPushButton("加入房间")
-        self.join_button.clicked.connect(self._emit_join)
-        self.profile_button = QPushButton("个人资料")
-        self.profile_button.clicked.connect(self.profile_requested.emit)
-        self.logout_button = QPushButton("退出登录")
-        self.logout_button.clicked.connect(self.logout_requested.emit)
-        self.settings_button = QPushButton("连接设置")
-        self.settings_button.setObjectName("Link")
-        self.settings_button.clicked.connect(self.settings_requested.emit)
-
         actions.addWidget(self.refresh_button)
         actions.addWidget(self.create_button)
-        actions.addWidget(self.join_button)
         actions.addStretch(1)
-        actions.addWidget(self.profile_button)
-        actions.addWidget(self.settings_button)
-        actions.addWidget(self.logout_button)
+        # 保留旧入口但不进入新视觉布局（加入改为双击行）
+        self.join_button = QPushButton("加入房间")
+        self.join_button.clicked.connect(self._emit_join)
+        self.join_button.hide()
+        self.logout_button = QPushButton("退出登录")
+        self.logout_button.clicked.connect(self.logout_requested.emit)
+        self.logout_button.hide()
         root.addLayout(actions)
 
         self.table = QTableWidget(0, self.COLUMNS)
@@ -95,38 +104,46 @@ class RoomListView(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setAlternatingRowColors(True)
+        self.table.setAlternatingRowColors(False)
         self.table.setShowGrid(False)
+        self.table.setSortingEnabled(False)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(38)
+        self.table.verticalHeader().setDefaultSectionSize(42)
+        self.table.horizontalHeader().setFixedHeight(42)
+        for column in (2, 3):
+            item = self.table.horizontalHeaderItem(column)
+            if item is not None:
+                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.table.setColumnWidth(0, 120)
+        self.table.setColumnWidth(2, 80)
+        self.table.setColumnWidth(3, 80)
         header_view = self.table.horizontalHeader()
-        header_view.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header_view.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         header_view.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header_view.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        header_view.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header_view.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        header_view.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         self.table.cellDoubleClicked.connect(self._on_double_click)
 
         self.public_tab = QWidget()
         public_layout = QVBoxLayout(self.public_tab)
-        public_layout.setContentsMargins(0, 8, 0, 0)
+        public_layout.setContentsMargins(0, 10, 0, 0)
         public_layout.addWidget(self.table)
         self.my_rooms = MyRoomsView()
         self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
+        self.tabs.tabBar().setExpanding(False)
         self.tabs.addTab(self.public_tab, "公共房间")
         self.tabs.addTab(self.my_rooms, "我的房间")
         root.addWidget(self.tabs, stretch=1)
 
-        footer = QHBoxLayout()
+        # 状态由主窗口 statusBar 统一展示；保留字段兼容旧逻辑
         self.status_label = QLabel("尚未加载房间")
         self.status_label.setObjectName("Muted")
-        self.auto_hint = QLabel("大厅每 5s 自动刷新")
-        self.auto_hint.setObjectName("Hint")
-        note = QLabel("私有房间不会出现在公共列表，需要输入 5 位房间号和密码加入")
-        note.setObjectName("Hint")
-        footer.addWidget(self.status_label, stretch=1)
-        footer.addWidget(self.auto_hint)
-        footer.addWidget(note)
-        root.addLayout(footer)
+        self.status_label.hide()
+        self.auto_hint = QLabel("")
+        self.auto_hint.hide()
+        self.note_label = QLabel("")
+        self.note_label.hide()
 
     # ---------- 对外 ----------
     def set_user(self, display_name: str) -> None:
@@ -134,7 +151,7 @@ class RoomListView(QWidget):
         self.user_label.setText(f"当前用户：{display_name or '-'}")
 
     def set_mode(self, is_mock: bool, server_url: str) -> None:
-        self.mode_badge.setText("MOCK 模式" if is_mock else "LIVE 模式")
+        self.mode_badge.setText("MOCK" if is_mock else "LIVE")
         self.mode_badge.setObjectName("BadgeMock" if is_mock else "BadgeLive")
         self._repolish(self.mode_badge)
         mode_note = "内置演示后端（不联网）" if is_mock else server_url
@@ -235,7 +252,7 @@ class RoomListView(QWidget):
             room.code or "-",
             room.display_name,
             str(room.member_count),
-            "🔒 私有" if room.has_password else "公开",
+            "私有" if room.has_password else "公开",
         ]
         for column, text in enumerate(values):
             item = self.table.item(row, column)
