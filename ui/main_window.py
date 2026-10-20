@@ -111,9 +111,12 @@ class MainWindow(QMainWindow):
         config: AppConfig,
         session: Session | None = None,
         parent: QWidget | None = None,
+        ui_mode: str = "widgets",
     ) -> None:
         super().__init__(parent)
         self.config = config
+        self.ui_mode = str(ui_mode or "widgets")
+        self.qml_lobby = None
         self.session = session or Session(
             persist_token=config.persist_token,
             persist_path=default_session_path(),
@@ -198,6 +201,15 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.login_view)
         self.stack.addWidget(self.room_list_view)
         self.stack.addWidget(self.room_view)
+        if self.ui_mode == "qml-lobby":
+            try:
+                from ui_qml.host import QmlLobbyView
+
+                self.qml_lobby = QmlLobbyView()
+                self.stack.addWidget(self.qml_lobby)
+            except Exception as exc:  # noqa: BLE001 - QML 插件缺失时回退 Widgets
+                logger.warning("QML 大厅不可用，回退 Widgets：%s", exc)
+                self.qml_lobby = None
 
         self.overlay = SkillOverlay()
         self.overlay.set_server_now(self._server_clock.now_ms)
@@ -236,6 +248,9 @@ class MainWindow(QMainWindow):
         self._server_label.setObjectName("Muted")
         self.statusBar().addPermanentWidget(self._server_label)
         self.statusBar().setSizeGripEnabled(False)
+        if self.ui_mode == "qml-lobby":
+            # H0 QML 大厅自带状态栏，避免主窗口状态栏重复。
+            self.statusBar().hide()
 
     def _wire_views(self) -> None:
         self.login_view.login_requested.connect(self._on_login)
@@ -371,7 +386,12 @@ class MainWindow(QMainWindow):
     def _show_rooms(self) -> None:
         self.room_list_view.set_user(self._username())
         self.room_list_view.set_mode(self.config.use_mock, self.config.server_url)
-        self.stack.setCurrentWidget(self.room_list_view)
+        if self.qml_lobby is not None:
+            self.qml_lobby.set_user(self._username())
+            self.qml_lobby.set_mode(self.config.use_mock, self.config.server_url)
+            self.stack.setCurrentWidget(self.qml_lobby)
+        else:
+            self.stack.setCurrentWidget(self.room_list_view)
         if self.session.is_logged_in:
             self._register_hotkeys()
         else:
