@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import unittest
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest import mock
 
@@ -182,39 +183,88 @@ class RoomOverlayFixTests(unittest.TestCase):
             window.removeEventFilter(filt)
             self._close(window)
 
-    def test_global_hotkey_success_disables_shortcuts(self) -> None:
+    def test_auto_show_starts_overlay_when_logged_in(self) -> None:
         window = self._window()
         try:
-            window.hotkeys._registered = {"toggle": 1, "edit": 2}
-            window.hotkeys._failed = {}
-            with mock.patch.object(window.hotkeys, "register_all", return_value={}):
-                window._register_hotkeys()
-            self.assertFalse(window._toggle_shortcut.isEnabled())
-            self.assertFalse(window._edit_shortcut.isEnabled())
-            window.hotkeys._registered = {}
-            window.hotkeys._failed = {"toggle": "占用"}
-            window._hotkey_signature = None
-            with mock.patch.object(window.hotkeys, "register_all", return_value={"toggle": "占用"}):
-                window._register_hotkeys()
-            self.assertTrue(window._toggle_shortcut.isEnabled())
-            self.assertTrue(window._edit_shortcut.isEnabled())
+            window.config = replace(window.config, overlay_auto_show=True)
+            window._find_game_window = lambda: None
+            calls = []
+            window.overlay_controller.start = lambda: calls.append("start")
+            window.overlay_controller.follow = lambda force=False: calls.append("follow")
+            window._apply_overlay_config()
+            self.assertIn("start", calls)
+            self.assertIn("follow", calls)
         finally:
             self._close(window)
 
-    def test_hotkey_toggle_and_200ms_dedupe(self) -> None:
+    def test_auto_hide_and_manual_hide_suppression(self) -> None:
         window = self._window()
         try:
-            window._hotkey_ready = lambda: True
-            window._find_game_window = lambda: SimpleNamespace(pid=1, title="三角洲行动", client_rect=(0, 0, 1600, 900), is_minimized=False)
-            window._on_global_hotkey("toggle")
+            window.config = replace(window.config, overlay_auto_show=True)
+            fake = SimpleNamespace(pid=1, title="三角洲行动", client_rect=(0, 0, 1600, 900), is_minimized=False)
+            window._resolve_game_window = lambda **k: SimpleNamespace(window=fake, candidates=[], reason="ok")
+            window._overlay_manual_hidden = False
+            window._auto_game_present = False
+            def fake_start():
+                window.overlay_controller.enabled = True
+                window.overlay.show()
+            window.overlay_controller.start = fake_start
+            window.overlay_controller.follow = lambda force=False: None
+            window.overlay_controller.stop = lambda: setattr(window.overlay_controller, "enabled", False)
+            window._tick_auto_overlay()
             self.assertTrue(window.overlay_controller.enabled)
-            self.assertIn("已显示", window.room_view.status_label.text())
-            window._on_global_hotkey("toggle")  # <200ms 双触发去重
-            self.assertTrue(window.overlay_controller.enabled)
-            QTest.qWait(220)
-            window._on_global_hotkey("toggle")
+            self.assertIn("隐藏悬浮窗", window.room_view.overlay_toggle_button.text())
+            window._toggle_overlay()  # 手动隐藏
+            self.assertTrue(window._overlay_manual_hidden)
+            window._tick_auto_overlay()
+            self.assertFalse(window.overlay_controller.enabled)  # 本次游戏内不再自动弹
+            window._resolve_game_window = lambda **k: SimpleNamespace(window=None, candidates=[], reason="none")
+            window._tick_auto_overlay()
+            window._resolve_game_window = lambda **k: SimpleNamespace(window=fake, candidates=[], reason="ok")
+            window._tick_auto_overlay()
+            self.assertTrue(window.overlay_controller.enabled)  # 重新进入游戏重置
+        finally:
+            self._close(window)
+
+    def test_tray_menu_actions_trigger_overlay(self) -> None:
+        window = self._window()
+        try:
+            if not hasattr(window, "tray_toggle_action"):
+                self.skipTest("系统托盘不可用")
+            calls = []
+            window._toggle_overlay = lambda: calls.append("toggle")
+            window._toggle_overlay_edit = lambda: calls.append("edit")
+            window.tray_toggle_action.trigger()
+            window.tray_edit_action.trigger()
+            self.assertEqual(["toggle", "edit"], calls)
+        finally:
+            self._close(window)
+
+    def test_auto_tick_hides_when_window_lost(self) -> None:
+        window = self._window()
+        try:
+            window.config = replace(window.config, overlay_auto_show=True)
+            window.overlay_controller.enabled = True
+            window.overlay.show()
+            window._overlay_visible = True
+            window._resolve_game_window = lambda **k: SimpleNamespace(window=None, candidates=[], reason="none")
+            window._auto_game_present = True
+            window._tick_auto_overlay()
             self.assertFalse(window.overlay_controller.enabled)
-            self.assertIn("已隐藏", window.room_view.status_label.text())
+            self.assertFalse(window.overlay.isVisible())
+            self.assertIn("显示悬浮窗", window.room_view.overlay_toggle_button.text())
+        finally:
+            self._close(window)
+
+    def test_room_fallback_buttons_trigger_overlay_actions(self) -> None:
+        window = self._window()
+        try:
+            calls = []
+            window._toggle_overlay = lambda: calls.append("toggle")
+            window._toggle_overlay_edit = lambda: calls.append("edit")
+            window.room_view.overlay_toggle_button.click()
+            window.room_view.overlay_edit_button.click()
+            self.assertEqual(["toggle", "edit"], calls)
         finally:
             self._close(window)
 
@@ -295,23 +345,6 @@ class RoomOverlayFixTests(unittest.TestCase):
             window._ws = fake
             window._on_ws_message(1, {"type": "room_joined", "room": {"id": "b", "code": "BBBBB", "name": "B"}})
             self.assertEqual(2, fake.off_count)
-        finally:
-            self._close(window)
-
-    def test_test_hotkey_no_game_message(self) -> None:
-        window = self._window()
-        try:
-            messages = []
-            statuses = []
-            class Dialog:
-                def set_hotkey_status(self, text):
-                    messages.append(text)
-            window._hotkey_ready = lambda: False
-            window._find_game_window_result = lambda **k: SimpleNamespace(window=None, candidates=[], reason="none")
-            window._set_status = lambda text: statuses.append(text)
-            window._on_test_hotkey(Dialog())
-            self.assertTrue(any("无游戏窗口" in text for text in messages))
-            self.assertTrue(statuses)
         finally:
             self._close(window)
 

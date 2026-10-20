@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import time
 from ctypes import wintypes
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -113,6 +114,9 @@ class GlobalHotkeyManager(QObject):
         self._registered: dict[str, int] = {}
         self._failed: dict[str, str] = {}
         self._specs: dict[str, HotkeySpec] = {}
+        self.started_at = 0.0
+        self.last_message_at = 0.0
+        self.message_count = 0
 
     @property
     def registered_actions(self) -> set[str]:
@@ -126,6 +130,7 @@ class GlobalHotkeyManager(QObject):
         if not self._installed and QApplication.instance() is not None:
             QApplication.instance().installNativeEventFilter(self._filter)
             self._installed = True
+            self.started_at = time.monotonic()
             logger.info("nativeEventFilter 已安装 hwnd=%s", self._hwnd)
 
     def stop(self) -> None:
@@ -185,6 +190,8 @@ class GlobalHotkeyManager(QObject):
     def handle_message(self, message: int, wparam: int) -> bool:
         if int(message) != WM_HOTKEY:
             return False
+        self.message_count += 1
+        self.last_message_at = time.monotonic()
         for action, hotkey_id in self._registered.items():
             if int(wparam) == hotkey_id:
                 logger.info("WM_HOTKEY 命中 action=%s id=%s", action, hotkey_id)

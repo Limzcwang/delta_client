@@ -153,6 +153,7 @@ class AppConfig:
     hud_profile: dict[str, Any] | None = None
     server_migrated: bool = False
     overlay_enabled: bool = False
+    overlay_auto_show: bool = True
     overlay_opacity: int = 30
     overlay_scale: float = 1.0
     overlay_x: int | None = None
@@ -190,6 +191,7 @@ class AppConfig:
             "operator_id": self.operator_id,
             "hud_profile": self.hud_profile,
             "overlay_enabled": self.overlay_enabled,
+            "overlay_auto_show": self.overlay_auto_show,
             "overlay_opacity": self.overlay_opacity,
             "overlay_scale": self.overlay_scale,
             "overlay_x": self.overlay_x,
@@ -316,6 +318,7 @@ def load_config(
     if not isinstance(hud_profile, dict):
         hud_profile = None
     overlay_enabled = parse_bool(file_data.get("overlay_enabled"), False)
+    overlay_auto_show = parse_bool(file_data.get("overlay_auto_show"), True)
     try:
         overlay_opacity = min(100, max(10, int(file_data.get("overlay_opacity", 30))))
     except (TypeError, ValueError):
@@ -366,6 +369,7 @@ def load_config(
         hud_profile=hud_profile,
         server_migrated=server_migrated,
         overlay_enabled=overlay_enabled,
+        overlay_auto_show=overlay_auto_show,
         overlay_opacity=overlay_opacity,
         overlay_scale=overlay_scale,
         overlay_x=overlay_x,

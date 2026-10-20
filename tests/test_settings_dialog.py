@@ -66,6 +66,9 @@ class SettingsOperatorTests(unittest.TestCase):
         self.assertIsNotNone(dialog.detect_window_button)
         self.assertTrue(dialog.auto_operator_check.isChecked())
         self.assertAlmostEqual(0.65, dialog.operator_threshold_spin.value())
+        from PySide6.QtWidgets import QLabel
+        self.assertTrue(dialog.overlay_auto_show_check.isChecked())
+        self.assertTrue(any("反作弊" in label.text() for label in dialog.findChildren(QLabel)))
         self.assertFalse(dialog.hud_debug_check.isChecked())
         self.assertEqual(140, dialog.brightness_spin.value())
         self.assertIn("亮度阈值", dialog.hud_profile_label.text())
@@ -151,33 +154,27 @@ class SettingsOperatorTests(unittest.TestCase):
         finally:
             dialog.removeEventFilter(filt)
 
-    def test_hotkey_test_button_emits(self) -> None:
-        from PySide6.QtWidgets import QPushButton
-
+    def test_overlay_tab_has_no_hotkey_controls(self) -> None:
         dialog = self._dialog("honglang")
-        seen: list[bool] = []
-        dialog.hotkey_test_requested.connect(lambda: seen.append(True))
-        dialog.test_hotkey_button.click()
-        self.assertEqual([True], seen)
+        self.assertFalse(hasattr(dialog, "shortcut_toggle_edit"))
+        self.assertFalse(hasattr(dialog, "shortcut_edit_edit"))
+        self.assertFalse(hasattr(dialog, "test_hotkey_button"))
+        self.assertIn("反作弊", dialog.hotkey_status_label.text())
 
     def test_overlay_settings_persist(self) -> None:
         dialog = self._dialog("honglang")
         self.assertFalse(dialog.overlay_enabled_check.isChecked())
         dialog.overlay_enabled_check.setChecked(True)
+        dialog.overlay_auto_show_check.setChecked(True)
         dialog.overlay_opacity_spin.setValue(55)
         dialog.overlay_scale_spin.setValue(1.2)
-        dialog.shortcut_toggle_edit.setKeySequence("Ctrl+Alt+D")
-        dialog.shortcut_edit_edit.setKeySequence("Ctrl+Alt+E")
-        dialog.set_hotkey_status("快捷键被其他程序占用，请换一个：F9")
-        self.assertIn("占用", dialog.hotkey_status_label.text())
         dialog._overlay_position_reset = True
         dialog.accept()
         result = dialog.config_result()
         self.assertTrue(result.overlay_enabled)
+        self.assertTrue(result.overlay_auto_show)
         self.assertEqual(55, result.overlay_opacity)
         self.assertAlmostEqual(1.2, result.overlay_scale)
-        self.assertEqual("Ctrl+Alt+D", result.shortcut_toggle)
-        self.assertEqual("Ctrl+Alt+E", result.shortcut_edit)
         self.assertIsNone(result.overlay_x)
         self.assertIsNone(result.overlay_y)
 
@@ -194,14 +191,6 @@ class SettingsOperatorTests(unittest.TestCase):
         dialog = self._dialog("weilong")
         dialog.set_operator_recognition_status("当前识别：红狼（置信度 0.83）")
         self.assertIn("红狼", dialog.operator_recognition_label.text())
-
-    def test_overlay_shortcut_conflict_rejected(self) -> None:
-        dialog = self._dialog("honglang")
-        dialog.shortcut_toggle_edit.setKeySequence("Ctrl+Shift+X")
-        dialog.shortcut_edit_edit.setKeySequence("Ctrl+Shift+X")
-        dialog.accept()
-        self.assertFalse(dialog.error_label.isHidden())
-        self.assertIn("不能相同", dialog.error_label.text())
 
     def test_invalid_saved_falls_back_and_persists(self) -> None:
         dialog = self._dialog("no-such-operator")
