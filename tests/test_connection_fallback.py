@@ -12,6 +12,7 @@ try:
     from PySide6.QtWidgets import QApplication
 
     from config import AppConfig, FALLBACK_SERVER_URL, connection_candidates
+    from core.connection import ConnectionCheck, probe_from_error, probe_ok
     from core.errors import ApiError, ErrorKind
     from net.api_client import LoginResult
     from state.session import Session
@@ -20,6 +21,46 @@ try:
     HAS_QT = True
 except Exception:  # noqa: BLE001
     HAS_QT = False
+
+
+class CandidateProbeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_network_false_continues_to_next(self) -> None:
+        from ui import main_window
+
+        checks = {
+            "https://a": ConnectionCheck("https://a", probe_from_error("health", ApiError(ErrorKind.NETWORK)), probe_from_error("rooms", ApiError(ErrorKind.NETWORK))),
+            "https://b": ConnectionCheck("https://b", probe_ok("health", "ok"), probe_ok("rooms", "ok")),
+        }
+        async def fake(url, token, timeout=8.0):
+            return checks[url]
+        original = main_window._run_connection_check
+        main_window._run_connection_check = fake
+        try:
+            url, check = await main_window._run_connection_check_candidates(["https://a", "https://b"], None)
+        finally:
+            main_window._run_connection_check = original
+        self.assertEqual("https://b", url)
+        self.assertTrue(check.ok)
+
+    async def test_business_failure_stops(self) -> None:
+        from ui import main_window
+
+        business = ConnectionCheck("https://a", probe_ok("health", "ok"), probe_from_error("rooms", ApiError(ErrorKind.AUTH, "401", status=401)))
+        calls = []
+        async def fake(url, token, timeout=8.0):
+            calls.append(url)
+            if url == "https://b":
+                raise AssertionError("业务失败不应继续候选")
+            return business
+        original = main_window._run_connection_check
+        main_window._run_connection_check = fake
+        try:
+            url, check = await main_window._run_connection_check_candidates(["https://a", "https://b"], None)
+        finally:
+            main_window._run_connection_check = original
+        self.assertEqual("https://a", url)
+        self.assertFalse(check.ok)
+        self.assertEqual(["https://a"], calls)
 
 
 class CandidateTests(unittest.TestCase):
@@ -96,6 +137,7 @@ class LoginFallbackTests(unittest.TestCase):
             window._login_candidate_index = 2
             window._on_login_candidates_failed()
             self.assertTrue(any("443/8443" in text for text in errors))
+            self.assertTrue(any("已尝试" in text for text in errors))
         finally:
             self._close(window)
 

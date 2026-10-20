@@ -39,6 +39,7 @@ from core.canvas import (
     parse_canvas_snapshot,
 )
 from core.chat import ChatTimeline
+from core.connection import is_network_failure
 from core.errors import ApiError, ErrorKind, to_user_message
 from core.models import (
     ChatMessage,
@@ -585,8 +586,12 @@ class MainWindow(QMainWindow):
         if self.qml_login is not None:
             self.qml_login.set_busy(False)
             self.qml_login.show_error("无法连接服务器（已尝试 443/8443）")
-        self.login_view.show_error("无法连接服务器（已尝试 443/8443）")
-        self._set_status("无法连接服务器（已尝试 443/8443）")
+        attempted = ", ".join(getattr(self, "_login_candidates", []))
+        text = "无法连接服务器（已尝试 443/8443）"
+        if attempted:
+            text += f"\n已尝试：{attempted}"
+        self.login_view.show_error(text)
+        self._set_status(text)
 
 
     def _on_login_success(
@@ -2922,11 +2927,24 @@ class MainWindow(QMainWindow):
         candidates = connection_candidates(server_url)
         self._safe_submit(
             _run_connection_check_candidates(candidates, self.session.token, timeout=8.0),
-            lambda result: self._update_test_dialog(
-                dialog, f"{result[0]}：{result[1].format_text()}", result[1].ok
-            ),
+            lambda result: self._finish_test_connection(dialog, result, candidates),
             lambda exc: self._update_test_dialog(dialog, f"测试失败：{to_user_message(exc)}", False),
         )
+
+    @staticmethod
+    def _finish_test_connection(dialog: SettingsDialog, result: Any, candidates: list[str]) -> None:
+        server_url, check = result
+        if server_url is None or check is None:
+            detail = ""
+            if isinstance(check, BaseException):
+                detail = f"\n{to_user_message(check)}"
+            text = (
+                "无法连接服务器（已尝试 443/8443）"
+                f"\n已尝试：{', '.join(candidates)}{detail}"
+            )
+            MainWindow._update_test_dialog(dialog, text, False)
+            return
+        MainWindow._update_test_dialog(dialog, f"{server_url}：{check.format_text()}", check.ok)
 
     @staticmethod
     def _update_test_dialog(dialog: SettingsDialog, text: str, ok: bool) -> None:
@@ -3082,14 +3100,22 @@ class MainWindow(QMainWindow):
 
 async def _run_connection_check_candidates(
     server_urls: list[str], token: str | None, timeout: float = 8.0
-) -> tuple[str, Any]:
-    last_exc: BaseException | None = None
+) -> tuple[str | None, Any]:
+    last: Any = None
     for server_url in server_urls:
         try:
-            return server_url, await _run_connection_check(server_url, token, timeout)
+            check = await _run_connection_check(server_url, token, timeout)
         except Exception as exc:  # noqa: BLE001
-            last_exc = exc
-    raise last_exc or ApiError(ErrorKind.NETWORK, "无法连接服务器")
+            last = exc
+            continue
+        if check.ok:
+            return server_url, check
+        if is_network_failure(check):
+            last = check
+            continue
+        # 业务错误（401/403/404/500）：TCP 可达，停止并展示该结果
+        return server_url, check
+    return None, last
 
 
 async def _run_connection_check(server_url: str, token: str | None, timeout: float = 8.0) -> Any:
