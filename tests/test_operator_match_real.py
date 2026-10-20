@@ -35,8 +35,8 @@ class RealAvatarMatchTests(unittest.TestCase):
             frame = np.zeros((max(1440, height + 10), max(2560, width + 10), 3), dtype=np.uint8)
             frame[5 : 5 + height, 5 : 5 + width] = avatar
             target_roi = Roi(5, 5, width, height)
-            operator_id, score = recognize_operator(frame, target_roi, catalog, threshold=0.70)
-            self.assertGreaterEqual(score, 0.70, operator.display_name)
+            operator_id, score = recognize_operator(frame, target_roi, catalog, threshold=0.90)
+            self.assertGreaterEqual(score, 0.90, operator.display_name)
             self.assertEqual(operator.id, operator_id, operator.display_name)
             matched.append(operator.id)
         self.assertEqual(17, len(matched))

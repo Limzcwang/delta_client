@@ -81,6 +81,18 @@ def _template_mask(template_gray: Any, scale: float = 1.0) -> Any:
     return mask
 
 
+def _prepare_number_region(image: Any) -> Any:
+    """无绿色编号时与模板一致填黑；有编号时用 inpaint 清理。"""
+    if image is None:
+        return image
+    mask = _green_number_mask(image)
+    if mask is None:
+        return mask_position_number(image.copy())
+    # 先 inpaint 去掉数字，再把模板对应的左上区域统一填黑，保证和干净模板一致。
+    cleaned = _clean_green_number(image.copy(), inpaint=True)
+    return mask_position_number(cleaned)
+
+
 def _score_patch(patch: Any, template_gray: Any, mask: Any = None) -> float:
     try:
         import cv2  # type: ignore[import-not-found]
@@ -118,7 +130,7 @@ def match_operator_template(
         return "", 0.0
     if target is None or target.size == 0:
         return "", 0.0
-    target = _clean_green_number(target, inpaint=True)
+    target = _prepare_number_region(target)
     target_gray = cv2.cvtColor(target, cv2.COLOR_BGR2GRAY)
     best_id, best_score = "", 0.0
     for operator_id, template in templates.items():
@@ -240,7 +252,7 @@ def recognize_operator_auto(
         region = frame[y0:y1, x0:x1]
         if region.size:
             for inpaint in (True, False):
-                processed = _clean_green_number(region.copy(), inpaint=inpaint)
+                processed = _prepare_number_region(region) if inpaint else _clean_green_number(region.copy(), inpaint=False)
                 gray = cv2.cvtColor(processed, cv2.COLOR_BGR2GRAY) if processed.ndim == 3 else processed
                 if gray.shape[0] < th or gray.shape[1] < tw:
                     continue
