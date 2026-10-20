@@ -118,6 +118,8 @@ class MainWindow(QMainWindow):
         self.ui_mode = str(ui_mode or "widgets")
         self.qml_lobby = None
         self.qml_login = None
+        self.qml_conn = None
+        self.qml_profile = None
         self.session = session or Session(
             persist_token=config.persist_token,
             persist_path=default_session_path(),
@@ -222,6 +224,14 @@ class MainWindow(QMainWindow):
 
                 self.qml_login = QmlLoginView()
                 self.stack.addWidget(self.qml_login)
+                from ui_qml.settings_host import QmlConnView, QmlProfileView
+
+                self.qml_conn = QmlConnView()
+                self.qml_profile = QmlProfileView()
+                self.stack.addWidget(self.qml_conn)
+                self.stack.addWidget(self.qml_profile)
+                self.qml_conn.back_requested.connect(self._show_rooms)
+                self.qml_profile.back_requested.connect(self._show_rooms)
                 self.qml_login.bridge.login_requested.connect(self._on_login)
                 self.qml_login.bridge.register_requested.connect(self._on_register)
                 self.qml_login.bridge.history_selected.connect(self._on_saved_login_selected)
@@ -2058,7 +2068,10 @@ class MainWindow(QMainWindow):
 
     # ---------- 设置（含个人资料） ----------
     def _on_profile(self) -> None:
-        self._show_profile_page()
+        if self.ui_mode == "qml" and self.qml_profile is not None:
+            self.stack.setCurrentWidget(self.qml_profile)
+        else:
+            self._show_profile_page()
 
     def _on_nickname_save(self, dialog: SettingsDialog, nickname: str) -> None:
         self._safe_submit(
@@ -2445,7 +2458,10 @@ class MainWindow(QMainWindow):
             self.room_view.set_status(f"已切换干员：{state.operator or state.operator_id}")
 
     def _on_settings(self) -> None:
-        self._show_connection_page()
+        if self.ui_mode == "qml" and self.qml_conn is not None:
+            self.stack.setCurrentWidget(self.qml_conn)
+        else:
+            self._show_connection_page()
 
     def _remember_page_return(self) -> None:
         current = self.stack.currentWidget()

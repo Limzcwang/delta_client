@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QUrl, Qt, Signal
-from PySide6.QtQml import qmlRegisterSingletonType
+from PySide6.QtQml import QQmlEngine, qmlRegisterSingletonType
 from PySide6.QtQuickWidgets import QQuickWidget
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
@@ -42,10 +42,11 @@ class QmlLobbyView(QWidget):
         self.bridge.join_requested.connect(self.join_requested.emit)
         self.bridge.settings_requested.connect(self.settings_requested.emit)
         self.bridge.profile_requested.connect(self.profile_requested.emit)
-        self.quick = QQuickWidget()
+        self.engine = QQmlEngine(self)
+        self.quick = QQuickWidget(self.engine, self)
         self.quick.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
         self.quick.setClearColor(Qt.GlobalColor.transparent)
-        engine = self.quick.engine()
+        engine = self.engine
         engine.addImportPath(str(self._base))
         engine.rootContext().setContextProperty("lobbyApi", self.bridge)
         engine.rootContext().setContextProperty("roomsModel", self.bridge.public_model)

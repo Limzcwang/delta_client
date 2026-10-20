@@ -22,6 +22,27 @@ TOKENS = {
     "success": "#5fc98e",
 }
 
+
+UI_METRICS = {
+    "fontFamily": "Microsoft YaHei",
+    "fontSizeBody": 13,
+    "fontSizeSmall": 12,
+    "fontSizeHint": 11,
+    "fontSizeTitle": 22,
+    "fontSizeSection": 14,
+    "radiusCard": 8,
+    "radiusControl": 6,
+    "buttonHeight": 34,
+    "inputHeight": 38,
+    "switchWidth": 40,
+    "switchHeight": 22,
+    "rowHeight": 42,
+    "statusHeight": 30,
+    "pagePadding": 26,
+    "pagePaddingV": 14,
+    "gap": 12,
+}
+
 APP_STYLESHEET = """
 QWidget {
     background-color: #151a21;

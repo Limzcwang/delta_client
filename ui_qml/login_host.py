@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QUrl
+from PySide6.QtQml import QQmlEngine
 from PySide6.QtQuickWidgets import QQuickWidget
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
@@ -18,9 +19,10 @@ class QmlLoginView(QWidget):
         self.bridge = LoginBridge()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        self.quick = QQuickWidget()
+        self.engine = QQmlEngine(self)
+        self.quick = QQuickWidget(self.engine, self)
         self.quick.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
-        engine = self.quick.engine()
+        engine = self.engine
         engine.addImportPath(str(self._base))
         engine.rootContext().setContextProperty("loginApi", self.bridge)
         engine.rootContext().setContextProperty("historyModel", self.bridge.history_model)

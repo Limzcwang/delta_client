@@ -89,6 +89,29 @@ class QmlLobbySmokeTests(unittest.TestCase):
             view.close()
             view.deleteLater()
 
+    def test_qml_settings_pages_load(self) -> None:
+        try:
+            from ui_qml.settings_host import QmlConnView, QmlProfileView
+        except Exception:  # noqa: BLE001
+            self.skipTest("QtQuick QML 不可用")
+        try:
+            conn = QmlConnView()
+            profile = QmlProfileView()
+        except RuntimeError as exc:
+            self.skipTest(f"QtQuick QML 插件不可用：{exc}")
+        try:
+            conn.resize(1120, 720)
+            profile.resize(1120, 720)
+            self.assertIsNotNone(conn.root)
+            self.assertIsNotNone(profile.root)
+            profile.root.setProperty("passwordExpanded", True)
+            self.assertTrue(profile.root.property("passwordExpanded"))
+        finally:
+            conn.close()
+            profile.close()
+            conn.deleteLater()
+            profile.deleteLater()
+
     def test_cli_flag_accepts_qml_lobby(self) -> None:
         from main import build_parser
 

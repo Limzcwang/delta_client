@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Effects
 import ".."
 
 Item {
@@ -69,9 +70,9 @@ Item {
                 }
             }
 
-            Text { text: "密码"; color: "#c8d3e1"; font.family: Theme.fontFamily; font.pixelSize: Theme.fontSizeSmall; font.bold: true }
+            Text { visible: !loginApi.historyVisible; text: "密码"; color: "#c8d3e1"; font.family: Theme.fontFamily; font.pixelSize: Theme.fontSizeSmall; font.bold: true }
             Rectangle {
-                width: parent.width; height: 38
+                visible: !loginApi.historyVisible; width: parent.width; height: 38
                 color: Theme.input; radius: Theme.radiusControl; border.color: passwordInput.activeFocus ? Theme.amber : Theme.border
                 TextInput {
                     id: passwordInput
@@ -93,7 +94,7 @@ Item {
             }
 
             Rectangle {
-                width: parent.width; height: 44; radius: Theme.radiusControl
+                visible: !loginApi.historyVisible; width: parent.width; height: 44; radius: Theme.radiusControl
                 color: loginApi.loading ? "#5a5138" : Theme.amber
                 Text {
                     anchors.centerIn: parent
@@ -107,6 +108,7 @@ Item {
                 }
             }
             Text {
+                visible: !loginApi.historyVisible
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: loginApi.registerMode ? "已有账号？返回登录" : "没有账号？创建账户"
                 color: Theme.amber; font.family: Theme.fontFamily; font.pixelSize: Theme.fontSizeSmall
@@ -115,26 +117,41 @@ Item {
         }
     }
 
-    // 历史账号弹层
-    Rectangle {
-        visible: loginApi.historyVisible
-        anchors.top: parent.top
-        anchors.topMargin: 320
-        anchors.horizontalCenter: parent.horizontalCenter
-        width: 420
+    // 历史账号顶层浮层（Popup，不被卡片裁剪/遮挡）
+    Popup {
+        id: historyPopup
+        parent: Overlay.overlay
+        width: accountInput.width
         height: Math.min(5, Math.max(1, loginApi.historyEntries.length)) * 38 + 36
-        color: Theme.panel2
-        border.color: Theme.border
-        radius: 6
-        z: 10
+        x: Math.round((parent.width - width) / 2)
+        y: 330
+        z: 1000
+        padding: 0
+        modal: false
+        focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        visible: loginApi.historyVisible
+        onClosed: loginApi.hide_history()
 
-        Item {
+        background: Rectangle {
+            color: Theme.panel2
+            border.color: Theme.border
+            border.width: 1
+            radius: 8
+            layer.enabled: true
+            layer.effect: MultiEffect {
+                shadowEnabled: true
+                shadowColor: "#000000"
+                shadowOpacity: 0.55
+                shadowVerticalOffset: 12
+                shadowBlur: 0.7
+            }
+        }
+
+        contentItem: Item {
             id: historyList
-            anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
-            height: Math.min(5, loginApi.historyEntries.length) * 38
-            clip: true
             property int currentIndex: 0
-            focus: loginApi.historyVisible
+            focus: true
             Keys.onDownPressed: currentIndex = Math.min(Math.max(0, loginApi.historyEntries.length - 1), currentIndex + 1)
             Keys.onUpPressed: currentIndex = Math.max(0, currentIndex - 1)
             Keys.onReturnPressed: loginApi.select_history_index(currentIndex)
@@ -171,13 +188,16 @@ Item {
                     }
                 }
             }
-        }
-        Rectangle {
-            anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
-            height: 34; color: "transparent"; border.color: Theme.border
-            Text { anchors.left: parent.left; anchors.leftMargin: 12; anchors.verticalCenter: parent.verticalCenter; text: "清空历史"; color: Theme.muted; font.family: Theme.fontFamily; font.pixelSize: 11 }
-            MouseArea { anchors.fill: parent; onClicked: loginApi.clear_history() }
+            Rectangle {
+                anchors.left: parent.left; anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 34; color: "transparent"
+                Rectangle { anchors.top: parent.top; width: parent.width; height: 1; color: Theme.border }
+                Text { anchors.left: parent.left; anchors.leftMargin: 12; anchors.verticalCenter: parent.verticalCenter; text: "清空历史"; color: Theme.muted; font.family: Theme.fontFamily; font.pixelSize: 11 }
+                MouseArea { anchors.fill: parent; onClicked: loginApi.clear_history() }
+            }
         }
     }
 }
+
 
