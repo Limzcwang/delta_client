@@ -154,6 +154,11 @@ class SettingsOperatorTests(unittest.TestCase):
         finally:
             dialog.removeEventFilter(filt)
 
+    def test_no_shortcut_sequence_widgets(self) -> None:
+        dialog = self._dialog("honglang")
+        from PySide6.QtWidgets import QKeySequenceEdit
+        self.assertEqual([], dialog.findChildren(QKeySequenceEdit))
+
     def test_overlay_tab_has_no_hotkey_controls(self) -> None:
         dialog = self._dialog("honglang")
         self.assertFalse(hasattr(dialog, "shortcut_toggle_edit"))

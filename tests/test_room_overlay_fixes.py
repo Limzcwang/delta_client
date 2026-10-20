@@ -114,7 +114,7 @@ class RoomOverlayFixTests(unittest.TestCase):
     def _window(self):
         session = Session(persist_token=False)
         session.set_login("token", {"id": "12", "username": "DeltaQA01"})
-        window = MainWindow(AppConfig(use_mock=True, persist_token=False), session)
+        window = MainWindow(AppConfig(use_mock=True, persist_token=False, overlay_auto_show=False), session)
         window._current_room = Room(id="1", code="ABC123", name="test")
         window._room_password = None
         window._membership_confirmed = True
@@ -253,6 +253,17 @@ class RoomOverlayFixTests(unittest.TestCase):
             self.assertFalse(window.overlay_controller.enabled)
             self.assertFalse(window.overlay.isVisible())
             self.assertIn("显示悬浮窗", window.room_view.overlay_toggle_button.text())
+        finally:
+            self._close(window)
+
+    def test_no_hotkey_attributes_remain(self) -> None:
+        window = self._window()
+        try:
+            self.assertFalse(hasattr(window, "hotkeys"))
+            self.assertFalse(hasattr(window, "_toggle_shortcut"))
+            self.assertFalse(hasattr(window, "_edit_shortcut"))
+            self.assertEqual("显示悬浮窗", window.room_view.overlay_toggle_button.text())
+            self.assertEqual("编辑悬浮窗", window.room_view.overlay_edit_button.text())
         finally:
             self._close(window)
 

@@ -1027,8 +1027,6 @@ class SettingsDialog(QDialog):
             self.error_label.setText(str(exc))
             self.error_label.show()
             return
-        shortcut_toggle = self._config.shortcut_toggle
-        shortcut_edit = self._config.shortcut_edit
         self._hud_profile = dict(self._hud_profile or {})
         self._hud_profile["brightness_threshold"] = int(self.brightness_spin.value())
         self._result = replace(
@@ -1045,8 +1043,6 @@ class SettingsDialog(QDialog):
             overlay_scale=float(self.overlay_scale_spin.value()),
             overlay_x=None if self._overlay_position_reset else self._config.overlay_x,
             overlay_y=None if self._overlay_position_reset else self._config.overlay_y,
-            shortcut_toggle=shortcut_toggle or "Ctrl+Shift+D",
-            shortcut_edit=shortcut_edit or "Ctrl+Shift+E",
             auto_capture_enabled=self.auto_capture_check.isChecked(),
             auto_loop_enabled=self.auto_loop_check.isChecked(),
             auto_sample_ms=int(self.auto_interval_combo.currentData() or 2000),

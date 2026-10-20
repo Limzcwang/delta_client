@@ -64,6 +64,23 @@ class LoadConfigTests(unittest.TestCase):
         self.assertEqual(cfg.source, "default")
         self.assertEqual(cfg.effective_ws_url, "wss://deltachat.icu/ws")
 
+    def test_public_dict_has_no_hotkey_keys(self) -> None:
+        public = AppConfig().public_dict()
+        self.assertNotIn("shortcut_toggle", public)
+        self.assertNotIn("shortcut_edit", public)
+        self.assertNotIn("hotkeys", public)
+
+    def test_legacy_shortcut_keys_ignored_and_dropped(self) -> None:
+        self._write({"shortcut_toggle": "F9", "shortcut_edit": "F11", "operator_id": "honglang"})
+        cfg = load_config(path=self.config_path, env={})
+        self.assertEqual("honglang", cfg.operator_id)
+        self.assertFalse(hasattr(cfg, "shortcut_toggle"))
+        self.assertNotIn("shortcut_toggle", cfg.public_dict())
+        save_config(cfg, self.config_path)
+        saved = json.loads(self.config_path.read_text(encoding="utf-8"))
+        self.assertNotIn("shortcut_toggle", saved)
+        self.assertNotIn("shortcut_edit", saved)
+
     def test_auto_sample_500_roundtrip(self) -> None:
         for value in (2000, 1000, 500):
             cfg = AppConfig(auto_sample_ms=value)

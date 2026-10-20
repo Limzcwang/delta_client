@@ -158,8 +158,6 @@ class AppConfig:
     overlay_scale: float = 1.0
     overlay_x: int | None = None
     overlay_y: int | None = None
-    shortcut_toggle: str = "Ctrl+Shift+D"
-    shortcut_edit: str = "Ctrl+Shift+E"
     auto_capture_enabled: bool = False
     auto_loop_enabled: bool = False
     auto_sample_ms: int = 2000
@@ -196,8 +194,6 @@ class AppConfig:
             "overlay_scale": self.overlay_scale,
             "overlay_x": self.overlay_x,
             "overlay_y": self.overlay_y,
-            "shortcut_toggle": self.shortcut_toggle,
-            "shortcut_edit": self.shortcut_edit,
             "auto_capture_enabled": self.auto_capture_enabled,
             "auto_loop_enabled": self.auto_loop_enabled,
             "auto_sample_ms": self.auto_sample_ms,
@@ -331,8 +327,6 @@ def load_config(
     overlay_y = file_data.get("overlay_y")
     overlay_x = int(overlay_x) if isinstance(overlay_x, (int, float)) else None
     overlay_y = int(overlay_y) if isinstance(overlay_y, (int, float)) else None
-    shortcut_toggle = str(file_data.get("shortcut_toggle") or "Ctrl+Shift+D")
-    shortcut_edit = str(file_data.get("shortcut_edit") or "Ctrl+Shift+E")
     auto_capture_enabled = parse_bool(file_data.get("auto_capture_enabled"), False)
     auto_loop_enabled = parse_bool(file_data.get("auto_loop_enabled"), False)
     try:
@@ -374,8 +368,6 @@ def load_config(
         overlay_scale=overlay_scale,
         overlay_x=overlay_x,
         overlay_y=overlay_y,
-        shortcut_toggle=shortcut_toggle,
-        shortcut_edit=shortcut_edit,
         auto_capture_enabled=auto_capture_enabled,
         auto_loop_enabled=auto_loop_enabled,
         auto_sample_ms=auto_sample_ms,

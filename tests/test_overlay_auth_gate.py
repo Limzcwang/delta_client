@@ -33,8 +33,6 @@ class OverlayAuthGateTests(unittest.TestCase):
             server_migrated=False,
             overlay_enabled=enabled,
             overlay_auto_show=False,
-            shortcut_toggle="Ctrl+Shift+F9",
-            shortcut_edit="Ctrl+Shift+F10",
         )
         session = Session(persist_token=False)
         if logged_in:
