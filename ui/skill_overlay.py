@@ -146,8 +146,8 @@ class SkillOverlay(QWidget):
         self.setWindowOpacity(1.0 if enabled else max(0.10, min(1.0, self._base_opacity)))
         if enabled:
             self._drag_axis = None
-        if enabled and self.isVisible() and QApplication.activeModalWidget() is None:
-            self.raise_()
+        self.update()
+        logger.info("overlay edit_mode=%s visible=%s opacity=%.2f", enabled, self.isVisible(), self.opacity)
         self.edit_mode_changed.emit(enabled)
 
     @property
@@ -422,6 +422,12 @@ class OverlayController:
                 self.overlay.set_status(self.last_reason)
             return
         self._modal_hide_done = False
+        # 编辑模式：位置由用户拖动决定，不重定位/不重设透明度/不抢 topmost。
+        if self.overlay.edit_mode:
+            self.attached = True
+            self.last_reason = "编辑模式：拖动十字移动"
+            self.overlay.set_status("")
+            return
         window = self.window_provider()
         if window is None:
             self.attached = False

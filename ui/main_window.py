@@ -167,6 +167,8 @@ class MainWindow(QMainWindow):
         self._server_clock = ServerClock()
         self._skill_throttle = SkillShareThrottle(max_events=2, window_ms=1000)
         self._skill_share_enabled = False
+        self._last_hotkey_action = ""
+        self._last_hotkey_at = 0.0
         self._login_candidates: list[str] = []
         self._login_candidate_index = 0
         self._login_credentials = ("", "")
@@ -273,7 +275,7 @@ class MainWindow(QMainWindow):
                 self.qml_login = None
 
         self._ui_trace = str(os.environ.get("DELTA_UI_TRACE", "")).strip() == "1"
-        self._ui_trace_counts = {"paint": 0, "activation": 0, "show": 0, "hide": 0}
+        self._ui_trace_counts = {"paint": 0, "activation": 0, "state": 0, "style": 0, "show": 0, "hide": 0}
         self._ui_trace_timer = QTimer(self)
         self._ui_trace_timer.setInterval(500)
         self._ui_trace_timer.timeout.connect(self._flush_ui_trace)
@@ -286,9 +288,9 @@ class MainWindow(QMainWindow):
         )
         self.overlay.position_changed.connect(self._on_overlay_moved)
         self._toggle_shortcut = QShortcut(QKeySequence(self.config.shortcut_toggle), self)
-        self._toggle_shortcut.activated.connect(self._toggle_overlay)
+        self._toggle_shortcut.activated.connect(lambda: self._on_global_hotkey("toggle"))
         self._edit_shortcut = QShortcut(QKeySequence(self.config.shortcut_edit), self)
-        self._edit_shortcut.activated.connect(self._toggle_overlay_edit)
+        self._edit_shortcut.activated.connect(lambda: self._on_global_hotkey("edit"))
         self.hotkeys = GlobalHotkeyManager(self)
         self.hotkeys.triggered.connect(self._on_global_hotkey)
         self._hotkey_failures = {}
@@ -524,9 +526,17 @@ class MainWindow(QMainWindow):
             if getattr(self, "_ui_trace", False):
                 self._ui_trace_counts["activation"] += 1
                 logger.debug(
-                    "ui_trace activation active=%s visible=%s minimized=%s",
-                    self.isActiveWindow(), self.isVisible(), self.isMinimized(),
+                    "ui_trace activation active=%s visible=%s minimized=%s geometry=%s",
+                    self.isActiveWindow(), self.isVisible(), self.isMinimized(), self.geometry().getRect(),
                 )
+        elif event.type() == QEvent.Type.WindowStateChange:
+            if getattr(self, "_ui_trace", False):
+                self._ui_trace_counts["state"] += 1
+                logger.debug("ui_trace state active=%s minimized=%s", self.isActiveWindow(), self.isMinimized())
+        elif event.type() == QEvent.Type.StyleChange:
+            if getattr(self, "_ui_trace", False):
+                self._ui_trace_counts["style"] += 1
+                logger.debug("ui_trace style")
         super().changeEvent(event)
 
     def paintEvent(self, event: Any) -> None:  # noqa: N802 - Qt 覆盖
@@ -550,11 +560,12 @@ class MainWindow(QMainWindow):
         if not getattr(self, "_ui_trace", False):
             return
         if any(self._ui_trace_counts.values()):
-            logger.info("ui_trace 500ms paint=%s activation=%s show=%s hide=%s active=%s",
+            logger.info("ui_trace 500ms paint=%s activation=%s state=%s style=%s show=%s hide=%s active=%s",
                         self._ui_trace_counts["paint"], self._ui_trace_counts["activation"],
+                        self._ui_trace_counts["state"], self._ui_trace_counts["style"],
                         self._ui_trace_counts["show"], self._ui_trace_counts["hide"],
                         self.isActiveWindow())
-            self._ui_trace_counts.update(paint=0, activation=0, show=0, hide=0)
+            self._ui_trace_counts.update(paint=0, activation=0, state=0, style=0, show=0, hide=0)
 
     # ---------- 认证 ----------
     def _on_login(self, username: str, password: str) -> None:
@@ -1800,6 +1811,12 @@ class MainWindow(QMainWindow):
         # 未登录阶段静默忽略：不提示、不显示、不记错误日志
         if not self.session.is_logged_in:
             return
+        now = time.monotonic()
+        if action == self._last_hotkey_action and now - self._last_hotkey_at < 0.2:
+            logger.info("热键去重 action=%s delta_ms=%.1f", action, (now - self._last_hotkey_at) * 1000)
+            return
+        self._last_hotkey_action = action
+        self._last_hotkey_at = now
         window = self._find_game_window()
         logger.info(
             "全局热键触发 action=%s game_window=%s overlay_enabled=%s edit=%s",
@@ -1836,19 +1853,26 @@ class MainWindow(QMainWindow):
         return self._find_game_window() is not None
 
     def _toggle_overlay(self) -> None:
-        if self.overlay_controller.enabled or self.overlay.isVisible():
+        visible = bool(self.overlay_controller.enabled and self.overlay.isVisible())
+        if visible:
             self.overlay_controller.stop()
             self.overlay.hide()
+            logger.info("overlay toggle hide enabled=%s", self.overlay_controller.enabled)
+            self._set_status("悬浮窗已隐藏")
             self.room_view.set_status("悬浮窗已隐藏")
             return
         if not self._hotkey_ready():
             self.overlay.hide()
-            self._set_status("等待游戏窗口后再显示悬浮窗")
-            self.room_view.set_status("等待游戏窗口后再显示悬浮窗")
+            self._set_status("等待游戏窗口")
+            self.room_view.set_status("等待游戏窗口")
             return
         self.overlay_controller.start()
         self.overlay_controller.follow(force=True)
-        self.room_view.set_status(f"悬浮窗：{self.overlay_controller.last_reason or '等待游戏窗口'}")
+        shown = bool(self.overlay_controller.enabled and self.overlay.isVisible())
+        message = "悬浮窗已显示" if shown else "等待游戏窗口"
+        logger.info("overlay toggle show visible=%s", shown)
+        self._set_status(message)
+        self.room_view.set_status(message)
 
     def _toggle_overlay_edit(self) -> None:
         enabled = not self.overlay.edit_mode
@@ -1858,9 +1882,13 @@ class MainWindow(QMainWindow):
             self.room_view.set_status("等待游戏窗口后再进入编辑模式")
             return
         self.overlay.set_edit_mode(enabled)
-        self.room_view.set_status("悬浮窗编辑模式：可拖动，退出后恢复鼠标穿透" if enabled else "悬浮窗已恢复鼠标穿透")
+        message = "悬浮窗编辑模式：可拖动，退出后恢复鼠标穿透" if enabled else "悬浮窗已恢复鼠标穿透"
+        logger.info("overlay edit toggle enabled=%s visible=%s", enabled, self.overlay.isVisible())
+        self._set_status(message)
+        self.room_view.set_status(message)
 
     def _on_overlay_moved(self, x: int, y: int) -> None:
+        logger.info("overlay moved x=%s y=%s", x, y)
         self.overlay_controller.fixed_position = (int(x), int(y))
         self.config = replace(self.config, overlay_x=int(x), overlay_y=int(y))
         try:
@@ -2888,6 +2916,22 @@ class MainWindow(QMainWindow):
         self.profile_page.set_nickname(self.session.nickname or self.session.username)
         self.stack.setCurrentWidget(self.profile_page)
 
+    def _pause_modal_timers(self) -> None:
+        """模态期间暂停会触发主窗口重绘的定时器，关闭后恢复。"""
+        self._lobby_timer.stop()
+        self.room_view.skill_panel.pause_updates()
+        if hasattr(self, "_auto_controller"):
+            self._auto_controller.stop()
+        self._hud_timeout.stop()
+        logger.debug("modal timers paused")
+
+    def _resume_modal_timers(self) -> None:
+        self.room_view.skill_panel.resume_updates()
+        self._update_lobby_timer()
+        if hasattr(self, "_auto_controller"):
+            self._apply_auto_config()
+        logger.debug("modal timers resumed")
+
     def _open_settings(self, start_tab: int = 0) -> None:
         dialog = SettingsDialog(self.config, self, self.operator_catalog, self.operator_config)
         self.settings_dialog = dialog
@@ -2930,24 +2974,26 @@ class MainWindow(QMainWindow):
         # F3：应用级模态 + 不删除 + 去掉置顶，避免对话框/主窗口重绘抖动。
         dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
-        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowType.WindowStaysOnTopHint)
+        # 不修改 windowFlags：exec 前重建原生窗口会触发激活/标题栏重绘。
         logger.debug(
-            "settings before exec active=%s visible=%s minimized=%s overlay_enabled=%s",
-            self.isActiveWindow(), self.isVisible(), self.isMinimized(),
+            "settings before exec active=%s visible=%s minimized=%s geometry=%s overlay_enabled=%s",
+            self.isActiveWindow(), self.isVisible(), self.isMinimized(), self.geometry().getRect(),
             self.overlay_controller.enabled,
         )
         # F1：模态期间彻底停掉 overlay（stop 会 hide + enabled False），结束后按原状态恢复。
         overlay_was_enabled = bool(self.overlay_controller.enabled)
         self.overlay_controller.stop()
+        self._pause_modal_timers()
         try:
             accepted = dialog.exec() == QDialog.DialogCode.Accepted
         finally:
+            self._resume_modal_timers()
             if overlay_was_enabled:
                 self.overlay_controller.start()
                 self.overlay_controller.follow(force=True)
             logger.debug(
-                "settings after exec active=%s visible=%s minimized=%s overlay_enabled=%s",
-                self.isActiveWindow(), self.isVisible(), self.isMinimized(),
+                "settings after exec active=%s visible=%s minimized=%s geometry=%s overlay_enabled=%s",
+                self.isActiveWindow(), self.isVisible(), self.isMinimized(), self.geometry().getRect(),
                 self.overlay_controller.enabled,
             )
         self.settings_dialog = None

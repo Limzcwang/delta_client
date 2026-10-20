@@ -86,7 +86,14 @@ class _NativeFilter(QAbstractNativeEventFilter):
     def nativeEventFilter(self, event_type: Any, message: Any) -> bool:  # noqa: N802
         try:
             msg = ctypes.cast(int(message), ctypes.POINTER(wintypes.MSG)).contents
-            return self.manager.handle_message(int(msg.message), int(msg.wParam))
+            message_id = int(msg.message)
+            if message_id == WM_HOTKEY:
+                logger.info(
+                    "nativeEvent WM_HOTKEY hwnd=%s id=%s modifiers=%s vk=%s",
+                    int(msg.hwnd) if msg.hwnd else 0, int(msg.wParam), int(msg.lParam) & 0xFFFF,
+                    (int(msg.lParam) >> 16) & 0xFFFF,
+                )
+            return self.manager.handle_message(message_id, int(msg.wParam))
         except Exception:  # noqa: BLE001
             return False
 
@@ -98,7 +105,9 @@ class GlobalHotkeyManager(QObject):
         super().__init__(parent)
         self._window = QWidget()
         self._window.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
-        self._hwnd = int(self._window.winId())
+        # hwnd=0 注册到线程消息队列，由 Qt 原生事件过滤器接收 WM_HOTKEY；
+        # 隐藏 QWidget 的 HWND 在部分游戏/DPI 场景下收不到热键消息。
+        self._hwnd = 0
         self._filter = _NativeFilter(self)
         self._installed = False
         self._registered: dict[str, int] = {}
@@ -117,6 +126,7 @@ class GlobalHotkeyManager(QObject):
         if not self._installed and QApplication.instance() is not None:
             QApplication.instance().installNativeEventFilter(self._filter)
             self._installed = True
+            logger.info("nativeEventFilter 已安装 hwnd=%s", self._hwnd)
 
     def stop(self) -> None:
         self.unregister_all()
@@ -176,6 +186,8 @@ class GlobalHotkeyManager(QObject):
             return False
         for action, hotkey_id in self._registered.items():
             if int(wparam) == hotkey_id:
+                logger.info("WM_HOTKEY 命中 action=%s id=%s", action, hotkey_id)
                 self.triggered.emit(action)
                 return True
+        logger.info("WM_HOTKEY 未命中 id=%s", int(wparam))
         return False
