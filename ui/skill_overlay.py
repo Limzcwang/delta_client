@@ -72,6 +72,17 @@ def _apply_win32_topmost(widget: Any) -> bool:
         return False
 
 
+def _native_exstyle(widget: Any) -> int:
+    if sys.platform != "win32" or not _widget_alive(widget):
+        return 0
+    try:
+        user32 = ctypes.windll.user32
+        getter = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
+        return int(getter(int(widget.winId()), GWL_EXSTYLE))
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def _set_native_click_through(widget: Any, enabled: bool) -> None:
     """切换 WS_EX_TRANSPARENT；不改 Qt WindowFlags，避免原生窗口重建。"""
     if sys.platform != "win32" or not _widget_alive(widget):
@@ -107,7 +118,6 @@ class SkillOverlay(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, True)
         self.setWindowOpacity(0.30)
         self.states: list[SkillState] = []
         self.catalog: OperatorCatalog | None = None
@@ -124,6 +134,8 @@ class SkillOverlay(QWidget):
         self._timer.timeout.connect(self.update)
         self._timer.start()
         self.resize(OVERLAY_WIDTH, 100)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        _set_native_click_through(self, True)
 
     # ---------- 配置 ----------
     def set_scale(self, scale: float) -> None:
@@ -167,16 +179,23 @@ class SkillOverlay(QWidget):
         # E1：运行时绝不改 Qt WindowFlags（会销毁/重建原生窗口）；用原生扩展样式切穿透。
         self._click_through = not enabled
         _set_native_click_through(self, not enabled)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not enabled)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.setCursor(Qt.CursorShape.OpenHandCursor if enabled else Qt.CursorShape.ArrowCursor)
         self.setWindowOpacity(1.0 if enabled else max(0.10, min(1.0, self._base_opacity)))
         if enabled:
             self._drag_axis = None
             if not self.isVisible():
                 self.show()
         self.update()
+        exstyle = _native_exstyle(self)
         logger.info(
-            "overlay edit_mode=%s visible_before=%s visible_after=%s opacity=%.2f flags_changed=%s",
-            enabled, before_visible, self.isVisible(), self.opacity, int(self.windowFlags()) != before_flags,
+            "overlay edit_mode=%s visible_before=%s visible_after=%s opacity=%.2f flags_changed=%s "
+            "qt_transparent_flag=%s wa_transparent=%s exstyle=0x%x native_transparent=%s",
+            enabled, before_visible, self.isVisible(), self.opacity,
+            int(self.windowFlags()) != before_flags,
+            bool(self.windowFlags() & Qt.WindowType.WindowTransparentForInput),
+            self.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents),
+            exstyle, bool(exstyle & WS_EX_TRANSPARENT),
         )
         self.edit_mode_changed.emit(enabled)
 
@@ -260,17 +279,19 @@ class SkillOverlay(QWidget):
         font = QFont(self.font())
         font.setPointSize(max(7, int(9 * scale)))
         painter.setFont(font)
-        painter.setPen(QColor("#8b98a8"))
-        painter.drawText(
-            QRect(PADDING, 4, self.width() - PADDING * 2, int(HEADER_HEIGHT * scale)),
-            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-            "技能共享" + (" · 编辑模式" if self._edit_mode else ""),
-        )
+        if not self._edit_mode:
+            painter.setPen(QColor("#8b98a8"))
+            painter.drawText(
+                QRect(PADDING, 4, self.width() - PADDING * 2, int(HEADER_HEIGHT * scale)),
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                "技能共享",
+            )
 
+        edit_offset = 26 if self._edit_mode else 0
         if not self.states:
             painter.setPen(QColor("#ffd071"))
             painter.drawText(
-                QRect(PADDING, int(HEADER_HEIGHT * scale), self.width() - PADDING * 2, int(ROW_HEIGHT * scale)),
+                QRect(PADDING, int(HEADER_HEIGHT * scale) + edit_offset, self.width() - PADDING * 2, int(ROW_HEIGHT * scale)),
                 Qt.AlignmentFlag.AlignCenter,
                 self.status,
             )
@@ -279,7 +300,7 @@ class SkillOverlay(QWidget):
             painter.end()
             return
 
-        y = HEADER_HEIGHT * scale
+        y = HEADER_HEIGHT * scale + edit_offset
         for state in self.states:
             name = self._teammate_name(state)
             painter.setPen(QColor("#e6edf5"))
@@ -302,6 +323,14 @@ class SkillOverlay(QWidget):
                 )
             y += ROW_HEIGHT * scale
         if self._edit_mode:
+            band = QRect(10, 4, self.width() - 20, 24)
+            painter.setBrush(QColor(245, 168, 0, 38))
+            painter.setPen(QPen(QColor("#f5a800"), 1))
+            painter.drawRoundedRect(band, 5, 5)
+            painter.setPen(QColor("#ffca55"))
+            band_font = QFont(self.font()); band_font.setPixelSize(10); band_font.setBold(True)
+            painter.setFont(band_font)
+            painter.drawText(band, Qt.AlignmentFlag.AlignCenter, "技能共享・编辑模式  |  ✥ 拖动移动")
             self._draw_cross_handle(painter)
         painter.end()
 
@@ -309,20 +338,44 @@ class SkillOverlay(QWidget):
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if not self._edit_mode or event.button() != Qt.MouseButton.LeftButton:
             return
-        # 中心十字手柄：自由拖动（x/y 同时跟随）。
         self._drag_axis = None
         self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+        self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        self.setWindowOpacity(0.85)
+        logger.info("overlay mousePress edit=True pos=%s global=%s drag_start=%s",
+                    event.position().toPoint(), event.globalPosition().toPoint(), self._drag_offset)
+        event.accept()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if not self._edit_mode or self._drag_offset is None:
+        if not self._edit_mode:
             return
-        self.move(event.globalPosition().toPoint() - self._drag_offset)
+        if self._drag_offset is None:
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+            return
+        target = event.globalPosition().toPoint() - self._drag_offset
+        self.move(target)
+        logger.debug("overlay drag move x=%s y=%s", target.x(), target.y())
+        event.accept()
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if self._drag_offset is not None:
             self._drag_offset = None
             self._drag_axis = None
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+            self.setWindowOpacity(1.0)
+            logger.info("overlay drag end x=%s y=%s", self.x(), self.y())
             self.position_changed.emit(self.x(), self.y())
+            event.accept()
+
+    def enterEvent(self, event) -> None:  # noqa: N802
+        if self._edit_mode:
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        if self._edit_mode and self._drag_offset is None:
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+        super().leaveEvent(event)
 
 
 class OverlayController:
