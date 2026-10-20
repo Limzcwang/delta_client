@@ -339,7 +339,8 @@ class SettingsDialog(QDialog):
 
     def _build(self) -> None:
         self.setWindowTitle("技能设置")
-        self.resize(640, 560)
+        self.setMinimumSize(640, 560)
+        self.setFixedSize(640, 560)
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 16, 20, 16)
         root.setSpacing(8)
@@ -367,17 +368,22 @@ class SettingsDialog(QDialog):
         self.connection_tab = self._build_connection_tab()
         self.profile_tab = self._build_profile_tab()
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_hud_tab(), "HUD / 采屏")
-        self.tabs.addTab(self._build_operator_tab(), "干员")
-        self.tabs.addTab(self._build_overlay_tab(), "悬浮窗")
-        self.tabs_scroll = QScrollArea()
-        self.tabs_scroll.setWidgetResizable(True)
-        self.tabs_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        self.tabs_scroll.setWidget(self.tabs)
-        root.addWidget(self.tabs_scroll, stretch=1)
+        # 每个 Tab 页内部各自滚动，绝不把 QTabWidget 塞进 QScrollArea（会触发布局/重绘循环）。
+        self.tabs.addTab(self._scroll_page(self._build_hud_tab()), "HUD / 采屏")
+        self.tabs.addTab(self._scroll_page(self._build_operator_tab()), "干员")
+        self.tabs.addTab(self._scroll_page(self._build_overlay_tab()), "悬浮窗")
+        root.addWidget(self.tabs, stretch=1)
 
         self.error_label = _error_label(root)
         _add_buttons(self, root, "保存")
+
+    @staticmethod
+    def _scroll_page(page: QWidget) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setWidget(page)
+        return scroll
 
     def _build_connection_tab(self) -> QWidget:
         page = QWidget()

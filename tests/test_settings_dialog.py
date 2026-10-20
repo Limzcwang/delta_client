@@ -61,7 +61,7 @@ class SettingsOperatorTests(unittest.TestCase):
         dialog = self._dialog("weilong")
         labels = [dialog.tabs.tabText(index) for index in range(dialog.tabs.count())]
         self.assertEqual(["HUD / 采屏", "干员", "悬浮窗"], labels)
-        self.assertEqual(dialog.tabs.widget(0), dialog.calibration_button.parent())
+        self.assertIs(dialog.tabs.widget(0).widget(), dialog.calibration_button.parent())
         self.assertIsNotNone(dialog.calibration_button)
         self.assertIsNotNone(dialog.detect_window_button)
         self.assertTrue(dialog.auto_operator_check.isChecked())
@@ -119,6 +119,37 @@ class SettingsOperatorTests(unittest.TestCase):
         self.assertIn("CD未知", dialog.operator_detail_label.text())
         dialog.accept()
         self.assertEqual("muyangren", dialog.config_result().operator_id)
+
+    def test_tab_switch_no_resize_or_paint_storm(self) -> None:
+        from PySide6.QtCore import QEvent, QObject
+        from PySide6.QtTest import QTest
+
+        dialog = self._dialog("weilong")
+        counts = {"paint": 0, "resize": 0}
+
+        class Filter(QObject):
+            def eventFilter(self, obj, event):
+                if obj is dialog:
+                    if event.type() == QEvent.Type.Paint:
+                        counts["paint"] += 1
+                    elif event.type() == QEvent.Type.Resize:
+                        counts["resize"] += 1
+                return False
+
+        filt = Filter()
+        dialog.installEventFilter(filt)
+        try:
+            dialog.show()
+            QTest.qWait(200)
+            before_resize = counts["resize"]
+            for index in (1, 2, 0, 1, 2):
+                dialog.tabs.setCurrentIndex(index)
+                QTest.qWait(120)
+            self.assertLessEqual(counts["resize"] - before_resize, 1)
+            self.assertLess(counts["paint"], 80)
+            self.assertEqual((640, 560), (dialog.width(), dialog.height()))
+        finally:
+            dialog.removeEventFilter(filt)
 
     def test_hotkey_test_button_emits(self) -> None:
         from PySide6.QtWidgets import QPushButton
