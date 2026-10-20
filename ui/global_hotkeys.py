@@ -176,6 +176,7 @@ class GlobalHotkeyManager(QObject):
                     "全局热键注册 action=%s key=%s success=False error=%s",
                     action, text, error,
                 )
+        logger.info("热键注册映射 action/id=%s", dict(self._registered))
         return dict(self._failed)
 
     def spec_for(self, action: str) -> HotkeySpec | None:

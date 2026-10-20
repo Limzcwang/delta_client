@@ -193,6 +193,7 @@ class RoomOverlayFixTests(unittest.TestCase):
             self.assertFalse(window._edit_shortcut.isEnabled())
             window.hotkeys._registered = {}
             window.hotkeys._failed = {"toggle": "占用"}
+            window._hotkey_signature = None
             with mock.patch.object(window.hotkeys, "register_all", return_value={"toggle": "占用"}):
                 window._register_hotkeys()
             self.assertTrue(window._toggle_shortcut.isEnabled())
@@ -306,6 +307,7 @@ class RoomOverlayFixTests(unittest.TestCase):
                 def set_hotkey_status(self, text):
                     messages.append(text)
             window._hotkey_ready = lambda: False
+            window._find_game_window_result = lambda **k: SimpleNamespace(window=None, candidates=[], reason="none")
             window._set_status = lambda text: statuses.append(text)
             window._on_test_hotkey(Dialog())
             self.assertTrue(any("无游戏窗口" in text for text in messages))
