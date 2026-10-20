@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 
 from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
@@ -53,12 +53,22 @@ class SkillSlotWidget(QWidget):
         self.pulse = False
         self.skill_name = ""
         self.cd_known = True
-        self.setMinimumSize(82, 92)
+        self.setMinimumSize(82, 104)
+        self.setFixedHeight(104)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setToolTip(SLOT_LABELS.get(kind, kind))
 
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt 覆盖
-        return QSize(96, 96)
+        return QSize(96, 104)
+
+    def name_rect(self) -> QRectF:
+        return QRectF(8, 4, max(1, self.width() - 16), 20)
+
+    def middle_rect(self) -> QRectF:
+        return QRectF((self.width() - 54) / 2, 28, 54, 54)
+
+    def bottom_rect(self) -> QRectF:
+        return QRectF(8, 88, max(1, self.width() - 16), 14)
 
     def set_data(
         self,
@@ -111,58 +121,62 @@ class SkillSlotWidget(QWidget):
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        rect = QRectF(1.5, 1.5, self.width() - 3, self.height() - 3)
         state = self.effective_state()
         color = QColor(_COLORS.get(state, _COLORS[SKILL_UNKNOWN]))
-        painter.setBrush(QColor("#1a222c"))
-        border = QPen(color, 2)
-        if state == SKILL_READY and self.pulse:
-            border.setColor(QColor("#ffe08a"))
-            border.setWidth(3)
-        painter.setPen(border)
-        painter.drawRoundedRect(rect, 8, 8)
+        painter.setBrush(QColor("#0c1320"))
+        painter.setPen(QPen(QColor("#24334e"), 1))
+        painter.drawRoundedRect(QRectF(0.5, 0.5, self.width() - 1, self.height() - 1), 8, 8)
 
         title, main, sub = self.text_lines()
+        # 名称行：4–24，单行省略 + 完整 tooltip
+        name_rect = self.name_rect()
+        name_font = QFont(self.font())
+        name_font.setPixelSize(11)
+        painter.setFont(name_font)
+        metrics = QFontMetrics(name_font)
+        elided = metrics.elidedText(title, Qt.TextElideMode.ElideMiddle, int(name_rect.width()))
         painter.setPen(QPen(QColor("#8b98a8")))
-        title_font = QFont(self.font())
-        title_font.setPointSize(8)
-        painter.setFont(title_font)
-        painter.drawText(QRectF(0, 5, self.width(), 16), Qt.AlignmentFlag.AlignHCenter, title)
+        painter.drawText(name_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, elided)
+        self.setToolTip(f"{title}：{main}" if elided == title else f"{title}：{main}")
 
-        painter.setPen(QPen(color))
-        main_font = QFont(self.font())
-        main_font.setPointSize(14 if self.kind != SLOT_ULTIMATE else 15)
-        main_font.setBold(True)
-        painter.setFont(main_font)
-        if self.kind == SLOT_ULTIMATE and state != SKILL_UNKNOWN and self.cd_known:
-            ring_rect = QRectF(self.width() / 2 - 24, 23, 48, 48)
+        # 中间区：28–82。大招/百分比用固定 54px 圆环，充能型用大号计数。
+        middle = self.middle_rect()
+        center = middle.center()
+        use_ring = self.kind == SLOT_ULTIMATE and self.cd_known and state != SKILL_UNKNOWN
+        if use_ring:
+            ring = QRectF(center.x() - 27, center.y() - 27, 54, 54)
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(QPen(QColor("#2b3440"), 5))
-            painter.drawEllipse(ring_rect)
-            painter.setPen(QPen(color, 5))
-            painter.drawArc(ring_rect, 90 * 16, -int(3.6 * self.slot.percent * 16))
-            painter.setPen(QPen(color))
-            painter.drawText(
-                QRectF(0, 32, self.width(), 30),
-                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
-                main,
-            )
+            painter.setPen(QPen(QColor(59, 130, 196, 64), 5))
+            painter.drawEllipse(ring)
+            painter.setPen(QPen(QColor("#3b82c4"), 5))
+            painter.drawArc(ring, 90 * 16, -int(3.6 * self.slot.percent * 16))
+            pct_font = QFont(self.font())
+            pct_font.setPixelSize(13)
+            pct_font.setBold(True)
+            painter.setFont(pct_font)
+            painter.setPen(QPen(QColor("#7fb3e0")))
+            painter.drawText(ring, Qt.AlignmentFlag.AlignCenter, main)
+        elif state == SKILL_UNKNOWN or not self.cd_known:
+            center_font = QFont(self.font())
+            center_font.setPixelSize(14)
+            painter.setFont(center_font)
+            painter.setPen(QPen(QColor("#71808f")))
+            painter.drawText(middle, Qt.AlignmentFlag.AlignCenter, "?")
         else:
-            painter.drawText(
-                QRectF(0, 30, self.width(), 32),
-                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
-                main,
-            )
+            # 充能/就绪：大号计数（例如 1/2），20px bold
+            count_font = QFont(self.font())
+            count_font.setPixelSize(20)
+            count_font.setBold(True)
+            painter.setFont(count_font)
+            painter.setPen(QPen(QColor("#7fb3e0")))
+            painter.drawText(middle, Qt.AlignmentFlag.AlignCenter, main if main not in ("—",) else "—")
 
+        # 底部行：88–102，12px muted；与中区至少 6px
+        bottom_font = QFont(self.font())
+        bottom_font.setPixelSize(12)
+        painter.setFont(bottom_font)
         painter.setPen(QPen(color if state == SKILL_READY else QColor("#8b98a8")))
-        sub_font = QFont(self.font())
-        sub_font.setPointSize(9)
-        painter.setFont(sub_font)
-        painter.drawText(
-            QRectF(0, 66, self.width(), 18),
-            Qt.AlignmentFlag.AlignHCenter,
-            sub,
-        )
+        painter.drawText(self.bottom_rect(), Qt.AlignmentFlag.AlignCenter, sub)
         painter.end()
 
 
@@ -179,6 +193,7 @@ class SkillRow(QFrame):
     ) -> None:
         super().__init__(parent)
         self.setObjectName("Card")
+        self.setFixedHeight(180)
         self.user_id = state.user_id
         self.state = state
         self.operator_def = operator
@@ -190,7 +205,7 @@ class SkillRow(QFrame):
         header.setSpacing(8)
         self.avatar = QLabel(state.avatar_letter)
         self.avatar.setObjectName("SkillAvatar")
-        self.avatar.setFixedSize(30, 30)
+        self.avatar.setFixedSize(22, 22)
         self.avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header.addWidget(self.avatar)
         names = QVBoxLayout()
@@ -231,8 +246,8 @@ class SkillRow(QFrame):
             (operator.display_name if operator is not None else (state.operator or "干员未共享"))
         )
         unshared = state.is_unshared(server_now)
-        self.status_label.setText("未共享" if unshared else "已共享")
-        self.status_label.setStyleSheet("color: #ffd071;" if unshared else "color: #6fdc8c;")
+        self.status_label.setText("未共享" if unshared else "● 已共享")
+        self.status_label.setStyleSheet("color: #ffd071;" if unshared else "color: #5fc98e;")
         for kind, widget in self.slot_widgets.items():
             meta = operator.skill(_SLOT_INDEX[kind]) if operator is not None else None
             widget.set_data(
@@ -273,6 +288,7 @@ class SkillPanel(QWidget):
     sharing_toggled = Signal(bool)
     simulate_requested = Signal()
     capture_requested = Signal()
+    settings_requested = Signal()
 
     def __init__(
         self,
@@ -301,23 +317,28 @@ class SkillPanel(QWidget):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
         header = QHBoxLayout()
-        title = QLabel("技能共享（E2）")
+        title = QLabel("技能共享 (E2)")
         title.setObjectName("SectionTitle")
         header.addWidget(title)
         header.addStretch(1)
         self.share_check = QCheckBox("共享我的技能")
+        self.share_check.setStyleSheet("QCheckBox { color: #f5a800; font-weight: 700; }")
         self.share_check.setChecked(False)
         self.share_check.toggled.connect(self._on_share_toggled)
         header.addWidget(self.share_check)
         self.simulate_button = QPushButton("模拟我的技能")
         self.simulate_button.setObjectName("Link")
         self.simulate_button.clicked.connect(self.simulate_requested.emit)
-        header.addWidget(self.simulate_button)
+        self.simulate_button.hide()
         self.capture_button = QPushButton("识别 HUD")
         self.capture_button.setObjectName("Link")
         self.capture_button.setToolTip("截取游戏窗口并识别技能栏（E3b）")
         self.capture_button.clicked.connect(self.capture_requested.emit)
-        header.addWidget(self.capture_button)
+        self.capture_button.hide()
+        self.settings_button = QPushButton("技能设置")
+        self.settings_button.setObjectName("Ghost")
+        self.settings_button.clicked.connect(self.settings_requested.emit)
+        header.addWidget(self.settings_button)
         root.addLayout(header)
 
         hint = QLabel("默认关闭；开启后 2 次/秒限频上报 · 左大招 / 中技能 / 右投掷物 · 30 分钟未更新=未共享")
@@ -327,11 +348,19 @@ class SkillPanel(QWidget):
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setStyleSheet(
+            "QScrollBar:vertical { background: #0c1320; width: 8px; margin: 0; }"
+            "QScrollBar::handle:vertical { background: #24334e; min-height: 28px; border-radius: 4px; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }"
+        )
         self.list_widget = QWidget()
         self.list_layout = QVBoxLayout(self.list_widget)
-        self.list_layout.setContentsMargins(0, 0, 0, 0)
-        self.list_layout.setSpacing(6)
+        self.list_layout.setContentsMargins(0, 0, 8, 0)
+        self.list_layout.setSpacing(10)
         self.list_layout.addStretch(1)
         self.scroll.setWidget(self.list_widget)
         root.addWidget(self.scroll, stretch=1)

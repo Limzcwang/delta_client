@@ -393,7 +393,7 @@ class CanvasView(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        title = QLabel("画板协同（D）")
+        title = QLabel("画板协同 (D)")
         title.setObjectName("SectionTitle")
         layout.addWidget(title)
 
@@ -413,10 +413,11 @@ class CanvasView(QWidget):
         self.pen_button.setChecked(True)
         self._make_size_badge(self.pen_button)
         self._make_size_badge(self.eraser_button)
+        # P4：设计稿工具栏 5 按钮；颜色保留快捷键 C（color_button 仅隐藏兼容）。
+        self.color_button.hide()
         self.tool_buttons = [
             self.pen_button,
             self.eraser_button,
-            self.color_button,
             self.undo_button,
             self.redo_button,
             self.clear_button,
@@ -425,7 +426,7 @@ class CanvasView(QWidget):
             toolbar.addWidget(button, stretch=1)
         layout.addLayout(toolbar)
 
-        hint = QLabel("画布随底图 1105×1260 等比缩放（外部留白）· 坐标以画布 0–1 · 撤销/重做仅本地")
+        hint = QLabel("画板按底图 1105×1260 等比缩放、零留白 · 坐标 0–1 · 撤销/重做仅本地")
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
         layout.addWidget(hint)

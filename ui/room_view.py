@@ -18,7 +18,9 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QSizePolicy,
+    QStackedWidget,
     QTabWidget,
+    QButtonGroup,
     QVBoxLayout,
     QWidget,
 )
@@ -29,6 +31,71 @@ from ui.canvas_view import CanvasView
 from ui.skill_panel import SkillPanel
 
 
+class _SideTabs(QWidget):
+    """画板/技能文件夹 Tab；切 Tab 不改变整列宽度。"""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._labels: list[str] = []
+        self._buttons: list[QPushButton] = []
+        self._stack = QStackedWidget()
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        bar = QHBoxLayout()
+        bar.setContentsMargins(0, 0, 0, 0)
+        bar.setSpacing(2)
+        bar.addStretch(1)
+        self._bar = bar
+        root.addLayout(bar)
+        root.addWidget(self._stack, 1)
+
+    def addTab(self, widget: QWidget, label: str) -> int:
+        index = self._stack.addWidget(widget)
+        button = QPushButton(label)
+        button.setObjectName("SideTab")
+        button.setCheckable(True)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._group.addButton(button, index)
+        button.clicked.connect(lambda _checked=False, i=index: self.setCurrentIndex(i))
+        self._bar.insertWidget(self._bar.count() - 1, button)
+        self._buttons.append(button)
+        self._labels.append(label)
+        if index == 0:
+            self.setCurrentIndex(0)
+        return index
+
+    def setCurrentIndex(self, index: int) -> None:  # noqa: N802
+        if 0 <= index < len(self._labels):
+            self._stack.setCurrentIndex(index)
+            self._buttons[index].setChecked(True)
+
+    def currentIndex(self) -> int:
+        return self._stack.currentIndex()
+
+    def setCurrentWidget(self, widget: QWidget) -> None:
+        index = self._stack.indexOf(widget)
+        if index >= 0:
+            self.setCurrentIndex(index)
+
+    def currentWidget(self) -> QWidget | None:
+        return self._stack.currentWidget()
+
+    def widget(self, index: int) -> QWidget | None:
+        return self._stack.widget(index)
+
+    def count(self) -> int:
+        return len(self._labels)
+
+    def tabText(self, index: int) -> str:
+        return self._labels[index] if 0 <= index < len(self._labels) else ""
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+
+
 class RoomView(QWidget):
     leave_requested = Signal()
     chat_submitted = Signal(str)
@@ -36,6 +103,7 @@ class RoomView(QWidget):
     retry_requested = Signal(str)  # client_msg_id
     room_settings_requested = Signal()
     kick_requested = Signal(str, str)  # (user_id, nickname)
+    skill_settings_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -49,13 +117,14 @@ class RoomView(QWidget):
     # ---------- UI ----------
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 18, 24, 16)
-        root.setSpacing(12)
+        root.setContentsMargins(22, 14, 22, 12)
+        root.setSpacing(10)
 
         # 顶部信息栏
         top = QHBoxLayout()
         top.setSpacing(12)
         self.leave_button = QPushButton("← 离开房间")
+        self.leave_button.setObjectName("Text")
         self.leave_button.clicked.connect(self.leave_requested.emit)
         top.addWidget(self.leave_button)
 
@@ -95,8 +164,8 @@ class RoomView(QWidget):
         self.chat_panel = self._build_chat_panel()
         self.side_tabs = self._build_side_panel()
         body.addWidget(self.members_panel, stretch=0)
-        body.addWidget(self.chat_panel, stretch=0)
-        body.addWidget(self.side_tabs, stretch=1)
+        body.addWidget(self.chat_panel, stretch=1)
+        body.addWidget(self.side_tabs, stretch=0)
         root.addLayout(body, stretch=1)
 
         self.status_label = QLabel("")
@@ -106,9 +175,8 @@ class RoomView(QWidget):
     def _build_members_panel(self) -> QWidget:
         panel = QFrame()
         panel.setObjectName("Card")
-        panel.setMinimumWidth(190)
-        panel.setMaximumWidth(260)
-        panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        panel.setFixedWidth(230)
+        panel.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
@@ -138,7 +206,6 @@ class RoomView(QWidget):
         panel = QFrame()
         panel.setObjectName("Card")
         panel.setMinimumWidth(300)
-        panel.setMaximumWidth(480)
         panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(14, 14, 14, 14)
@@ -161,7 +228,8 @@ class RoomView(QWidget):
         input_row = QHBoxLayout()
         input_row.setSpacing(8)
         self.chat_input = QLineEdit()
-        self.chat_input.setPlaceholderText("输入消息，Enter 发送（1-2000 字）")
+        self.chat_input.setPlaceholderText("输入消息，Enter 发送（1-200 字）")
+        self.chat_input.setMaxLength(200)
         self.chat_input.returnPressed.connect(self._emit_chat)
         self.send_button = QPushButton("发送")
         self.send_button.setObjectName("Primary")
@@ -172,21 +240,21 @@ class RoomView(QWidget):
         return panel
 
     def _build_side_panel(self) -> QWidget:
-        self.side_tabs = QTabWidget()
-        self.side_tabs.setMinimumWidth(400)
-        self.side_tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.canvas_panel = self._build_canvas_panel()
         self.skill_panel = SkillPanel()
+        self.skill_panel.settings_requested.connect(self.skill_settings_requested.emit)
+        self.side_tabs = _SideTabs()
         self.side_tabs.addTab(self.canvas_panel, "画板")
         self.side_tabs.addTab(self.skill_panel, "技能")
+        self.side_tabs.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         return self.side_tabs
 
     def _build_canvas_panel(self) -> QWidget:
         panel = QFrame()
         panel.setObjectName("Card")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(8)
+        layout.setContentsMargins(12, 12, 12, 10)
+        layout.setSpacing(6)
 
         self.canvas = CanvasView()
         layout.addWidget(self.canvas, stretch=1)
@@ -409,6 +477,28 @@ class RoomView(QWidget):
             return
         self.chat_input.clear()
         self.chat_submitted.emit(text)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._sync_canvas_width)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        QTimer.singleShot(0, self._sync_canvas_width)
+
+    def _sync_canvas_width(self) -> None:
+        """画板列 = 可用高度 × 底图宽高比；剩余全部给聊天，禁止 780 硬上限。"""
+        try:
+            host = self.canvas.host
+            map_w, map_h = self.canvas.surface.map_size
+            ratio = map_w / max(1, map_h)
+            # 画板 card 左右 padding 各 12px，列宽比 host 多 24px
+            desired = round(max(1, host.height()) * ratio) + 24
+            # body: 页面左右 22×2 + 成员 230 + 聊天最小 300 + 两处 12px 间距
+            available = max(0, self.width() - 44 - 230 - 300 - 24)
+            self.side_tabs.setFixedWidth(max(320, min(desired, available)))
+        except (AttributeError, RuntimeError):
+            pass
 
     def _copy_code(self) -> None:
         if self._room is not None and self._room.code:

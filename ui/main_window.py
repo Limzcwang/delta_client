@@ -317,6 +317,7 @@ class MainWindow(QMainWindow):
         self.room_view.retry_requested.connect(self._on_retry_chat)
         self.room_view.room_settings_requested.connect(self._on_room_settings)
         self.room_view.kick_requested.connect(self._on_kick_requested)
+        self.room_view.skill_settings_requested.connect(lambda: self._open_settings(start_tab=0))
         self.room_view.skill_panel.sharing_toggled.connect(self._on_skill_sharing_toggled)
         self.room_view.skill_panel.simulate_requested.connect(self._on_simulate_skill)
         self.room_view.skill_panel.capture_requested.connect(self._on_hud_capture)

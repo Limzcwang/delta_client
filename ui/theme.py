@@ -384,7 +384,7 @@ QTableWidget {
     background-color: #131c2b;
     alternate-background-color: #131c2b;
     border: 1px solid #24334e;
-    border-radius: 8px;
+    border-radius: 0 0 6px 6px;
     gridline-color: #1c2940;
     selection-background-color: #373224;
     selection-color: #e8eef7;
@@ -412,6 +412,7 @@ QScrollBar:vertical { background: #0d1420; width: 10px; margin: 0; }
 QScrollBar::handle:vertical { background: #24334e; min-height: 24px; border-radius: 5px; }
 QScrollBar::handle:vertical:hover { background: #3b82c4; }
 QFrame#VSeparator { background: #24334e; max-width: 1px; min-width: 1px; }
+QFrame#TabSeparator { background: #24334e; min-height: 1px; max-height: 1px; border: none; }
 """
 
 
@@ -420,8 +421,19 @@ def apply_theme(app: Any) -> None:
 QFrame#PageHeader { background: #101827; border-bottom: 1px solid #24334e; }
 QFrame#PageFooter { background: #101827; border-top: 1px solid #24334e; }
 QLabel#FieldLabel { color: #c8d3e1; font-size: 12px; font-weight: 600; }
-QFrame#Divider { background: #24334e; border: none; max-height: 1px; }
+QFrame#Divider { background: #24334e; border: none; min-height: 1px; max-height: 1px; }
 
+QPushButton#SideTab {
+    background: transparent; color: #8b98ab;
+    border: 1px solid transparent; border-bottom: none;
+    border-top-left-radius: 6px; border-top-right-radius: 6px;
+    min-height: 32px; padding: 0 18px; font-weight: 600;
+}
+QPushButton#SideTab:hover { color: #e8eef7; background: #131c2b; }
+QPushButton#SideTab:checked {
+    background: #131c2b; color: #e8eef7;
+    border: 1px solid #24334e; border-bottom: 1px solid #131c2b;
+}
 QPushButton#LobbyTab {
     background: transparent; color: #8b98ab;
     border: 1px solid transparent; border-bottom: none;

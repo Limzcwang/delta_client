@@ -153,7 +153,7 @@ class CanvasAspectTests(unittest.TestCase):
 
     def test_toolbar_icon_buttons_and_highlight(self) -> None:
         view = self._view(420, 600)
-        self.assertEqual(6, len(view.tool_buttons))
+        self.assertEqual(5, len(view.tool_buttons))
         for button in view.tool_buttons:
             self.assertFalse(button.icon().isNull(), f"{button.toolTip()} 缺少图标")
             self.assertGreaterEqual(button.height(), 40)

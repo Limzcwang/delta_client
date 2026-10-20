@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -257,7 +258,7 @@ class ProfilePage(_PageShell):
         card = QFrame()
         card.setObjectName("Card")
         self.card_layout = QVBoxLayout(card)
-        self.card_layout.setContentsMargins(22, 22, 22, 24)
+        self.card_layout.setContentsMargins(22, 22, 22, 16)
         self.card_layout.setSpacing(10)
         card_title = QLabel("账号信息")
         card_title.setObjectName("SectionTitle")
@@ -295,7 +296,12 @@ class ProfilePage(_PageShell):
 
         divider = QFrame()
         divider.setObjectName("Divider")
+        divider.setFrameShape(QFrame.Shape.HLine)
+        divider.setFrameShadow(QFrame.Shadow.Plain)
         divider.setFixedHeight(1)
+        divider.setMinimumWidth(1)
+        divider.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        divider.setStyleSheet("background-color: #24334e; border: none;")
         self.card_layout.addWidget(divider)
 
         self.password_reveal_button = QPushButton("修改密码")

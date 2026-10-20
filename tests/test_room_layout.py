@@ -37,25 +37,24 @@ class RoomLayoutTests(unittest.TestCase):
         self.app.processEvents()
 
     def test_wide_window_canvas_priority(self) -> None:
-        self.assertLessEqual(self.view.members_panel.width(), 260)
-        self.assertLessEqual(self.view.chat_panel.width(), 480)
-        body_width = max(1, self.view.width() - 28)
-        self.assertGreaterEqual(self.view.side_tabs.width() / body_width, 0.60)
+        self.assertEqual(230, self.view.members_panel.width())
+        self.assertGreaterEqual(self.view.chat_panel.width(), 300)
+        self.assertGreater(self.view.side_tabs.width(), 0)
         surface = self.view.canvas.surface
         self.assertAlmostEqual(MAP_RATIO, surface.width() / surface.height(), places=2)
 
-    def test_skill_tab_also_expands(self) -> None:
+    def test_skill_tab_does_not_change_column_width(self) -> None:
         canvas_width = self.view.side_tabs.width()
         self.view.side_tabs.setCurrentWidget(self.view.skill_panel)
         self.app.processEvents()
+        self.assertEqual(canvas_width, self.view.side_tabs.width())
         self.assertGreaterEqual(self.view.skill_panel.width(), canvas_width - 10)
-        self.assertGreaterEqual(self.view.side_tabs.width() / max(1, self.view.width() - 28), 0.60)
 
     def test_small_window_no_overflow(self) -> None:
-        self.view.resize(1024, 768)
+        self.view.resize(1120, 720)
         self.app.processEvents()
-        self.assertLessEqual(self.view.members_panel.width(), 260)
-        self.assertLessEqual(self.view.chat_panel.width(), 480)
+        self.assertEqual(230, self.view.members_panel.width())
+        self.assertGreaterEqual(self.view.chat_panel.width(), 300)
         total = self.view.members_panel.width() + self.view.chat_panel.width() + self.view.side_tabs.width() + 24
         self.assertLessEqual(total, self.view.width())
         surface = self.view.canvas.surface

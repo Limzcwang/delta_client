@@ -7,6 +7,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -65,6 +66,10 @@ class _LobbyTabs(QWidget):
         bar.addStretch(1)
         self._bar_layout = bar
         root.addLayout(bar)
+        separator = QFrame()
+        separator.setObjectName("TabSeparator")
+        separator.setFixedHeight(1)
+        root.addWidget(separator)
         root.addWidget(self._stack, 1)
 
     def addTab(self, widget: QWidget, label: str) -> int:
@@ -147,8 +152,6 @@ class RoomListView(QWidget):
         self.user_label = QLabel("当前用户：-")
         self.user_label.setObjectName("Muted")
         header.addWidget(self.user_label, alignment=Qt.AlignmentFlag.AlignVCenter)
-        from PySide6.QtWidgets import QFrame
-
         sep = QFrame()
         sep.setObjectName("VSeparator")
         sep.setFixedWidth(1)
@@ -216,7 +219,7 @@ class RoomListView(QWidget):
 
         self.public_tab = QWidget()
         public_layout = QVBoxLayout(self.public_tab)
-        public_layout.setContentsMargins(0, 10, 0, 0)
+        public_layout.setContentsMargins(0, 0, 0, 0)
         public_layout.addWidget(self.table)
         self.my_rooms = MyRoomsView()
         self.tabs = _LobbyTabs()

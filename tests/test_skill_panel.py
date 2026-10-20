@@ -10,6 +10,7 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:  # pragma: no cover - 环境相关
+    from PySide6.QtCore import Qt
     from PySide6.QtGui import QColor, QPixmap
     from PySide6.QtWidgets import QApplication
 
@@ -129,7 +130,7 @@ class SkillPanelTests(unittest.TestCase):
         old = state()
         panel.set_states([old])
         row = panel._rows["2"]
-        self.assertEqual("已共享", row.status_label.text())
+        self.assertEqual("● 已共享", row.status_label.text())
         row.update_state(old, old.captured_at + 30 * 60 * 1000 + 1)
         self.assertEqual("未共享", row.status_label.text())
 
@@ -234,6 +235,48 @@ class SkillPanelTests(unittest.TestCase):
             row = panel._rows["2"]
             self.assertFalse(row.avatar.pixmap().isNull())
             self.assertEqual("测试干员", row.operator_label.text())
+
+    def test_slot_three_sections_do_not_overlap(self) -> None:
+        panel = self._panel()
+        panel.set_states([state()])
+        slot = panel._rows["2"].slot_widgets[SLOT_ULTIMATE]
+        slot.resize(120, 104)
+        name, middle, bottom = slot.name_rect(), slot.middle_rect(), slot.bottom_rect()
+        self.assertEqual(104, slot.height())
+        self.assertFalse(name.intersects(middle))
+        self.assertFalse(middle.intersects(bottom))
+        self.assertLessEqual(name.bottom(), middle.top())
+        self.assertGreaterEqual(bottom.top() - middle.bottom(), 6)
+        self.assertLessEqual(bottom.bottom(), 102)
+
+    def test_charge_uses_count_instead_of_ring(self) -> None:
+        panel = self._panel()
+        panel.set_states([state()])
+        ability = panel._rows["2"].slot_widgets[SLOT_ABILITY]
+        self.assertFalse(ability.kind == SLOT_ULTIMATE)
+        self.assertEqual(("技能", "1/2", "0:30"), ability.text_lines())
+
+    def test_long_skill_name_elides_with_full_tooltip(self) -> None:
+        panel = self._panel()
+        panel.set_states([state(ultimate={"state": "ready", "percent": 100})])
+        slot = panel._rows["2"].slot_widgets[SLOT_ULTIMATE]
+        slot.resize(80, 104)
+        slot.set_data(slot.slot, slot.captured_at, slot.server_now, skill_name="非常非常非常长的大招名称")
+        self.assertIn("非常非常非常长的大招名称", slot.toolTip())
+
+    def test_multi_member_scroll_and_card_height(self) -> None:
+        panel = self._panel()
+        panel.resize(520, 520)
+        panel.set_states([state("2"), state("3"), state("4")])
+        panel.show()
+        self.app.processEvents()
+        self.assertEqual(Qt.ScrollBarPolicy.ScrollBarAsNeeded, panel.scroll.verticalScrollBarPolicy())
+        self.assertEqual(10, panel.list_layout.spacing())
+        for row in panel._rows.values():
+            self.assertEqual(180, row.height())
+        bar = panel.scroll.verticalScrollBar()
+        self.assertTrue(bar.isVisible())
+        self.assertEqual(8, bar.width())
 
 
 if __name__ == "__main__":
