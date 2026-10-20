@@ -33,7 +33,7 @@ class SettingsPageTests(unittest.TestCase):
         try:
             self.assertEqual("连接设置", page.title_label.text())
             self.assertEqual(600, page.form.width())
-            self.assertEqual("https://deltachat.icu:8443", page.server_edit.text())
+            self.assertEqual("https://deltachat.icu", page.server_edit.text())
             self.assertTrue(page.mock_check.isChecked())
             page.server_edit.setText("")
             page.save_button.click()

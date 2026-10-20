@@ -62,7 +62,7 @@ class LoadConfigTests(unittest.TestCase):
         self.assertFalse(cfg.use_mock)
         self.assertFalse(cfg.persist_token)
         self.assertEqual(cfg.source, "default")
-        self.assertEqual(cfg.effective_ws_url, "wss://deltachat.icu:8443/ws")
+        self.assertEqual(cfg.effective_ws_url, "wss://deltachat.icu/ws")
 
     def test_legacy_http_default_migrates_to_https(self) -> None:
         self._write(
@@ -79,11 +79,21 @@ class LoadConfigTests(unittest.TestCase):
         self.assertTrue(cfg.use_mock)
         self.assertEqual(cfg.operator_id, "honglang")
         self.assertEqual(cfg.request_timeout, 20.0)
-        self.assertEqual(cfg.effective_ws_url, "wss://deltachat.icu:8443/ws")
+        self.assertEqual(cfg.effective_ws_url, "wss://deltachat.icu/ws")
         saved = json.loads(self.config_path.read_text(encoding="utf-8"))
         self.assertEqual(DEFAULT_SERVER_URL, saved["server_url"])
         self.assertTrue(saved["mock"])
         self.assertEqual("honglang", saved["operator_id"])
+
+    def test_legacy_8443_default_migrates_to_443(self) -> None:
+        self._write({"server_url": "https://deltachat.icu:8443", "ws_url": None, "operator_id": "honglang"})
+        cfg = load_config(path=self.config_path, env={})
+        self.assertTrue(cfg.server_migrated)
+        self.assertEqual("https://deltachat.icu", cfg.server_url)
+        self.assertEqual("wss://deltachat.icu/ws", cfg.effective_ws_url)
+        self.assertEqual("honglang", cfg.operator_id)
+        saved = json.loads(self.config_path.read_text(encoding="utf-8"))
+        self.assertEqual("https://deltachat.icu", saved["server_url"])
 
     def test_legacy_ws_url_removed(self) -> None:
         self._write(
@@ -94,7 +104,7 @@ class LoadConfigTests(unittest.TestCase):
         )
         cfg = load_config(path=self.config_path, env={})
         self.assertIsNone(cfg.ws_url)
-        self.assertEqual(cfg.effective_ws_url, "wss://deltachat.icu:8443/ws")
+        self.assertEqual(cfg.effective_ws_url, "wss://deltachat.icu/ws")
 
     def test_custom_server_not_migrated(self) -> None:
         self._write({"server_url": "http://manual-host:8000", "operator_id": "weilong"})

@@ -33,12 +33,14 @@ from typing import Any, Mapping
 from core.protocol import ws_url_for
 from state.paths import APP_NAME
 
-DEFAULT_SERVER_URL = "https://deltachat.icu:8443"
+DEFAULT_SERVER_URL = "https://deltachat.icu"
 LEGACY_DEFAULT_SERVER_URL = "http://114.132.161.169:8000"
 LEGACY_WS_URL = "ws://114.132.161.169:8000/ws"
+LEGACY_HTTPS_SERVER_URL = "https://deltachat.icu:8443"
+LEGACY_HTTPS_WS_URL = "wss://deltachat.icu:8443/ws"
 DEFAULT_TIMEOUT = 15.0
 CONFIG_FILENAME = ".delta_client.json"
-APP_VERSION = "0.2.1"
+APP_VERSION = "0.2.2"
 __version__ = APP_VERSION
 CONFIG_ENV = "DELTA_CLIENT_CONFIG"
 
@@ -221,14 +223,14 @@ def _migrate_legacy_server(path: Path, file_data: dict[str, Any]) -> bool:
         normalized = normalize_server_url(raw)
     except ConfigError:
         return False
-    if normalized != LEGACY_DEFAULT_SERVER_URL:
+    if normalized not in (LEGACY_DEFAULT_SERVER_URL, LEGACY_HTTPS_SERVER_URL):
         return False
     updated = dict(file_data)
     updated["server_url"] = DEFAULT_SERVER_URL
     old_ws = str(updated.get("ws_url") or "").strip()
     if old_ws:
         try:
-            if normalize_ws_url(old_ws) == LEGACY_WS_URL:
+            if normalize_ws_url(old_ws) in (LEGACY_WS_URL, LEGACY_HTTPS_WS_URL):
                 updated.pop("ws_url", None)
         except ConfigError:
             pass

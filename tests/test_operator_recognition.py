@@ -44,6 +44,7 @@ class OperatorRecognitionTests(unittest.TestCase):
         session.set_login("token", {"id": "12", "username": "DeltaQA01"})
         window = MainWindow(AppConfig(**values), session)
         window._current_room = Room(id="1", code="ABC123", name="test")
+        window._membership_confirmed = True
         window._self_skill_state = SkillState(
             user_id="12",
             nickname="DeltaQA01",

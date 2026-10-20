@@ -45,6 +45,7 @@ class _FakeWs:
     def __init__(self) -> None:
         self.joins: list[tuple[str, str | None]] = []
         self.skill_sends = 0
+        self.canvas_sends = 0
 
     def join_room(self, code, password=None):
         self.joins.append((code, password))
@@ -56,6 +57,10 @@ class _FakeWs:
 
     async def send_skill_off(self, *args):
         return True
+
+    def send_canvas_op(self, op, rev, room_id):
+        self.canvas_sends += 1
+        return _DummyCoro()
 
 
 @unittest.skipUnless(HAS_QT, "PySide6 未安装")
@@ -81,6 +86,23 @@ class RejoinTests(unittest.TestCase):
         window.close()
         window.deleteLater()
         self.app.processEvents()
+
+    def test_canvas_queue_waits_for_membership_and_drains(self) -> None:
+        window = self._window()
+        fake = _FakeWs()
+        try:
+            window._ws = fake
+            window._membership_confirmed = False
+            window._canvas_queue.append({"op": "clear", "rev": 0})
+            window._drain_canvas_queue()
+            self.assertEqual(0, fake.canvas_sends)
+            self.assertEqual(1, len(window._canvas_queue))
+            window._membership_confirmed = True
+            window._drain_canvas_queue()
+            self.assertEqual(1, fake.canvas_sends)
+            self.assertEqual([], window._canvas_queue)
+        finally:
+            self._close(window)
 
     def test_connected_triggers_join_room(self) -> None:
         window = self._window()

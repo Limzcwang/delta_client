@@ -1156,6 +1156,7 @@ class MainWindow(QMainWindow):
     def _on_rejoin_failed(self, exc: BaseException) -> None:
         self._membership_confirmed = False
         self._rejoin_in_progress = False
+        self._canvas_queue.clear()
         self._rejoin_attempts = 0
         self._system_message(f"重新加入房间失败：{to_user_message(exc)}，已返回大厅")
         self._on_room_closed()
@@ -1242,6 +1243,8 @@ class MainWindow(QMainWindow):
                 self.room_view.skill_panel.set_states(self._skills.states())
             self._sync_overlay_states()
             self._on_room_joined_canvas(message.get("canvas_snapshot"))
+            if self._canvas_queue:
+                QTimer.singleShot(0, self._drain_canvas_queue)
             self.room_view.set_status("已重新加入房间" if was_rejoining else "")
         elif mtype == "skill_share_state":
             self._on_skill_share_state(message)
@@ -2088,7 +2091,7 @@ class MainWindow(QMainWindow):
         if self._ws is None or not getattr(self._ws, "connected", False):
             self.room_view.set_status("实时连接未建立，技能状态未上报", error=True)
             return
-        if self._rejoin_in_progress and not self._membership_confirmed:
+        if not self._membership_confirmed:
             self.room_view.set_status("正在重新加入房间，技能状态暂缓上报")
             return
         if not self._skill_throttle.allow(now_ms()):
@@ -2318,7 +2321,7 @@ class MainWindow(QMainWindow):
             self.room_view.set_status("实时连接未建立，消息未发送", error=True)
             self.room_view.append_chat_input(text)
             return
-        if self._rejoin_in_progress and not self._membership_confirmed:
+        if not self._membership_confirmed:
             self.room_view.set_status("正在重新加入房间，消息暂缓发送")
             self.room_view.append_chat_input(text)
             return
@@ -2457,6 +2460,9 @@ class MainWindow(QMainWindow):
         if ws is None or not getattr(ws, "connected", False):
             self._canvas_queue.clear()
             self.room_view.set_status("实时连接未建立，画板改动仅本地可见", error=True)
+            return
+        if not self._membership_confirmed:
+            # 保留队列，等 room_joined 后再 drain。
             return
         while self._canvas_queue:
             wait = self._canvas_limiter.wait_seconds()
