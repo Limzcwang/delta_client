@@ -44,7 +44,7 @@ AUTO_SAMPLE_MS_MIN = 200
 AUTO_SAMPLE_MS_MAX = 5000
 DEFAULT_TIMEOUT = 15.0
 CONFIG_FILENAME = ".delta_client.json"
-APP_VERSION = "0.2.7"
+APP_VERSION = "0.2.8"
 __version__ = APP_VERSION
 CONFIG_ENV = "DELTA_CLIENT_CONFIG"
 
@@ -153,12 +153,11 @@ class AppConfig:
     hud_profile: dict[str, Any] | None = None
     server_migrated: bool = False
     overlay_enabled: bool = False
+    overlay_auto_show: bool = True
     overlay_opacity: int = 30
     overlay_scale: float = 1.0
     overlay_x: int | None = None
     overlay_y: int | None = None
-    shortcut_toggle: str = "Ctrl+Shift+D"
-    shortcut_edit: str = "Ctrl+Shift+E"
     auto_capture_enabled: bool = False
     auto_loop_enabled: bool = False
     auto_sample_ms: int = 2000
@@ -190,12 +189,11 @@ class AppConfig:
             "operator_id": self.operator_id,
             "hud_profile": self.hud_profile,
             "overlay_enabled": self.overlay_enabled,
+            "overlay_auto_show": self.overlay_auto_show,
             "overlay_opacity": self.overlay_opacity,
             "overlay_scale": self.overlay_scale,
             "overlay_x": self.overlay_x,
             "overlay_y": self.overlay_y,
-            "shortcut_toggle": self.shortcut_toggle,
-            "shortcut_edit": self.shortcut_edit,
             "auto_capture_enabled": self.auto_capture_enabled,
             "auto_loop_enabled": self.auto_loop_enabled,
             "auto_sample_ms": self.auto_sample_ms,
@@ -316,6 +314,7 @@ def load_config(
     if not isinstance(hud_profile, dict):
         hud_profile = None
     overlay_enabled = parse_bool(file_data.get("overlay_enabled"), False)
+    overlay_auto_show = parse_bool(file_data.get("overlay_auto_show"), True)
     try:
         overlay_opacity = min(100, max(10, int(file_data.get("overlay_opacity", 30))))
     except (TypeError, ValueError):
@@ -328,8 +327,6 @@ def load_config(
     overlay_y = file_data.get("overlay_y")
     overlay_x = int(overlay_x) if isinstance(overlay_x, (int, float)) else None
     overlay_y = int(overlay_y) if isinstance(overlay_y, (int, float)) else None
-    shortcut_toggle = str(file_data.get("shortcut_toggle") or "Ctrl+Shift+D")
-    shortcut_edit = str(file_data.get("shortcut_edit") or "Ctrl+Shift+E")
     auto_capture_enabled = parse_bool(file_data.get("auto_capture_enabled"), False)
     auto_loop_enabled = parse_bool(file_data.get("auto_loop_enabled"), False)
     try:
@@ -366,12 +363,11 @@ def load_config(
         hud_profile=hud_profile,
         server_migrated=server_migrated,
         overlay_enabled=overlay_enabled,
+        overlay_auto_show=overlay_auto_show,
         overlay_opacity=overlay_opacity,
         overlay_scale=overlay_scale,
         overlay_x=overlay_x,
         overlay_y=overlay_y,
-        shortcut_toggle=shortcut_toggle,
-        shortcut_edit=shortcut_edit,
         auto_capture_enabled=auto_capture_enabled,
         auto_loop_enabled=auto_loop_enabled,
         auto_sample_ms=auto_sample_ms,

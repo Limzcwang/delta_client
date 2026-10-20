@@ -104,6 +104,8 @@ class RoomView(QWidget):
     room_settings_requested = Signal()
     kick_requested = Signal(str, str)  # (user_id, nickname)
     skill_settings_requested = Signal()
+    overlay_toggle_requested = Signal()
+    overlay_edit_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -145,6 +147,15 @@ class RoomView(QWidget):
         self.room_settings_button.clicked.connect(self.room_settings_requested.emit)
         self.room_settings_button.hide()
         top.addWidget(self.room_settings_button)
+
+        self.overlay_toggle_button = QPushButton("悬浮窗")
+        self.overlay_toggle_button.setObjectName("Link")
+        self.overlay_toggle_button.clicked.connect(self.overlay_toggle_requested.emit)
+        top.addWidget(self.overlay_toggle_button)
+        self.overlay_edit_button = QPushButton("编辑悬浮")
+        self.overlay_edit_button.setObjectName("Link")
+        self.overlay_edit_button.clicked.connect(self.overlay_edit_requested.emit)
+        top.addWidget(self.overlay_edit_button)
 
         self.owner_label = QLabel("")
         self.owner_label.setObjectName("Hint")

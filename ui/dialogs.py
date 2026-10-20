@@ -317,7 +317,6 @@ class SettingsDialog(QDialog):
     password_change_requested = Signal(str, str)  # (旧密码, 新密码)
     config_check_requested = Signal()
     operator_recognition_requested = Signal()
-    hotkey_test_requested = Signal()
 
     def __init__(
         self,
@@ -786,6 +785,12 @@ class SettingsDialog(QDialog):
         self.overlay_enabled_check = SwitchRow("启用技能 CD 悬浮窗", "默认关闭；仅无边框窗口模式")
         self.overlay_enabled_check.setChecked(self._config.overlay_enabled)
         layout.addWidget(self.overlay_enabled_check)
+        self.overlay_auto_show_check = SwitchRow(
+            "进入游戏自动显示悬浮窗",
+            "检测到游戏窗口且已登录时自动显示；窗口消失/最小化自动隐藏，游戏内无需按键",
+        )
+        self.overlay_auto_show_check.setChecked(self._config.overlay_auto_show)
+        layout.addWidget(self.overlay_auto_show_check)
 
         row = QHBoxLayout()
         row.addWidget(QLabel("透明度（%）"))
@@ -802,19 +807,16 @@ class SettingsDialog(QDialog):
         row.addStretch(1)
         layout.addLayout(row)
 
-        layout.addWidget(QLabel("显示/隐藏快捷键"))
-        self.shortcut_toggle_edit = QKeySequenceEdit(str(self._config.shortcut_toggle))
-        layout.addWidget(self.shortcut_toggle_edit)
-        layout.addWidget(QLabel("编辑模式快捷键（可拖动/缩放，退出后恢复鼠标穿透）"))
-        self.shortcut_edit_edit = QKeySequenceEdit(str(self._config.shortcut_edit))
-        layout.addWidget(self.shortcut_edit_edit)
-        self.hotkey_status_label = QLabel("全局热键：未注册")
+        hint_hotkey = QLabel(
+            "游戏内受反作弊限制不支持全局快捷键，请使用房间内「悬浮窗/编辑悬浮」按钮或托盘菜单控制。"
+        )
+        hint_hotkey.setObjectName("Hint")
+        hint_hotkey.setWordWrap(True)
+        layout.addWidget(hint_hotkey)
+        self.hotkey_status_label = QLabel("游戏内受反作弊限制，已禁用全局快捷键")
         self.hotkey_status_label.setObjectName("Hint")
         self.hotkey_status_label.setWordWrap(True)
         layout.addWidget(self.hotkey_status_label)
-        self.test_hotkey_button = QPushButton("测试热键")
-        self.test_hotkey_button.clicked.connect(self.hotkey_test_requested.emit)
-        layout.addWidget(self.test_hotkey_button)
 
         reset_row = QHBoxLayout()
         self.overlay_reset_button = QPushButton("重置悬浮窗位置")
@@ -826,13 +828,10 @@ class SettingsDialog(QDialog):
         self.overlay_status_label.setObjectName("Hint")
         self.overlay_status_label.setWordWrap(True)
         layout.addWidget(self.overlay_status_label)
-        self.hotkey_status_label = QLabel("全局快捷键：-")
-        self.hotkey_status_label.setObjectName("Hint")
-        self.hotkey_status_label.setWordWrap(True)
-        layout.addWidget(self.hotkey_status_label)
         hint = QLabel(
             "悬浮窗保留房间内面板不变，自动置顶并跟随游戏窗口；游戏最小化/窗口消失时自动隐藏。"
-            "若游戏为独占全屏，悬浮窗可能被覆盖，请使用无边框窗口。数值持久化到本地配置。"
+            "独占全屏 + 反作弊环境可能拦截全局热键，可改用房间内「悬浮窗/编辑悬浮」按钮。"
+            "若游戏为独占全屏，悬浮窗可能被覆盖，请使用无边框窗口；可尝试以管理员运行客户端。"
         )
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
@@ -1028,12 +1027,6 @@ class SettingsDialog(QDialog):
             self.error_label.setText(str(exc))
             self.error_label.show()
             return
-        shortcut_toggle = self.shortcut_toggle_edit.keySequence().toString()
-        shortcut_edit = self.shortcut_edit_edit.keySequence().toString()
-        if shortcut_toggle and shortcut_toggle == shortcut_edit:
-            self.error_label.setText("显示/隐藏与编辑模式快捷键不能相同")
-            self.error_label.show()
-            return
         self._hud_profile = dict(self._hud_profile or {})
         self._hud_profile["brightness_threshold"] = int(self.brightness_spin.value())
         self._result = replace(
@@ -1045,12 +1038,11 @@ class SettingsDialog(QDialog):
             operator_id=str(self.operator_combo.currentData() or ""),
             hud_profile=self._hud_profile or None,
             overlay_enabled=self.overlay_enabled_check.isChecked(),
+            overlay_auto_show=self.overlay_auto_show_check.isChecked(),
             overlay_opacity=int(self.overlay_opacity_spin.value()),
             overlay_scale=float(self.overlay_scale_spin.value()),
             overlay_x=None if self._overlay_position_reset else self._config.overlay_x,
             overlay_y=None if self._overlay_position_reset else self._config.overlay_y,
-            shortcut_toggle=shortcut_toggle or "Ctrl+Shift+D",
-            shortcut_edit=shortcut_edit or "Ctrl+Shift+E",
             auto_capture_enabled=self.auto_capture_check.isChecked(),
             auto_loop_enabled=self.auto_loop_check.isChecked(),
             auto_sample_ms=int(self.auto_interval_combo.currentData() or 2000),

@@ -10,7 +10,7 @@ from dataclasses import replace
 from typing import Any, Mapping
 
 from PySide6.QtCore import QEvent, QEventLoop, QTimer, Qt
-from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -85,7 +85,6 @@ from ui.room_view import RoomView
 from ui.settings_pages import ConnectionPage, ProfilePage
 from ui.auto_share import AutoShareController
 from ui.hud_async import HudRecognitionResult, HudRecognitionService
-from ui.global_hotkeys import GlobalHotkeyManager
 from ui.skill_overlay import OverlayController, SkillOverlay
 
 logger = logging.getLogger(__name__)
@@ -167,8 +166,7 @@ class MainWindow(QMainWindow):
         self._server_clock = ServerClock()
         self._skill_throttle = SkillShareThrottle(max_events=2, window_ms=1000)
         self._skill_share_enabled = False
-        self._last_hotkey_action = ""
-        self._last_hotkey_at = 0.0
+        self._overlay_visible = False
         self._login_candidates: list[str] = []
         self._login_candidate_index = 0
         self._login_credentials = ("", "")
@@ -191,8 +189,6 @@ class MainWindow(QMainWindow):
         self.connection_page: ConnectionPage | None = None
         self.profile_page: ProfilePage | None = None
         self._page_return_widget = None
-        self._last_hotkey_notice = ""
-        self._hotkey_failures: dict[str, str] = {}
         # F-c5：历史窗口文案（room_joined / 历史接口可选字段）
         self._history_window_days: int | None = None
 
@@ -287,13 +283,11 @@ class MainWindow(QMainWindow):
             self.overlay, self._find_game_window, self._screen_size
         )
         self.overlay.position_changed.connect(self._on_overlay_moved)
-        self._toggle_shortcut = QShortcut(QKeySequence(self.config.shortcut_toggle), self)
-        self._toggle_shortcut.activated.connect(lambda: self._on_global_hotkey("toggle"))
-        self._edit_shortcut = QShortcut(QKeySequence(self.config.shortcut_edit), self)
-        self._edit_shortcut.activated.connect(lambda: self._on_global_hotkey("edit"))
-        self.hotkeys = GlobalHotkeyManager(self)
-        self.hotkeys.triggered.connect(self._on_global_hotkey)
-        self._hotkey_failures = {}
+        self._auto_game_present = False
+        self._overlay_manual_hidden = False
+        self._auto_overlay_timer = QTimer(self)
+        self._auto_overlay_timer.setInterval(1000)
+        self._auto_overlay_timer.timeout.connect(self._tick_auto_overlay)
         self._apply_overlay_config()
         self._hud_service = HudRecognitionService(self)
         self._hud_timeout = QTimer(self)
@@ -346,9 +340,12 @@ class MainWindow(QMainWindow):
         self.room_view.room_settings_requested.connect(self._on_room_settings)
         self.room_view.kick_requested.connect(self._on_kick_requested)
         self.room_view.skill_settings_requested.connect(lambda: self._open_settings(start_tab=0))
+        self.room_view.overlay_toggle_requested.connect(self._toggle_overlay)
+        self.room_view.overlay_edit_requested.connect(self._toggle_overlay_edit)
         self.room_view.skill_panel.sharing_toggled.connect(self._on_skill_sharing_toggled)
         self.room_view.skill_panel.simulate_requested.connect(self._on_simulate_skill)
         self.room_view.skill_panel.capture_requested.connect(self._on_hud_capture)
+        self._setup_tray()
         self.room_view.canvas.stroke_finished.connect(self._on_canvas_strokes)
         self.room_view.canvas.clear_requested.connect(self._on_canvas_clear_requested)
 
@@ -393,11 +390,10 @@ class MainWindow(QMainWindow):
 
     def _show_login(self, message: str = "") -> None:
         self._stop_lobby_timer()
+        self._auto_overlay_timer.stop()
         self.overlay_controller.stop()
         self.overlay.hide()
-        self.hotkeys.unregister_all()
-        self._hotkey_failures = {}
-        self._last_hotkey_notice = ""
+        self._overlay_visible = False
         self.login_view.set_server_text(self.config.server_url, self.config.mode_label)
         self.login_view.set_busy(False)
         self.login_view.set_mode("login")
@@ -481,11 +477,6 @@ class MainWindow(QMainWindow):
             self.stack.setCurrentWidget(self.qml_lobby)
         else:
             self.stack.setCurrentWidget(self.room_list_view)
-        if self.session.is_logged_in:
-            self._register_hotkeys()
-        else:
-            self.hotkeys.unregister_all()
-            self._hotkey_failures = {}
         if self.session.is_logged_in and self.config.overlay_enabled:
             self.overlay_controller.start()
             self.overlay_controller.follow(force=True)
@@ -665,6 +656,8 @@ class MainWindow(QMainWindow):
             self._set_status("登录成功，但服务器未返回 JWT（PROTOCOL B 阶段才上线）")
         self._refresh_operator_config(silent=True)
         self._show_rooms()
+        self._apply_overlay_config()
+        self._update_auto_overlay_timer()
 
     def _on_login_failure(self, exc: BaseException, username: str = "") -> None:
         self.login_view.set_busy(False)
@@ -1022,6 +1015,7 @@ class MainWindow(QMainWindow):
         self._stop_lobby_timer()
         self._current_room = room
         self._room_password = password
+        self._overlay_manual_hidden = False
         self._ws_members_loaded = False
         self._membership_confirmed = False
         self._last_members_refresh = 0.0
@@ -1742,16 +1736,47 @@ class MainWindow(QMainWindow):
         if hasattr(self, "settings_dialog") and self.settings_dialog is not None:
             self.settings_dialog.set_operator_recognition_status(text)
 
-    def _find_game_window(self):
+    def _find_game_window_result(self, *, log_details: bool = False):
         try:
             from capture.window import find_game_window
 
             keywords = (self.config.capture_window_title,) if self.config.capture_window_title else None
             kwargs = {"title_keywords": keywords} if keywords else {}
             kwargs["title_match_strict"] = bool(self.config.title_match_strict)
-            return find_game_window(self.config.capture_window_process, **kwargs).window
-        except Exception:  # noqa: BLE001
+            result = find_game_window(self.config.capture_window_process, **kwargs)
+            if log_details:
+                candidates = [
+                    {
+                        "pid": item.pid,
+                        "exe": item.process_name,
+                        "title": item.title,
+                        "size": (item.client_width, item.client_height),
+                    }
+                    for item in (result.candidates or [])
+                ]
+                logger.info(
+                    "window match process=%r strict=%s found=%s reason=%r candidates=%d detail=%s",
+                    self.config.capture_window_process,
+                    self.config.title_match_strict,
+                    result.window is not None,
+                    result.reason,
+                    len(candidates),
+                    candidates,
+                )
+            return result
+        except Exception as exc:  # noqa: BLE001
+            logger.info("window match error: %s", exc)
             return None
+
+    def _resolve_game_window(self, *, log_details: bool = False):
+        """唯一窗口判定入口：测试热键/overlay/HUD 全部复用。"""
+        result = self._find_game_window_result(log_details=log_details)
+        self._last_game_window_result = result
+        return result
+
+    def _find_game_window(self):
+        result = self._resolve_game_window()
+        return None if result is None else result.window
 
     @staticmethod
     def _screen_size() -> tuple[int, int]:
@@ -1764,10 +1789,6 @@ class MainWindow(QMainWindow):
     def _apply_overlay_config(self) -> None:
         self.overlay.set_opacity(self.config.overlay_opacity / 100.0)
         self.overlay.set_scale(self.config.overlay_scale)
-        if self.config.shortcut_toggle:
-            self._toggle_shortcut.setKey(QKeySequence(self.config.shortcut_toggle))
-        if self.config.shortcut_edit:
-            self._edit_shortcut.setKey(QKeySequence(self.config.shortcut_edit))
         if self.config.overlay_x is not None and self.config.overlay_y is not None:
             self.overlay_controller.fixed_position = (
                 int(self.config.overlay_x),
@@ -1775,106 +1796,54 @@ class MainWindow(QMainWindow):
             )
         else:
             self.overlay_controller.fixed_position = None
-        if hasattr(self, "hotkeys"):
-            if self.session.is_logged_in:
-                self._register_hotkeys()
-            else:
-                self.hotkeys.unregister_all()
-                self._hotkey_failures = {}
-        if self.session.is_logged_in and self.config.overlay_enabled:
+        if self.session.is_logged_in and not self._overlay_manual_hidden and (
+            self.config.overlay_enabled or self.config.overlay_auto_show
+        ):
             self.overlay_controller.set_opacity(self.config.overlay_opacity / 100.0)
             self.overlay_controller.start()
             self.overlay_controller.follow(force=True)
+            self._overlay_visible = bool(self.overlay.isVisible())
+            if self.config.overlay_auto_show:
+                logger.info("自动显示悬浮窗 enabled window=%s", self._find_game_window() is not None)
         else:
             self.overlay_controller.stop()
+            self._overlay_visible = False
             self.overlay.hide()
-
-    def _register_hotkeys(self) -> None:
-        """热键只在登录后注册；失败只记录供设置页展示。"""
-        if not hasattr(self, "hotkeys"):
-            return
-        self._hotkey_failures = self.hotkeys.register_all(
-            str(self.config.shortcut_toggle), str(self.config.shortcut_edit)
-        )
-        registered = self.hotkeys.registered_actions
-        # F4：全局成功时禁用应用内 QShortcut，避免同键位双触发；失败才回退启用。
-        self._toggle_shortcut.setEnabled("toggle" not in registered)
-        self._edit_shortcut.setEnabled("edit" not in registered)
-        logger.debug(
-            "hotkey shortcuts enabled toggle=%s edit=%s",
-            self._toggle_shortcut.isEnabled(), self._edit_shortcut.isEnabled(),
-        )
-        if self._hotkey_failures:
-            logger.info("全局快捷键注册失败，启用应用内 QShortcut：%s", self._hotkey_failures)
-
-    def _on_global_hotkey(self, action: str) -> None:
-        # 未登录阶段静默忽略：不提示、不显示、不记错误日志
-        if not self.session.is_logged_in:
-            return
-        now = time.monotonic()
-        if action == self._last_hotkey_action and now - self._last_hotkey_at < 0.2:
-            logger.info("热键去重 action=%s delta_ms=%.1f", action, (now - self._last_hotkey_at) * 1000)
-            return
-        self._last_hotkey_action = action
-        self._last_hotkey_at = now
-        window = self._find_game_window()
-        logger.info(
-            "全局热键触发 action=%s game_window=%s overlay_enabled=%s edit=%s",
-            action,
-            "None" if window is None else (
-                f"pid={getattr(window, 'pid', '?')},title={getattr(window, 'title', '')!r}"
-            ),
-            self.overlay_controller.enabled,
-            self.overlay.edit_mode,
-        )
-        if action == "edit":
-            self._toggle_overlay_edit()
-        else:
-            self._toggle_overlay()
-        self._set_status(f"热键触发：{action}")
-
-    def _on_test_hotkey(self, dialog: SettingsDialog) -> None:
-        if not self.session.is_logged_in:
-            return
-        self._on_global_hotkey("toggle")
-        if self._hotkey_ready():
-            message = "热键触发成功：显示/隐藏悬浮窗"
-        else:
-            message = "热键已收到，但当前无游戏窗口（不会显示悬浮窗）"
-        try:
-            dialog.set_hotkey_status(message)
-        except RuntimeError:
-            pass
-        self._set_status(message)
-
-    def _hotkey_ready(self) -> bool:
-        if not self.session.is_logged_in:
-            return False
-        return self._find_game_window() is not None
+        self._sync_overlay_buttons()
+        self._update_auto_overlay_timer()
 
     def _toggle_overlay(self) -> None:
-        visible = bool(self.overlay_controller.enabled and self.overlay.isVisible())
-        if visible:
+        if not self.session.is_logged_in:
+            return
+        if self._overlay_visible:
             self.overlay_controller.stop()
             self.overlay.hide()
-            logger.info("overlay toggle hide enabled=%s", self.overlay_controller.enabled)
+            self._overlay_visible = False
+            if self.config.overlay_auto_show:
+                self._overlay_manual_hidden = True
+            logger.info("overlay toggle hide state=false enabled=%s", self.overlay_controller.enabled)
             self._set_status("悬浮窗已隐藏")
             self.room_view.set_status("悬浮窗已隐藏")
             return
-        if not self._hotkey_ready():
+        if self._find_game_window() is None:
             self.overlay.hide()
+            self._overlay_visible = False
             self._set_status("等待游戏窗口")
             self.room_view.set_status("等待游戏窗口")
             return
         self.overlay_controller.start()
         self.overlay_controller.follow(force=True)
-        shown = bool(self.overlay_controller.enabled and self.overlay.isVisible())
-        message = "悬浮窗已显示" if shown else "等待游戏窗口"
-        logger.info("overlay toggle show visible=%s", shown)
+        self._overlay_visible = bool(self.overlay.isVisible())
+        self._overlay_manual_hidden = False
+        message = "悬浮窗已显示" if self._overlay_visible else "等待游戏窗口"
+        logger.info("overlay toggle show state=%s enabled=%s", self._overlay_visible, self.overlay_controller.enabled)
         self._set_status(message)
         self.room_view.set_status(message)
+        self._sync_overlay_buttons()
 
     def _toggle_overlay_edit(self) -> None:
+        if not self.session.is_logged_in:
+            return
         enabled = not self.overlay.edit_mode
         if enabled and self._find_game_window() is None:
             self.overlay.hide()
@@ -1886,6 +1855,7 @@ class MainWindow(QMainWindow):
         logger.info("overlay edit toggle enabled=%s visible=%s", enabled, self.overlay.isVisible())
         self._set_status(message)
         self.room_view.set_status(message)
+        self._sync_overlay_buttons()
 
     def _on_overlay_moved(self, x: int, y: int) -> None:
         logger.info("overlay moved x=%s y=%s", x, y)
@@ -2932,6 +2902,68 @@ class MainWindow(QMainWindow):
             self._apply_auto_config()
         logger.debug("modal timers resumed")
 
+    def _update_auto_overlay_timer(self) -> None:
+        should_run = bool(self.session.is_logged_in and self.config.overlay_auto_show)
+        if should_run and not self._auto_overlay_timer.isActive():
+            self._auto_overlay_timer.start()
+        elif not should_run:
+            self._auto_overlay_timer.stop()
+
+    def _tick_auto_overlay(self) -> None:
+        if not self.session.is_logged_in or not self.config.overlay_auto_show:
+            self._auto_overlay_timer.stop()
+            return
+        result = self._resolve_game_window()
+        window = None if result is None else result.window
+        present = window is not None and not getattr(window, "is_minimized", False)
+        if present != self._auto_game_present:
+            self._auto_game_present = present
+            if present:
+                self._overlay_manual_hidden = False
+                logger.info("自动悬浮窗：检测到游戏窗口")
+            else:
+                logger.info("自动悬浮窗：游戏窗口消失/最小化")
+        if present:
+            if not self._overlay_manual_hidden and not self.overlay.edit_mode and not self.overlay_controller.enabled:
+                self.overlay_controller.set_opacity(self.config.overlay_opacity / 100.0)
+                self.overlay_controller.start()
+                self.overlay_controller.follow(force=True)
+                self._overlay_visible = bool(self.overlay.isVisible())
+        elif self.overlay_controller.enabled and not self.overlay.edit_mode:
+            self.overlay_controller.stop()
+            self.overlay.hide()
+            self._overlay_visible = False
+        self._sync_overlay_buttons()
+
+    def _sync_overlay_buttons(self) -> None:
+        try:
+            self.room_view.overlay_toggle_button.setText("隐藏悬浮窗" if self._overlay_visible else "显示悬浮窗")
+            self.room_view.overlay_edit_button.setText("完成编辑" if self.overlay.edit_mode else "编辑悬浮窗")
+        except RuntimeError:
+            pass
+        if hasattr(self, "tray_toggle_action"):
+            self.tray_toggle_action.setText("隐藏悬浮窗" if self._overlay_visible else "显示悬浮窗")
+        if hasattr(self, "tray_edit_action"):
+            self.tray_edit_action.setText("完成编辑" if self.overlay.edit_mode else "编辑悬浮窗")
+
+    def _setup_tray(self) -> None:
+        try:
+            from PySide6.QtWidgets import QMenu, QSystemTrayIcon
+            self.tray = QSystemTrayIcon(self.windowIcon(), self)
+            self.tray.setToolTip("Delta Client")
+            menu = QMenu(self)
+            self.tray_toggle_action = menu.addAction("显示/隐藏悬浮窗")
+            self.tray_toggle_action.triggered.connect(self._toggle_overlay)
+            self.tray_edit_action = menu.addAction("编辑悬浮窗")
+            self.tray_edit_action.triggered.connect(self._toggle_overlay_edit)
+            menu.addSeparator()
+            menu.addAction("退出").triggered.connect(self.close)
+            self.tray.setContextMenu(menu)
+            self.tray.show()
+            self._sync_overlay_buttons()
+        except Exception as exc:  # noqa: BLE001
+            logger.info("系统托盘不可用：%s", exc)
+
     def _open_settings(self, start_tab: int = 0) -> None:
         dialog = SettingsDialog(self.config, self, self.operator_catalog, self.operator_config)
         self.settings_dialog = dialog
@@ -2952,22 +2984,10 @@ class MainWindow(QMainWindow):
                 dialog, old_password, new_password
             )
         )
-        dialog.hotkey_test_requested.connect(lambda: self._on_test_hotkey(dialog))
         dialog.set_account(self._account())
         dialog.set_nickname(self.session.nickname or self.session.username)
         dialog.set_overlay_status(self.overlay_controller.last_reason or "未附加")
-        if not self.session.is_logged_in:
-            dialog.set_hotkey_status("登录后注册")
-        else:
-            parts = []
-            for action, label in (("toggle", "显示/隐藏"), ("edit", "编辑")):
-                spec = self.hotkeys.spec_for(action)
-                if spec is not None:
-                    parts.append(f"{spec.label} 已注册（{label}）")
-            if self._hotkey_failures:
-                parts.extend(self._hotkey_failures.values())
-                parts.append("全局热键被占用，已回退为应用内快捷键，请更换按键")
-            dialog.set_hotkey_status("；".join(parts) if parts else "未注册")
+        dialog.set_hotkey_status("游戏内受反作弊限制不支持全局快捷键，请使用房间按钮或托盘菜单")
         dialog.set_server_migrated(self.config.server_migrated)
         dialog.set_operator_recognition_status(self._operator_recognition_text)
         dialog.tabs.setCurrentIndex(max(0, min(int(start_tab), dialog.tabs.count() - 1)))
@@ -3018,13 +3038,6 @@ class MainWindow(QMainWindow):
             self._on_operator_changed()
         self._apply_overlay_config()
         self._apply_auto_config()
-        if self._hotkey_failures:
-            QMessageBox.warning(
-                self,
-                "快捷键注册失败",
-                "；".join(self._hotkey_failures.values())
-                + "\n已回退到应用内快捷键（仅客户端有焦点时有效）。",
-            )
         self._refresh_status_bar()
         self.login_view.set_server_text(new_config.server_url, new_config.mode_label)
         self.room_list_view.set_mode(new_config.use_mock, new_config.server_url)
@@ -3223,7 +3236,6 @@ class MainWindow(QMainWindow):
                         pass
             self._hud_timeout.stop()
             self._hud_service.shutdown()
-            self.hotkeys.stop()
             self.overlay_controller.stop()
             self.bridge.stop()
             super().closeEvent(event)
