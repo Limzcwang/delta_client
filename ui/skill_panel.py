@@ -5,9 +5,17 @@ from __future__ import annotations
 import time
 
 from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontMetrics,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
-    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -19,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.operators import Operator, OperatorCatalog
+from ui.switch_row import SwitchRow
 from core.skills import (
     SLOT_ABILITY,
     SLOT_LABELS,
@@ -180,8 +189,61 @@ class SkillSlotWidget(QWidget):
         painter.end()
 
 
+_AVATAR_SIZE = 22
+_AVATAR_RADIUS = 4
+_AVATAR_CACHE: dict[str, QPixmap] = {}
+
+
+def _clip_avatar(source: QPixmap) -> QPixmap:
+    """缩放 22×22 并做圆角裁剪 + 1px 边框；透明区域用于圆角。"""
+    target = QPixmap(_AVATAR_SIZE, _AVATAR_SIZE)
+    target.fill(Qt.GlobalColor.transparent)
+    scaled = source.scaled(
+        _AVATAR_SIZE,
+        _AVATAR_SIZE,
+        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    painter = QPainter(target)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    path = QPainterPath()
+    path.addRoundedRect(0, 0, _AVATAR_SIZE, _AVATAR_SIZE, _AVATAR_RADIUS, _AVATAR_RADIUS)
+    painter.setClipPath(path)
+    painter.drawPixmap(0, 0, scaled)
+    painter.setClipping(False)
+    painter.setPen(QPen(QColor("#24334e"), 1))
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawRoundedRect(0.5, 0.5, _AVATAR_SIZE - 1, _AVATAR_SIZE - 1, _AVATAR_RADIUS, _AVATAR_RADIUS)
+    painter.end()
+    return target
+
+
+def _fallback_avatar(letter: str) -> QPixmap:
+    """未知干员：昵称首字 + 深蓝渐变底，圆角 4、字号 11。"""
+    pixmap = QPixmap(_AVATAR_SIZE, _AVATAR_SIZE)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    path = QPainterPath()
+    path.addRoundedRect(0, 0, _AVATAR_SIZE, _AVATAR_SIZE, _AVATAR_RADIUS, _AVATAR_RADIUS)
+    gradient = QLinearGradient(0, 0, _AVATAR_SIZE, _AVATAR_SIZE)
+    gradient.setColorAt(0.0, QColor("#2b3b52"))
+    gradient.setColorAt(1.0, QColor("#162235"))
+    painter.fillPath(path, gradient)
+    painter.setPen(QPen(QColor("#24334e"), 1))
+    painter.drawPath(path)
+    font = QFont()
+    font.setPixelSize(11)
+    font.setBold(True)
+    painter.setFont(font)
+    painter.setPen(QPen(QColor("#c8d3e1")))
+    painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, (letter or "?")[:1])
+    painter.end()
+    return pixmap
+
+
 class SkillRow(QFrame):
-    """一条队友技能行：头像首字母 + 昵称/干员名 + 3 个固定槽位。"""
+    """一条队友技能行：干员头像/昵称 + 昵称/干员名 + 3 个固定槽位。"""
 
     def __init__(
         self,
@@ -198,6 +260,7 @@ class SkillRow(QFrame):
         self.state = state
         self.operator_def = operator
         self._avatar_key = ""
+        self._avatar_source = ""
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 8)
         root.setSpacing(6)
@@ -236,7 +299,16 @@ class SkillRow(QFrame):
             pulse=False,
         )
 
-    def update_state(self, state: SkillState, server_now: int, pulse: bool = False) -> None:
+    def update_state(
+        self,
+        state: SkillState,
+        server_now: int,
+        pulse: bool = False,
+        *,
+        operator: Operator | None = None,
+    ) -> None:
+        if operator is not None:
+            self.operator_def = operator
         self.state = state
         if state.display_name != self.name_label.text():
             self.name_label.setText(state.display_name)
@@ -260,26 +332,26 @@ class SkillRow(QFrame):
             )
 
     def _apply_avatar(self, state: SkillState) -> None:
-        """头像文件存在则加载，否则首字母占位；同一干员不重复加载。"""
+        """按干员文件加载头像；缓存按 operator_id；缺失时用首字渐变占位。"""
         operator = self.operator_def
-        key = operator.id if operator is not None else f"name:{state.display_name}"
-        if key == self._avatar_key:
-            return
-        self._avatar_key = key
         if operator is not None and operator.avatar_available():
-            pixmap = QPixmap(str(operator.avatar_path()))
-            if not pixmap.isNull():
+            key = str(operator.id or "")
+            pixmap = _AVATAR_CACHE.get(key)
+            if pixmap is None:
+                source = QPixmap(str(operator.avatar_path()))
+                if not source.isNull():
+                    pixmap = _clip_avatar(source)
+                    _AVATAR_CACHE[key] = pixmap
+            if pixmap is not None:
                 self.avatar.setText("")
-                self.avatar.setPixmap(
-                    pixmap.scaled(
-                        self.avatar.size(),
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation,
-                    )
-                )
+                self.avatar.setPixmap(pixmap)
+                self._avatar_source = "operator"
+                self._avatar_key = key
                 return
-        self.avatar.setPixmap(QPixmap())
-        self.avatar.setText(state.avatar_letter)
+        self._avatar_source = "fallback"
+        self.avatar.setText("")
+        self.avatar.setPixmap(_fallback_avatar(state.avatar_letter))
+        self._avatar_key = f"name:{state.display_name}"
 
 
 class SkillPanel(QWidget):
@@ -321,9 +393,9 @@ class SkillPanel(QWidget):
         title.setObjectName("SectionTitle")
         header.addWidget(title)
         header.addStretch(1)
-        self.share_check = QCheckBox("共享我的技能")
-        self.share_check.setStyleSheet("QCheckBox { color: #f5a800; font-weight: 700; }")
-        self.share_check.setChecked(False)
+        self.share_check = SwitchRow("共享我的技能", "", False)
+        self.share_check.title_label.setStyleSheet("color: #f5a800; font-weight: 700;")
+        self.share_check.setFixedWidth(150)
         self.share_check.toggled.connect(self._on_share_toggled)
         header.addWidget(self.share_check)
         self.simulate_button = QPushButton("模拟我的技能")
@@ -424,7 +496,10 @@ class SkillPanel(QWidget):
         existed = state.user_id in self._rows
         self._states[state.user_id] = state
         if existed:
-            self._rows[state.user_id].update_state(state, self.server_now_ms(), self._pulse)
+            operator = self._catalog.resolve(state.operator_id, state.operator)
+            self._rows[state.user_id].update_state(
+                state, self.server_now_ms(), self._pulse, operator=operator
+            )
         else:
             self._add_row(state)
         self._sync_empty()

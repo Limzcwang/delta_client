@@ -13,6 +13,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from ui.animated_switch import AnimatedSwitch
+from ui.switch_row import SwitchRow
 
 try:
     from PySide6.QtCore import QUrl
@@ -21,6 +22,33 @@ try:
     HAS_QML = True
 except Exception:  # noqa: BLE001
     HAS_QML = False
+
+
+class SwitchRowTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_state_and_toggled_sync(self) -> None:
+        row = SwitchRow("标题", "说明", False)
+        seen: list[bool] = []
+        row.toggled.connect(seen.append)
+        self.assertFalse(row.isChecked())
+        row.setChecked(True)
+        self.assertTrue(row.isChecked())
+        self.assertEqual([True], seen)
+        row.setChecked(False)
+        self.assertEqual([True, False], seen)
+
+    def test_keyboard_and_animation(self) -> None:
+        row = SwitchRow("标题", checked=False)
+        row.show()
+        row.switch.setFocus()
+        QTest.keyClick(row.switch, Qt.Key.Key_Space)
+        self.assertTrue(row.isChecked())
+        self.assertEqual(150, row.switch._anim.duration())
+        QTest.qWait(180)
+        self.assertAlmostEqual(1.0, row.switch.knob)
 
 
 class AnimatedSwitchTests(unittest.TestCase):
@@ -62,6 +90,31 @@ class AnimatedSwitchTests(unittest.TestCase):
         w.setEnabled(False)
         QTest.mouseClick(w, Qt.MouseButton.LeftButton)
         self.assertFalse(w.isChecked())
+
+
+@unittest.skipUnless(HAS_QML, "QtQuick QML 不可用")
+class SwitchConfigSyncTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_connection_page_config_sync(self) -> None:
+        from config import AppConfig
+        from ui.settings_pages import ConnectionPage
+
+        page = ConnectionPage(AppConfig(use_mock=False, persist_token=False))
+        try:
+            page.mock_check.setChecked(True)
+            page.save_token_check.setChecked(True)
+            cfg = page.result_config()
+            self.assertTrue(cfg.use_mock)
+            self.assertTrue(cfg.persist_token)
+            page.set_config(AppConfig(use_mock=False, persist_token=False))
+            self.assertFalse(page.mock_check.isChecked())
+            self.assertFalse(page.save_token_check.isChecked())
+        finally:
+            page.close()
+            page.deleteLater()
 
 
 @unittest.skipUnless(HAS_QML, "QtQuick QML 不可用")

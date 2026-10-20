@@ -78,7 +78,9 @@ class SkillPanelTests(unittest.TestCase):
         row = panel._rows["2"]
         self.assertEqual("队友2", row.name_label.text())
         self.assertEqual("红狼", row.operator_label.text())
-        self.assertEqual("队", row.avatar.text())
+        self.assertEqual("fallback", row._avatar_source)
+        self.assertEqual("", row.avatar.text())
+        self.assertFalse(row.avatar.pixmap().isNull())
         ultimate = row.slot_widgets[SLOT_ULTIMATE]
         ability = row.slot_widgets[SLOT_ABILITY]
         throwable = row.slot_widgets[SLOT_THROWABLE]
@@ -186,8 +188,9 @@ class SkillPanelTests(unittest.TestCase):
         panel.set_states([state(operator_id="noavatar", operator="无头像干员")])
         row = panel._rows["2"]
         self.assertEqual("无头像干员", row.operator_label.text())
-        self.assertEqual("队", row.avatar.text())
-        self.assertTrue(row.avatar.pixmap().isNull())
+        self.assertEqual("", row.avatar.text())
+        self.assertEqual("fallback", row._avatar_source)
+        self.assertFalse(row.avatar.pixmap().isNull())
         ultimate = row.slot_widgets[SLOT_ULTIMATE]
         ability = row.slot_widgets[SLOT_ABILITY]
         self.assertEqual("配置大招", ultimate.text_lines()[0])
@@ -235,6 +238,52 @@ class SkillPanelTests(unittest.TestCase):
             row = panel._rows["2"]
             self.assertFalse(row.avatar.pixmap().isNull())
             self.assertEqual("测试干员", row.operator_label.text())
+
+    def test_operator_avatar_path_and_cache(self) -> None:
+        from core.operators import avatar_path_for, load_operator_catalog
+        from ui.skill_panel import _AVATAR_CACHE, SkillRow
+
+        self.assertTrue(avatar_path_for("honglang").is_file())
+        _AVATAR_CACHE.clear()
+        catalog = load_operator_catalog()
+        panel = SkillPanel(catalog=catalog, clock=lambda: CAPTURED_AT)
+        panel.set_states([state("2", operator_id="honglang", operator="红狼")])
+        try:
+            row = panel._rows["2"]
+            self.assertEqual("operator", row._avatar_source)
+            self.assertFalse(row.avatar.pixmap().isNull())
+            self.assertIn("honglang", _AVATAR_CACHE)
+            cached = _AVATAR_CACHE["honglang"]
+            # 同一干员第二个成员直接命中缓存
+            panel.upsert(state("3", operator_id="honglang", operator="红狼"))
+            row3 = panel._rows["3"]
+            self.assertEqual("operator", row3._avatar_source)
+            self.assertIs(cached, _AVATAR_CACHE["honglang"])
+            self.assertIsNotNone(row.avatar.pixmap())
+        finally:
+            panel.close()
+            panel.deleteLater()
+
+    def test_operator_avatar_fallback_and_refresh(self) -> None:
+        from core.operators import load_operator_catalog
+        from ui.skill_panel import _AVATAR_CACHE, _fallback_avatar
+
+        _AVATAR_CACHE.clear()
+        panel = SkillPanel(catalog=load_operator_catalog(), clock=lambda: CAPTURED_AT)
+        panel.set_states([state("2", operator_id="", operator="不存在干员")])
+        try:
+            row = panel._rows["2"]
+            self.assertEqual("fallback", row._avatar_source)
+            self.assertFalse(row.avatar.pixmap().isNull())
+            # 重新识别为蜂医后刷新头像
+            panel.upsert(state("2", operator_id="fengyi", operator="蜂医"))
+            self.assertEqual("operator", row._avatar_source)
+            self.assertIn("fengyi", _AVATAR_CACHE)
+            self.assertEqual("fengyi", row.operator_def.id)
+            self.assertFalse(_fallback_avatar("队").isNull())
+        finally:
+            panel.close()
+            panel.deleteLater()
 
     def test_slot_three_sections_do_not_overlap(self) -> None:
         panel = self._panel()

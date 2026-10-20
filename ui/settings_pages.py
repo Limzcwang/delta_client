@@ -6,7 +6,7 @@ from dataclasses import replace
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox,
+
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ui.switch_row import SwitchRow
 from config import (
     DEFAULT_SERVER_URL,
     AppConfig,
@@ -133,9 +134,9 @@ class ConnectionPage(_PageShell):
         self.ws_edit.setPlaceholderText("留空 = 自动推导 ws://<host>:8000/ws")
         self.card_layout.addWidget(self.ws_edit)
 
-        self.mock_check = QCheckBox("使用内置 Mock 后端（不联网，用于后端未就绪时演示）")
+        self.mock_check = SwitchRow("使用内置 Mock 后端", "不联网，用于后端未就绪时演示")
         self.card_layout.addWidget(self.mock_check)
-        self.save_token_check = QCheckBox("登录后把 token 保存到本机（不保存密码）")
+        self.save_token_check = SwitchRow("登录后把 token 保存到本机", "不保存密码")
         self.card_layout.addWidget(self.save_token_check)
 
         test_row = QHBoxLayout()

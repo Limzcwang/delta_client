@@ -360,14 +360,14 @@ QPushButton#Text, QPushButton#Link {
 QPushButton#Text:hover, QPushButton#Link:hover { color: #ffb91f; }
 QPushButton#Danger { background-color: #3a1f1d; border: 1px solid #6d2f2a; color: #ff9b8f; }
 QCheckBox, QRadioButton { background: transparent; color: #c8d3e1; spacing: 10px; min-height: 26px; }
-QCheckBox::indicator, QRadioButton::indicator {
+QRadioButton::indicator {
     width: 40px; height: 22px; border-radius: 11px;
     background-color: #182235; border: 1px solid #24334e;
 }
-QCheckBox::indicator:checked, QRadioButton::indicator:checked {
+QRadioButton::indicator:checked {
     background-color: #f5a800; border: 1px solid #ffb91f;
 }
-QCheckBox::indicator:disabled { background-color: #131c2b; border-color: #1c2940; }
+QRadioButton::indicator:disabled { background-color: #131c2b; border-color: #1c2940; }
 QTabWidget::pane { border: 1px solid #24334e; border-radius: 0 8px 8px 8px; background: #131c2b; top: -1px; }
 QTabBar::tab {
     background: transparent; color: #8b98ab;

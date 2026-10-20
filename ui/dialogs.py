@@ -7,7 +7,6 @@ from dataclasses import replace
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QRegularExpressionValidator
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QDialog,
     QDoubleSpinBox,
@@ -41,6 +40,7 @@ from core.rooms import (
     validate_room_password_change,
 )
 from core.validation import validate_nickname, validate_password_change
+from ui.switch_row import SwitchRow
 
 
 def _add_buttons(dialog: QDialog, layout: QVBoxLayout, ok_text: str) -> QPushButton:
@@ -379,11 +379,11 @@ class SettingsDialog(QDialog):
         self.ws_edit.setPlaceholderText("留空 = 自动推导 ws://<host>:8000/ws")
         layout.addWidget(self.ws_edit)
 
-        self.mock_check = QCheckBox("使用内置 Mock 后端（不联网，用于后端未就绪时演示）")
+        self.mock_check = SwitchRow("使用内置 Mock 后端", "不联网，用于后端未就绪时演示")
         self.mock_check.setChecked(self._config.use_mock)
         layout.addWidget(self.mock_check)
 
-        self.save_token_check = QCheckBox("登录后把 token 保存到本机（不保存密码）")
+        self.save_token_check = SwitchRow("登录后把 token 保存到本机", "不保存密码")
         self.save_token_check.setChecked(self._config.persist_token)
         layout.addWidget(self.save_token_check)
 
@@ -415,10 +415,10 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(4, 10, 4, 4)
         layout.setSpacing(8)
 
-        self.auto_capture_check = QCheckBox("允许截图采集（仅内存，不落盘/不上传）")
+        self.auto_capture_check = SwitchRow("允许截图采集", "仅内存，不落盘/不上传")
         self.auto_capture_check.setChecked(self._config.auto_capture_enabled)
         layout.addWidget(self.auto_capture_check)
-        self.auto_loop_check = QCheckBox("自动识别并共享（按采样间隔抓帧；变化才上报）")
+        self.auto_loop_check = SwitchRow("自动识别并共享", "按采样间隔抓帧；变化才上报")
         self.auto_loop_check.setChecked(self._config.auto_loop_enabled)
         layout.addWidget(self.auto_loop_check)
         interval_row = QHBoxLayout()
@@ -432,7 +432,7 @@ class SettingsDialog(QDialog):
         interval_row.addStretch(1)
         layout.addLayout(interval_row)
 
-        self.auto_operator_check = QCheckBox("自动识别干员（命中后覆盖手动选择并持久化）")
+        self.auto_operator_check = SwitchRow("自动识别干员", "命中后覆盖手动选择并持久化")
         self.auto_operator_check.setChecked(bool(self._config.auto_operator_enabled))
         layout.addWidget(self.auto_operator_check)
         threshold_row = QHBoxLayout()
@@ -453,7 +453,7 @@ class SettingsDialog(QDialog):
         rec_row.addWidget(self.operator_recheck_button)
         layout.addLayout(rec_row)
 
-        self.hud_debug_check = QCheckBox("HUD 调试导出（三槽 ROI/整帧/result.json，保留最近 10 次）")
+        self.hud_debug_check = SwitchRow("HUD 调试导出", "三槽 ROI/整帧/result.json，保留最近 10 次")
         self.hud_debug_check.setChecked(bool(self._config.hud_debug_export))
         layout.addWidget(self.hud_debug_check)
         brightness_row = QHBoxLayout()
@@ -754,7 +754,7 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(4, 10, 4, 4)
         layout.setSpacing(8)
-        self.overlay_enabled_check = QCheckBox("启用技能 CD 悬浮窗（默认关闭；仅无边框窗口模式）")
+        self.overlay_enabled_check = SwitchRow("启用技能 CD 悬浮窗", "默认关闭；仅无边框窗口模式")
         self.overlay_enabled_check.setChecked(self._config.overlay_enabled)
         layout.addWidget(self.overlay_enabled_check)
 
