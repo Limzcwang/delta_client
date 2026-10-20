@@ -149,6 +149,32 @@ class RoomOverlayFixTests(unittest.TestCase):
         finally:
             self._close(window)
 
+    def test_share_off_once_per_room_and_resets_between_rooms(self) -> None:
+        window = self._window()
+        fake = _FakeWs()
+        try:
+            window._start_ws = lambda room: None
+            window._refresh_members_http = lambda *a, **k: None
+            window._load_chat_history = lambda *a, **k: None
+            window._refresh_operator_config = lambda *a, **k: None
+            window._apply_auto_config = lambda: None
+            window._ws_generation = 1
+            room_a = Room(id="a", code="AAAAA", name="A")
+            window._enter_room(room_a)
+            window._ws = fake
+            msg_a = {"type": "room_joined", "room": {"id": "a", "code": "AAAAA", "name": "A"}}
+            window._on_ws_message(1, msg_a)
+            self.assertEqual(1, fake.off_count)
+            window._on_ws_message(1, msg_a)
+            self.assertEqual(1, fake.off_count)  # 同房重连幂等
+            room_b = Room(id="b", code="BBBBB", name="B")
+            window._enter_room(room_b)
+            window._ws = fake
+            window._on_ws_message(1, {"type": "room_joined", "room": {"id": "b", "code": "BBBBB", "name": "B"}})
+            self.assertEqual(2, fake.off_count)
+        finally:
+            self._close(window)
+
     def test_no_game_does_not_show_overlay(self) -> None:
         window = self._window()
         try:

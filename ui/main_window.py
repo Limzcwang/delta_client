@@ -905,6 +905,7 @@ class MainWindow(QMainWindow):
         self._skills.clear()
         self._self_skill_state = None
         self._skill_share_enabled = False
+        self._room_share_off_sent = False
         self._membership_confirmed = False
         self._last_membership_error = ""
         self._last_membership_error_at = 0.0
@@ -2566,6 +2567,7 @@ class MainWindow(QMainWindow):
         self._skills.clear()
         self._self_skill_state = None
         self._skill_share_enabled = False
+        self._room_share_off_sent = False
         self._hud_service.reset_tracker()
         if hasattr(self, "_auto_controller"):
             self._auto_controller.stop()
