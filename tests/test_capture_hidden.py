@@ -141,6 +141,33 @@ class HiddenGrabTests(unittest.TestCase):
         self.assertNotIn("hide", window.events)
         self.assertNotIn("show", window.events)
 
+    def test_excludes_overlay_and_pauses_resumes(self) -> None:
+        window = _Window(geometry=(0, 0, 100, 100))
+        overlay = _Window(geometry=(0, 0, 100, 100))
+        self.assertEqual(
+            [window], select_windows_to_hide([window, overlay], QRect(0, 0, 100, 100), exclude=[overlay])
+        )
+        pauses: list[str] = []
+        resumes: list[str] = []
+        source = _Source()
+        grab_frame_hidden(
+            _Widget(window),
+            source,
+            windows=[window, overlay],
+            game_rect=QRect(0, 0, 100, 100),
+            exclude=[overlay],
+            pause_overlay=lambda: pauses.append("pause"),
+            resume_overlay=lambda: resumes.append("resume"),
+            resume_delay_ms=0,
+            delay=0,
+            sleep=lambda _d: None,
+            process_events=lambda: None,
+        )
+        self.assertEqual(["pause"], pauses)
+        self.assertEqual(["resume"], resumes)
+        self.assertEqual(["hide", "show", "raise"], window.events)
+        self.assertEqual([], overlay.events)  # overlay 不被 hide/show
+
     def test_only_if_active_skips_inactive(self) -> None:
         window = _Window(active=False)
         source = _Source()

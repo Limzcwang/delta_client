@@ -82,7 +82,7 @@ class OperatorRecognitionTests(unittest.TestCase):
             window._ws = fake_ws
             window._skill_share_enabled = True
             with mock.patch("ui.main_window.save_config") as save, mock.patch(
-                "core.operator_match.recognize_operator", return_value=("honglang", 0.83)
+                "core.operator_match.recognize_operator_auto", return_value=("honglang", 0.83, None, [])
             ) as match:
                 operator = window._recognize_operator_frame(
                     SimpleNamespace(shape=(1440, 2560, 3)), force=True
@@ -93,7 +93,7 @@ class OperatorRecognitionTests(unittest.TestCase):
             self.assertEqual("红狼", window._self_skill_state.operator)
             self.assertEqual("honglang", window._recognized_operator_id)
             save.assert_called()
-            self.assertEqual(0.83, match.call_args.args[3])
+            self.assertEqual(0.83, match.call_args.args[2])
             for _ in range(100):
                 if fake_ws.payload is not None:
                     break
@@ -108,7 +108,7 @@ class OperatorRecognitionTests(unittest.TestCase):
         window = self._window(auto_operator_enabled=True, operator_id="weilong")
         try:
             with mock.patch("ui.main_window.save_config"), mock.patch(
-                "core.operator_match.recognize_operator", return_value=("", 0.31)
+                "core.operator_match.recognize_operator_auto", return_value=("", 0.31, None, [])
             ):
                 operator = window._recognize_operator_frame(
                     SimpleNamespace(shape=(1440, 2560, 3)), force=True
@@ -123,7 +123,7 @@ class OperatorRecognitionTests(unittest.TestCase):
         window = self._window(auto_operator_enabled=True)
         try:
             with mock.patch("ui.main_window.save_config"), mock.patch(
-                "core.operator_match.recognize_operator", return_value=("honglang", 0.9)
+                "core.operator_match.recognize_operator_auto", return_value=("honglang", 0.9, None, [])
             ) as match:
                 window._recognize_operator_frame(SimpleNamespace(shape=(1440, 2560, 3)))
                 window._recognize_operator_frame(SimpleNamespace(shape=(1440, 2560, 3)))
@@ -135,7 +135,7 @@ class OperatorRecognitionTests(unittest.TestCase):
     def test_auto_disabled_does_not_recognize(self) -> None:
         window = self._window(auto_operator_enabled=False, operator_id="weilong")
         try:
-            with mock.patch("core.operator_match.recognize_operator") as match:
+            with mock.patch("core.operator_match.recognize_operator_auto") as match:
                 self.assertIsNone(window._recognize_operator_frame(SimpleNamespace(shape=(1440, 2560, 3))))
                 match.assert_not_called()
         finally:
@@ -162,3 +162,5 @@ class OperatorRecognitionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+

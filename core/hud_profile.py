@@ -8,8 +8,9 @@ from pathlib import Path
 from typing import Any, Mapping
 
 DEFAULT_CLIENT_SIZE = (2560, 1440)
-DEFAULT_SKILL_BAR = (1900, 1246, 309, 167)
-DEFAULT_AVATAR_ROI = (38, 1240, 72, 82)
+DEFAULT_SKILL_BAR = (1922, 1262, 252, 84)
+DEFAULT_AVATAR_ROI = (40, 1284, 78, 80)
+DEFAULT_TEXT_ROW = (1916, 1352, 300, 56)
 DEFAULT_ULT_TOTAL_CD_MS = 90_000
 SLOT_COUNT = 3
 SLOT_MEANING = {0: "大招", 1: "战术技能", 2: "投掷物"}
@@ -82,10 +83,13 @@ class HudProfile:
     client_height: int = DEFAULT_CLIENT_SIZE[1]
     skill_bar: Roi = field(default_factory=lambda: Roi(*DEFAULT_SKILL_BAR))
     slots: list[Roi] | None = None
+    text_row: Roi = field(default_factory=lambda: Roi(*DEFAULT_TEXT_ROW))
     avatar_roi: Roi = field(default_factory=lambda: Roi(*DEFAULT_AVATAR_ROI))
     ult_pct_meaning: str = "charged"
     ocr_threshold: float = 0.5
     template_threshold: float = 0.70
+    skill_icon_threshold: float = 0.70
+    brightness_threshold: int = 140
     mask_dark_threshold: int = 70
     #: 技能栏整体左右内缩比例（图标之间有缝隙时用于单槽微调）
     slot_gap: int = 0
@@ -101,6 +105,12 @@ class HudProfile:
         if self.slots:
             return list(self.slots)
         return self.split_skill_bar(self.skill_bar, self.slot_gap)
+
+    def text_rois(self) -> list[Roi]:
+        return [
+            Roi(self.text_row.x + 84 * index, self.text_row.y, 96, self.text_row.height)
+            for index in range(SLOT_COUNT)
+        ]
 
     @staticmethod
     def split_skill_bar(bar: Roi, gap: int = 0) -> list[Roi]:
@@ -121,10 +131,13 @@ class HudProfile:
             client_height=target[1],
             skill_bar=self.skill_bar.scaled(source, target).clamp(*target),
             slots=[roi.scaled(source, target).clamp(*target) for roi in self.slots] if self.slots else None,
+            text_row=self.text_row.scaled(source, target).clamp(*target),
             avatar_roi=self.avatar_roi.scaled(source, target).clamp(*target),
             ult_pct_meaning=self.ult_pct_meaning,
             ocr_threshold=self.ocr_threshold,
             template_threshold=self.template_threshold,
+            skill_icon_threshold=self.skill_icon_threshold,
+            brightness_threshold=self.brightness_threshold,
             mask_dark_threshold=self.mask_dark_threshold,
             slot_gap=self.slot_gap,
         )
@@ -136,10 +149,13 @@ class HudProfile:
             "client_height": self.client_height,
             "skill_bar": self.skill_bar.to_dict(),
             "slots": [roi.to_dict() for roi in self.slots] if self.slots else None,
+            "text_row": self.text_row.to_dict(),
             "avatar_roi": self.avatar_roi.to_dict(),
             "ult_pct_meaning": self.ult_pct_meaning,
             "ocr_threshold": self.ocr_threshold,
             "template_threshold": self.template_threshold,
+            "skill_icon_threshold": self.skill_icon_threshold,
+            "brightness_threshold": self.brightness_threshold,
             "mask_dark_threshold": self.mask_dark_threshold,
             "slot_gap": self.slot_gap,
         }
@@ -155,10 +171,13 @@ class HudProfile:
             client_height=max(1, int(data.get("client_height", DEFAULT_CLIENT_SIZE[1]))),
             skill_bar=Roi.from_dict(data.get("skill_bar") or DEFAULT_SKILL_BAR),
             slots=[Roi.from_dict(item) for item in slots] if isinstance(slots, list) and slots else None,
+            text_row=Roi.from_dict(data.get("text_row") or DEFAULT_TEXT_ROW),
             avatar_roi=Roi.from_dict(data.get("avatar_roi") or DEFAULT_AVATAR_ROI),
             ult_pct_meaning=str(data.get("ult_pct_meaning") or "charged"),
             ocr_threshold=float(data.get("ocr_threshold", 0.5)),
             template_threshold=float(data.get("template_threshold", 0.70)),
+            skill_icon_threshold=float(data.get("skill_icon_threshold", 0.70)),
+            brightness_threshold=int(data.get("brightness_threshold", 140)),
             mask_dark_threshold=int(data.get("mask_dark_threshold", 70)),
             slot_gap=int(data.get("slot_gap", 0) or 0),
             raw=dict(data),

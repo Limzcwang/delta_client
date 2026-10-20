@@ -192,6 +192,62 @@ QToolTip {
     border: 1px solid #364252;
     padding: 4px 6px;
 }
+
+/* 登录页历史账号下拉 */
+QToolButton#HistoryArrow {
+    background-color: #11161d;
+    border: 1px solid #364252;
+    border-left: none;
+    border-top-right-radius: 6px;
+    border-bottom-right-radius: 6px;
+    color: #aebbc9;
+    font-size: 14px;
+    padding: 0;
+}
+QToolButton#HistoryArrow:hover { background-color: #253040; color: #ffb61f; border-color: #4a5c72; }
+QToolButton#HistoryArrow:pressed { background-color: #202a37; }
+QToolButton#HistoryArrow:disabled { color: #64707f; background-color: #171d25; }
+QFrame#LoginHistoryPopup {
+    background-color: #1b222c;
+    border: 1px solid #3a4757;
+    border-radius: 8px;
+}
+QListWidget#LoginHistoryList {
+    background-color: #1b222c;
+    border: none;
+    outline: none;
+    padding: 0;
+}
+QListWidget#LoginHistoryList::item {
+    border: none;
+    border-radius: 6px;
+    padding: 0;
+    margin: 1px 0;
+}
+QListWidget#LoginHistoryList::item:hover { background-color: #253040; }
+QListWidget#LoginHistoryList::item:selected { background-color: #3a2f18; color: #ffd071; }
+QWidget#HistoryRow { background: transparent; }
+QLabel#HistoryAccount { color: #e6edf5; font-size: 13px; font-weight: 600; background: transparent; }
+QLabel#HistoryTime { color: #778696; font-size: 11px; background: transparent; }
+QLabel#HistoryLock { color: #ffd071; font-size: 12px; background: transparent; }
+QToolButton#HistoryDelete {
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: #778696;
+    font-size: 14px;
+}
+QToolButton#HistoryDelete:hover { background-color: #4a2323; color: #ff9b8f; }
+QPushButton#HistoryClear {
+    background-color: transparent;
+    border: none;
+    border-top: 1px solid #2c3745;
+    border-radius: 0;
+    color: #8b98a8;
+    padding: 8px;
+    text-align: left;
+}
+QPushButton#HistoryClear:hover { color: #ff9b8f; }
 """
 
 

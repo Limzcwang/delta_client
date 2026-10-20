@@ -75,8 +75,28 @@ class CleaningTests(unittest.TestCase):
         payload = build_payload_from_state(state)
         self.assertEqual(9, payload[1]["max_charges"])
         self.assertEqual(9, payload[1]["charges"])
-        self.assertEqual("unknown", payload[2]["state"])
-        self.assertNotIn("max_charges", payload[2])
+        self.assertEqual("ready", payload[2]["state"])
+        self.assertEqual(1, payload[2]["max_charges"])
+        self.assertEqual(0, payload[2]["charges"])
+
+    def test_every_slot_has_charges_fields(self) -> None:
+        states = [
+            make_state(),
+            make_state(ultimate=SkillSlot(SLOT_ULTIMATE, "ready", 0)),
+            make_state(throwable=SkillSlot(SLOT_THROWABLE, "unknown", 0)),
+            make_state(ability=SkillSlot(SLOT_ABILITY, "ready", 0, charges=0, max_charges=None)),
+        ]
+        for state in states:
+            payload = serialize_skill_state(state)
+            valid, reason = validate_payload(payload)
+            self.assertTrue(valid, reason)
+            for item in payload:
+                self.assertIn("charges", item)
+                self.assertIn("max_charges", item)
+                self.assertGreaterEqual(item["max_charges"], 1)
+                self.assertLessEqual(item["max_charges"], 9)
+                self.assertGreaterEqual(item["charges"], 0)
+                self.assertLessEqual(item["charges"], item["max_charges"])
 
     def test_repair_only_demotes_invalid_slots(self) -> None:
         good = build_payload_from_state(make_state())
@@ -108,7 +128,9 @@ class CleaningTests(unittest.TestCase):
             self.assertNotIn(None, item.values())
         self.assertEqual("unknown", payload[1]["state"])
         self.assertEqual(0, payload[1]["remaining_ms"])
-        self.assertEqual("unknown", payload[2]["state"])
+        self.assertEqual("ready", payload[2]["state"])
+        self.assertEqual(1, payload[2]["max_charges"])
+        self.assertEqual(0, payload[2]["charges"])
 
     def test_serialize_nan_float_and_overrange(self) -> None:
         state = make_state(

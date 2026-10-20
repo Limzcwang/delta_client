@@ -6,11 +6,16 @@ import time
 from typing import Any, Callable, Iterable
 
 
-def select_windows_to_hide(windows: Iterable[Any], game_rect: Any) -> list[Any]:
-    """从候选顶层窗口中挑出可见且与 game_rect 相交的窗口。"""
+def select_windows_to_hide(
+    windows: Iterable[Any], game_rect: Any, exclude: Iterable[Any] | None = None
+) -> list[Any]:
+    """从候选顶层窗口中挑出可见且与 game_rect 相交的窗口（可排除 overlay）。"""
     selected: list[Any] = []
+    blocked = [item for item in (exclude or []) if item is not None]
     for window in windows:
         try:
+            if any(window is item for item in blocked):
+                continue
             if not bool(window.isVisible()):
                 continue
             geometry = window.frameGeometry()
@@ -43,6 +48,10 @@ def grab_frame_hidden(
     windows: Iterable[Any] | None = None,
     delay: float = 0.08,
     only_if_active: bool = False,
+    exclude: Iterable[Any] | None = None,
+    pause_overlay: Callable[[], None] | None = None,
+    resume_overlay: Callable[[], None] | None = None,
+    resume_delay_ms: int = 100,
     sleep: Callable[[float], None] | None = None,
     process_events: Callable[[], None] | None = None,
 ) -> Any:
@@ -61,13 +70,20 @@ def grab_frame_hidden(
         candidates = list(windows)
     targets: list[Any] = []
     try:
-        targets = select_windows_to_hide(candidates, rect)
+        targets = select_windows_to_hide(candidates, rect, exclude=exclude)
         if only_if_active and hasattr(widget, "window"):
             if not bool(widget.window().isActiveWindow()):
                 targets = []
     except Exception:  # noqa: BLE001
         targets = []
+    paused = False
     try:
+        if pause_overlay is not None:
+            try:
+                pause_overlay()
+                paused = True
+            except Exception:  # noqa: BLE001
+                paused = False
         for window in targets:
             try:
                 window.hide()
@@ -87,6 +103,20 @@ def grab_frame_hidden(
                 pass
         if targets:
             process()
+        if paused and resume_overlay is not None:
+            delay_ms = max(0, int(resume_delay_ms))
+            try:
+                if delay_ms > 0:
+                    from PySide6.QtCore import QTimer
+
+                    QTimer.singleShot(delay_ms, resume_overlay)
+                else:
+                    resume_overlay()
+            except Exception:  # noqa: BLE001
+                try:
+                    resume_overlay()
+                except Exception:  # noqa: BLE001
+                    pass
 
 
 __all__ = ["grab_frame_hidden", "select_windows_to_hide"]

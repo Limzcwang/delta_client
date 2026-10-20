@@ -74,6 +74,7 @@ from ui.room_list_view import RoomListView
 from ui.room_view import RoomView
 from ui.auto_share import AutoShareController
 from ui.hud_async import HudRecognitionResult, HudRecognitionService
+from ui.global_hotkeys import GlobalHotkeyManager
 from ui.skill_overlay import OverlayController, SkillOverlay
 
 logger = logging.getLogger(__name__)
@@ -159,6 +160,8 @@ class MainWindow(QMainWindow):
         self._operator_scan_at = 0.0
         self._operator_recognition_text = "当前识别：-"
         self.settings_dialog = None
+        self._last_hotkey_notice = ""
+        self._hotkey_failures: dict[str, str] = {}
         # F-c5：历史窗口文案（room_joined / 历史接口可选字段）
         self._history_window_days: int | None = None
 
@@ -202,6 +205,9 @@ class MainWindow(QMainWindow):
         self._toggle_shortcut.activated.connect(self._toggle_overlay)
         self._edit_shortcut = QShortcut(QKeySequence(self.config.shortcut_edit), self)
         self._edit_shortcut.activated.connect(self._toggle_overlay_edit)
+        self.hotkeys = GlobalHotkeyManager(self)
+        self.hotkeys.triggered.connect(self._on_global_hotkey)
+        self._hotkey_failures = {}
         self._apply_overlay_config()
         self._hud_service = HudRecognitionService(self)
         self._hud_timeout = QTimer(self)
@@ -290,6 +296,11 @@ class MainWindow(QMainWindow):
 
     def _show_login(self, message: str = "") -> None:
         self._stop_lobby_timer()
+        self.overlay_controller.stop()
+        self.overlay.hide()
+        self.hotkeys.unregister_all()
+        self._hotkey_failures = {}
+        self._last_hotkey_notice = ""
         self.login_view.set_server_text(self.config.server_url, self.config.mode_label)
         self.login_view.set_busy(False)
         self.login_view.set_mode("login")
@@ -350,6 +361,17 @@ class MainWindow(QMainWindow):
         self.room_list_view.set_user(self._username())
         self.room_list_view.set_mode(self.config.use_mock, self.config.server_url)
         self.stack.setCurrentWidget(self.room_list_view)
+        if self.session.is_logged_in:
+            self._register_hotkeys()
+        else:
+            self.hotkeys.unregister_all()
+            self._hotkey_failures = {}
+        if self.session.is_logged_in and self.config.overlay_enabled:
+            self.overlay_controller.start()
+            self.overlay_controller.follow(force=True)
+        else:
+            self.overlay_controller.stop()
+            self.overlay.hide()
         self._lobby_backoff.reset()
         self._lobby_timer.setInterval(5000)
         self._update_lobby_timer()
@@ -756,6 +778,7 @@ class MainWindow(QMainWindow):
         self._skills.clear()
         self._self_skill_state = None
         self._skill_share_enabled = False
+        self._hud_service.reset_tracker()
         if hasattr(self, "_auto_controller"):
             self._auto_controller.stop()
         self.room_view.skill_panel.clear()
@@ -1253,6 +1276,8 @@ class MainWindow(QMainWindow):
             "catalog": self.operator_catalog,
             "threshold": float(self.config.operator_recognition_threshold),
             "detect_operator": bool(self.config.auto_operator_enabled),
+            "debug_export": bool(self.config.hud_debug_export),
+            "server_now": self._server_now_ms(),
         }
 
     def _on_auto_operator_detected(self, operator_id: str, score: float) -> None:
@@ -1293,18 +1318,29 @@ class MainWindow(QMainWindow):
         ):
             return self.operator_catalog.get(self._recognized_operator_id)
         try:
-            from core.hud_profile import HudProfile
-            from core.operator_match import recognize_operator
+            from core.operator_match import recognize_operator_auto
 
-            profile = HudProfile.from_dict(self.config.hud_profile or {})
+            search = None
             if image is not None and getattr(image, "shape", None):
                 height, width = int(image.shape[0]), int(image.shape[1])
-                profile = profile.scaled(width, height)
-            operator_id, score = recognize_operator(
+                search = (
+                    0,
+                    int(height * 1200 / 1440),
+                    int(width * 260 / 2560),
+                    int(height * 240 / 1440),
+                )
+            operator_id, score, _box, top3 = recognize_operator_auto(
                 image,
-                profile.avatar_roi,
                 self.operator_catalog,
                 float(self.config.operator_recognition_threshold),
+                search_region=search or (0, 1200, 260, 240),
+            )
+            logger.info(
+                "干员识别 top3：%s",
+                [
+                    {"id": item["operator_id"], "score": round(item["score"], 3), "box": item["box"]}
+                    for item in top3
+                ],
             )
             self._operator_scan_at = now
         except Exception as exc:  # noqa: BLE001
@@ -1396,22 +1432,59 @@ class MainWindow(QMainWindow):
             )
         else:
             self.overlay_controller.fixed_position = None
-        if self.config.overlay_enabled:
+        if hasattr(self, "hotkeys"):
+            if self.session.is_logged_in:
+                self._register_hotkeys()
+            else:
+                self.hotkeys.unregister_all()
+                self._hotkey_failures = {}
+        if self.session.is_logged_in and self.config.overlay_enabled:
             self.overlay_controller.set_opacity(self.config.overlay_opacity / 100.0)
             self.overlay_controller.start()
             self.overlay_controller.follow(force=True)
         else:
             self.overlay_controller.stop()
+            self.overlay.hide()
+
+    def _register_hotkeys(self) -> None:
+        """热键只在登录后注册；失败只记录供设置页展示。"""
+        if not hasattr(self, "hotkeys"):
+            return
+        self._hotkey_failures = self.hotkeys.register_all(
+            str(self.config.shortcut_toggle), str(self.config.shortcut_edit)
+        )
+        if self._hotkey_failures:
+            logger.debug("全局快捷键注册失败：%s", self._hotkey_failures)
+
+    def _on_global_hotkey(self, action: str) -> None:
+        # 未登录阶段静默忽略：不提示、不显示、不记错误日志
+        if not self.session.is_logged_in:
+            return
+        if action == "edit":
+            self._toggle_overlay_edit()
+        else:
+            self._toggle_overlay()
+
+    def _hotkey_ready(self) -> bool:
+        if not self.session.is_logged_in:
+            return False
+        return self._find_game_window() is not None
 
     def _toggle_overlay(self) -> None:
+        if not self._hotkey_ready():
+            return
         if self.overlay_controller.enabled:
             self.overlay_controller.stop()
+            self.overlay.hide()
             self.room_view.set_status("悬浮窗已隐藏")
         else:
             self.overlay_controller.start()
+            self.overlay_controller.follow(force=True)
             self.room_view.set_status(f"悬浮窗：{self.overlay_controller.last_reason or '等待游戏窗口'}")
 
     def _toggle_overlay_edit(self) -> None:
+        if not self._hotkey_ready():
+            return
         enabled = not self.overlay.edit_mode
         self.overlay.set_edit_mode(enabled)
         self.room_view.set_status("悬浮窗编辑模式：可拖动，退出后恢复鼠标穿透" if enabled else "悬浮窗已恢复鼠标穿透")
@@ -1506,6 +1579,8 @@ class MainWindow(QMainWindow):
                 self.operator_catalog,
                 float(self.config.operator_recognition_threshold),
                 detect_operator=True,
+                debug_export=bool(self.config.hud_debug_export),
+                server_now=self._server_now_ms(),
                 callback=self._finish_manual_operator_result,
             )
             self._hud_timeout.start()
@@ -1632,6 +1707,10 @@ class MainWindow(QMainWindow):
                     source,
                     game_rect=game_window.client_rect if game_window is not None else None,
                     only_if_active=True,
+                    exclude=[self.overlay],
+                    pause_overlay=self.overlay_controller.pause,
+                    resume_overlay=self.overlay_controller.resume,
+                    resume_delay_ms=100,
                 )
             finally:
                 last_error = str(getattr(source, "last_error", "") or "")
@@ -1670,6 +1749,8 @@ class MainWindow(QMainWindow):
             self.operator_catalog,
             float(self.config.operator_recognition_threshold),
             detect_operator=bool(self.config.auto_operator_enabled),
+            debug_export=bool(self.config.hud_debug_export),
+            server_now=self._server_now_ms(),
             callback=callback,
         )
         if not accepted:
@@ -1717,8 +1798,19 @@ class MainWindow(QMainWindow):
         self.room_view.skill_panel.upsert(state)
         if self._skill_share_enabled:
             self._send_skill_state(state)
-        count = sum(1 for slot in state.slots.values() if slot.state != "unknown")
-        self.room_view.set_status(f"HUD 识别完成：{count}/3 槽有结果")
+        self.room_view.set_status(self._hud_completion_text(state))
+        if result.debug_path:
+            logger.info("HUD 调试导出：%s", result.debug_path)
+
+    def _hud_completion_text(self, state: SkillState) -> str:
+        labels = {"ultimate": "大招", "ability": "技能", "throwable": "投掷物"}
+        total = len(state.slots)
+        unknown = [labels.get(kind, kind) for kind, slot in state.slots.items() if slot.state == "unknown"]
+        count = total - len(unknown)
+        text = f"HUD 识别完成：{count}/{total}"
+        if unknown:
+            text += f"（{'、'.join(unknown)}未识别）"
+        return text
 
     def _finish_manual_operator_result(self, result: HudRecognitionResult) -> None:
         self._hud_timeout.stop()
@@ -2204,6 +2296,7 @@ class MainWindow(QMainWindow):
         self._skills.clear()
         self._self_skill_state = None
         self._skill_share_enabled = False
+        self._hud_service.reset_tracker()
         if hasattr(self, "_auto_controller"):
             self._auto_controller.stop()
         self.room_view.skill_panel.clear()
@@ -2244,6 +2337,7 @@ class MainWindow(QMainWindow):
         self._recognized_operator_id = ""
         self._operator_recognized_at = 0.0
         self._self_skill_state = None
+        self._hud_service.reset_tracker()
         if self._current_room is None:
             return
         state = self._build_simulated_skill()
@@ -2282,10 +2376,25 @@ class MainWindow(QMainWindow):
         dialog.set_account(self._account())
         dialog.set_nickname(self.session.nickname or self.session.username)
         dialog.set_overlay_status(self.overlay_controller.last_reason or "未附加")
+        if not self.session.is_logged_in:
+            dialog.set_hotkey_status("登录后注册")
+        elif self._hotkey_failures:
+            dialog.set_hotkey_status("；".join(self._hotkey_failures.values()))
+        else:
+            dialog.set_hotkey_status("已注册")
         dialog.set_server_migrated(self.config.server_migrated)
         dialog.set_operator_recognition_status(self._operator_recognition_text)
+        dialog.set_hotkey_status(
+            "；".join(self._hotkey_failures.values())
+            if self._hotkey_failures
+            else "全局热键已注册（游戏前台可用）"
+        )
         dialog.tabs.setCurrentIndex(max(0, min(int(start_tab), dialog.tabs.count() - 1)))
-        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        self.overlay_controller.pause("settings")
+        try:
+            accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        finally:
+            self.overlay_controller.resume()
         self.settings_dialog = None
         if not accepted:
             return
@@ -2308,6 +2417,13 @@ class MainWindow(QMainWindow):
             self._on_operator_changed()
         self._apply_overlay_config()
         self._apply_auto_config()
+        if self._hotkey_failures:
+            QMessageBox.warning(
+                self,
+                "快捷键注册失败",
+                "；".join(self._hotkey_failures.values())
+                + "\n已回退到应用内快捷键（仅客户端有焦点时有效）。",
+            )
         self._refresh_status_bar()
         self.login_view.set_server_text(new_config.server_url, new_config.mode_label)
         self.room_list_view.set_mode(new_config.use_mock, new_config.server_url)
@@ -2483,6 +2599,8 @@ class MainWindow(QMainWindow):
         finally:
             self._hud_timeout.stop()
             self._hud_service.shutdown()
+            self.hotkeys.stop()
+            self.overlay_controller.stop()
             self.bridge.stop()
             super().closeEvent(event)
 

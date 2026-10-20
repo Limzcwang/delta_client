@@ -41,11 +41,20 @@ class OperatorSkill:
     name: str = ""
     total_cd_ms: int | None = None
     max_charges: int = 0
+    charge_cd_ms: int | None = None
     raw: Mapping[str, Any] = field(default_factory=dict, compare=False, repr=False)
 
     @property
     def slot_name(self) -> str:
         return SLOT_NAMES.get(self.slot, f"槽位{self.slot}")
+
+    @property
+    def effective_charge_cd_ms(self) -> int:
+        if self.charge_cd_ms is not None and self.charge_cd_ms > 0:
+            return int(self.charge_cd_ms)
+        if self.total_cd_ms and self.max_charges > 0:
+            return max(1, int(self.total_cd_ms / self.max_charges))
+        return 0
 
     @property
     def cd_known(self) -> bool:
@@ -73,11 +82,19 @@ class OperatorSkill:
             max_charges = max(1, int(payload.get("max_charges") or 1))
         except (TypeError, ValueError):
             max_charges = 1
+        charge_cd = payload.get("charge_cd_ms")
+        try:
+            charge_cd = int(charge_cd) if charge_cd is not None else None
+        except (TypeError, ValueError):
+            charge_cd = None
+        if charge_cd is not None and charge_cd <= 0:
+            charge_cd = None
         return cls(
             slot=slot,
             name=str(payload.get("name") or ""),
             total_cd_ms=total_cd,
             max_charges=max_charges,
+            charge_cd_ms=charge_cd,
             raw=dict(payload),
         )
 

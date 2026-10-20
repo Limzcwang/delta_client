@@ -8,7 +8,9 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -20,7 +22,7 @@ from core.validation import (
     validate_register_username,
 )
 from state.saved_logins import SavedLoginInfo
-from ui.dialogs import SavedLoginsDialog
+from ui.login_history import LoginHistoryPopup
 from ui.username_edit import UsernameLineEdit
 
 
@@ -39,6 +41,7 @@ class LoginView(QWidget):
         self._mode = "login"
         self._saved_entries: list[SavedLoginInfo] = []
         self._applying_saved = False
+        self._history_popup: LoginHistoryPopup | None = None
         self._build_ui()
         self.set_mode("login")
 
@@ -131,10 +134,17 @@ class LoginView(QWidget):
         self.register_username_hint.hide()
 
         username_row = QHBoxLayout()
+        username_row.setContentsMargins(0, 0, 0, 0)
+        username_row.setSpacing(0)
         username_row.addWidget(self.username_edit, stretch=1)
-        self.history_button = QPushButton("历史账号")
-        self.history_button.setObjectName("Link")
-        self.history_button.clicked.connect(self._open_history)
+        self.history_button = QToolButton()
+        self.history_button.setObjectName("HistoryArrow")
+        self.history_button.setText("▾")
+        self.history_button.setToolTip("历史账号")
+        self.history_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.history_button.setFixedWidth(32)
+        self.history_button.setAutoRaise(True)
+        self.history_button.clicked.connect(self._toggle_history)
         self.history_button.hide()
         username_row.addWidget(self.history_button)
         card_layout.addLayout(username_row)
@@ -230,6 +240,8 @@ class LoginView(QWidget):
         self.confirm_edit.setVisible(is_register)
         self.register_username_hint.setVisible(is_register)
         self.saved_hint.setVisible(False)
+        if is_register:
+            self._close_history()
         self._sync_history_button()
         self.primary_button.setText("注 册" if is_register else "登 录")
         self.switch_button.setText("已有账号？返回登录" if is_register else "没有账号？创建账户")
@@ -244,12 +256,56 @@ class LoginView(QWidget):
 
     def set_saved_logins(self, entries: list[SavedLoginInfo]) -> None:
         self._saved_entries = list(entries)
+        if self._history_popup is not None:
+            self._history_popup.set_entries(self._saved_entries)
+            if not self._saved_entries:
+                self._close_history()
         self._sync_history_button()
 
     def _sync_history_button(self) -> None:
         count = len(self._saved_entries)
-        self.history_button.setText(f"历史账号 ({count})" if count else "历史账号")
+        self.history_button.setToolTip(f"历史账号 ({count})" if count else "无历史账号")
         self.history_button.setVisible(self._mode == "login" and count > 0)
+
+    def _toggle_history(self) -> None:
+        if self._mode != "login" or not self._saved_entries:
+            return
+        if self._history_popup is not None and self._history_popup.isVisible():
+            self._close_history()
+            return
+        if self._history_popup is None:
+            self._history_popup = LoginHistoryPopup(self._saved_entries, self)
+            self._history_popup.selected.connect(self._on_history_selected)
+            self._history_popup.delete_requested.connect(self.saved_login_delete_requested.emit)
+            self._history_popup.clear_requested.connect(self._on_history_clear_requested)
+        else:
+            self._history_popup.set_entries(self._saved_entries)
+        self._history_popup.show_for(self.username_edit)
+
+    def _close_history(self) -> None:
+        if self._history_popup is not None:
+            self._history_popup.hide()
+
+    def _on_history_selected(self, username: str) -> None:
+        self._close_history()
+        if username:
+            self.saved_login_selected.emit(username)
+
+    def _on_history_clear_requested(self) -> None:
+        self._close_history()
+        answer = QMessageBox.question(
+            self,
+            "清空历史账号",
+            "确定清空本机保存的全部历史账号和密码？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self.saved_login_clear_requested.emit()
+
+    @property
+    def history_popup(self) -> LoginHistoryPopup | None:
+        return self._history_popup
 
     def apply_saved_login(
         self, username: str, password: str, *, expired: bool = False
@@ -278,13 +334,8 @@ class LoginView(QWidget):
         self.primary_button.setFocus()
 
     def _open_history(self) -> None:
-        if not self._saved_entries:
-            return
-        dialog = SavedLoginsDialog(self._saved_entries, self)
-        dialog.selected.connect(self.saved_login_selected.emit)
-        dialog.delete_requested.connect(self.saved_login_delete_requested.emit)
-        dialog.clear_requested.connect(self.saved_login_clear_requested.emit)
-        dialog.exec()
+        """兼容旧调用：打开下拉弹层。"""
+        self._toggle_history()
 
     def _update_register_hint(self) -> None:
         """注册模式下实时提示账号规则（F）。"""
@@ -319,6 +370,7 @@ class LoginView(QWidget):
             self.primary_button,
             self.switch_button,
             self.settings_button,
+            self.history_button,
         ):
             widget.setEnabled(not busy)
         if busy:

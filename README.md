@@ -1,335 +1,268 @@
-# Delta Client —— 三角洲行动队友房间（Windows 桌面端 / PySide6）
+# Delta Client —— 三角洲行动队友房间（Windows 桌面端）
 
-桌面客户端：**文字聊天、公共/私有房间、房间内共享画板、本地截屏识别技能 CD 后共享给队友（E 占位）**。
-本项目只做桌面端，不做 Web；截屏与识别全部在客户端本地完成，服务端不接收图像。
+版本：**0.1.4** · 更新日期：**2026-10-20** · 平台：**Windows 10/11 x64**
 
-> 当前进度：**C1 + C（聊天）+ D（共享画板）+ F（完善：昵称/个人资料/大厅自动刷新/房主管理/历史窗口）**。E（技能共享）仍为占位。
+桌面客户端，供《三角洲行动》玩家组队时共享房间、文字聊天、协同画板，并把本机识别到的技能 CD / 充能状态共享给队友。截屏与识别全部在客户端本地完成，服务端不接收图像。
+
+> 本项目只做 Windows 桌面端（PySide6），不做 Web 客户端。
 
 ---
 
-## 1. 已完成能力（C1 + C + D + F）
+## 1. 下载与安装
 
-| 模块 | 内容 |
-|---|---|
-| 配置 | 服务器地址可配置（`DELTA_SERVER` / `%APPDATA%\\DeltaClient\\config.json` / `--server`），默认 `https://deltachat.icu:8443`（WSS 自动推导 `wss://deltachat.icu:8443/ws`） |
-| HTTP 客户端 | `net/api_client.py`：统一 Base URL、`X-Request-Id` / `X-Protocol-Version`、`Authorization: Bearer`、超时、错误映射 |
-| WS 客户端 | `net/ws_client.py`：`/ws` 首消息 `auth`、心跳（25s ping / 90s 失联）、指数退避重连（1s→30s）、消息分发、未知类型忽略 |
-| 会话 | `state/session.py`：token + 用户信息（内存；可选落盘，**不落盘密码**） |
-| 历史账号（H2） | `state/saved_logins.py`：`%APPDATA%\DeltaClient\saved_logins.json`；最多 5 个账号、最近使用在前；密码用 Windows DPAPI 加密 base64 保存（30 天有效），DPAPI 不可用只存账号；登录成功保存、打开登录页自动带出最近账号/未过期密码，历史列表支持单删/清空；改密成功或登录密码错误清除该账号密码，退出登录不清历史 |
-| 登录/注册 | `POST /api/v1/auth/login`、`POST /api/v1/auth/register`；注册账号 6–20 位字母/数字且至少含 1 个字母，注册密码 8–32 位（与后端一致；登录密码仍只校验非空以兼容历史短密码）；账号输入框即时过滤（注册/登录均仅字母数字，≤20；`dsh_test` 会被过滤为 `dshtest`），粘贴保留合法部分、IME 上屏后清洗；注册带 token 自动登录 |
-| 昵称展示（F） | 成员列表/聊天/房主标识/加入离开提示统一显示 **nickname**（缺失时回退 username 并标记旧协议）；账号只在个人资料页对自己可见 |
-| 个人资料（F） | 设置页新增「个人资料」：修改昵称（1–20，立即刷新所有展示，含历史聊天中自己的名字）、修改密码（旧密码 + 新密码 8–32 + 确认；成功后保持登录） |
-| 房间 | 公共房间列表、刷新、创建（公开/私有+密码）、按 5 位房间号加入（私有需密码）、离开 |
-| 我的房间（H1） | 大厅「我的房间」tab：房间名/房号/类型/人数 + 行内「退出」；`role=owner` 显示「关闭房间」（输入房名确认）；空状态提示；与公共列表共用 5s 刷新节拍，按 room id diff 更新，进行中的退出不被打断 |
-| 建房表单（A） | 创建房间名/私有密码实时校验并禁用提交；密码 4–32 位提示；提交失败保留表单，仅在错误区提示 |
-| 大厅自动刷新（F） | 大厅可见且有焦点时每 5s 拉列表；按 room id diff 就地更新（保留选中/滚动）；失败退避 5→10→20s，恢复后重置；进房停止 |
-| 房主管理（F） | 房主房间内「房间设置」：改房间名（1–30）、改私有房密码（4–32）、删除房间（输入房间名二次确认）；处理 `room_updated`/`room_deleted` 实时事件 |
-| 历史窗口（F） | 兼容历史接口 `window_days` / `truncated` 字段，提示「仅显示最近 N 天消息」 |
-| 房间内页 | 成员列表（标准行 + 固定 40px 行高/右侧省略，右键菜单；WS `room_joined` + HTTP 房间详情兜底）、聊天、共享画板 |
-| 房主移出（H3） | 成员行右键菜单「移出房间」：仅房主对非房主成员可用，自己/非房主 disabled；二次确认后 `POST /rooms/{ref}/kick`；成功刷新成员并提示，失败按错误码提示；处理 `room_kicked` 定向事件（自己被踢则提示并回大厅），他人被踢走 `user_left(reason=kicked)` |
-| 聊天（C） | 发送 `chat_send`（带 `room_id` / `client_msg_id`）、`chat_message` 广播认领（发送中→已发送、不重复插入）、失败标红双击重试（复用 `client_msg_id`）、进房拉最近 50 条、上滚 `next_before` 续拉 |
-| 画板（D/H4） | 内置三角洲地图底图（1105×1260）；画布控件锁定底图宽高比、随可用空间等比缩放并居中（宿主剩余空间留白），控件内底图铺满；坐标 0–1 = 画布像素/画布宽高（图外不绘制）；透明笔画层（橡皮 composition Clear，清空只清笔画）；画笔/橡皮/颜色/撤销/重做/清空 6 图标工具栏（QPainter 矢量图标、快捷键、当前工具高亮）；画笔圆点/橡皮方块尺寸浮层（3 档，角标提示）；`canvas_op` 增量（≤512 点自动分段、30 条/秒本地节流）、`room_joined.canvas_snapshot` 初始化（缺失/空时 HTTP fallback）、`(user_id,rev)` 丢弃旧包、离开/关窗前 `canvas_snapshot_save` 等 ack、快照上限 5000 笔/512KB |
-| 技能面板（E2） | 房间侧栏「技能」tab：按队友一行，头像首字母/昵称/干员名 + 大招（百分比环）/技能（n/max+CD）/投掷物（n/max+CD）；ready 高亮、charging 每秒倒计时、unknown「?」、30 分钟未更新「未共享」；缓存 `skill_share_state`/`room_joined.skill_states`，`skill_share_removed` 删除；本地时钟偏移用 `auth_ok.server_time` 估算；默认关闭共享，「模拟我的技能」循环状态，开启后 `skill_share_update`（2 次/秒限频），关闭发 `skill_share_off` |
-| 干员配置（E3a） | 读取 `assets/operators.json`（17 干员，slot 0/1/2 = 大招/战术技能/投掷物），面板显示干员名+技能名（hover）；设置页「干员」下拉手动选择并持久化 `operator_id`；`total_cd_ms` 缺失/0 的槽显示「CD未知」、不画环/不倒计时、上报 `state=unknown`；头像 `assets/operators/<id>.png` 存在则加载、缺失用首字母；上报带 `operator_id/operator_name` |
-| 打包（P1/P2） | 版本单一来源 `config.APP_VERSION=0.1.3`（`--version`/设置页显示）；数据目录 `%APPDATA%\DeltaClient\`（config/session/saved_logins/logs，旧 `~/.delta_client.json` 自动迁移并保留 `.bak`）；日志 2MB×3 轮转 + token/password 脱敏；多尺寸 `assets/app.ico`；`delta_client.spec` one-folder/无控制台/无 UPX；`scripts/build_win.ps1` 一键构建便携 ZIP + Inno Setup 安装包 + SHA256SUMS |
-| HUD 采集/识别（E3b） | 自动查找 DeltaForceClient-Win64-Shipping 窗口；WGC 优先、mss 回退；独立线程 2 FPS + 最小化暂停；HUD profile（2560×1440 默认/缩放/3 槽等分/JSON 导入导出）与「识别 HUD」按钮；RapidOCR 读百分比/秒数/充能，暗色遮罩比例算 CD，17 干员头像灰度多尺度模板匹配（遮左上编号，失败回退手动干员）；ult_pct_meaning=charged（16%=已充能16%）；识别失败槽 unknown；截图仅内存 |
-| 干员配置中心（E5） | 启动/登录后/进房前 `GET /api/v1/config/operators`（If-None-Match）：304 用缓存，200 校验后写 `%APPDATA%\DeltaClient\operators.json` 并热更新面板/识别/上报；损坏/缺失/非法回退内置 `assets/operators.json`；网络失败静默；设置页显示版本/来源/更新时间+手动检查 |
-| WS 重连保护 | 单实例文件锁（重复启动提示「Delta Client 已在运行」）；close 4001/replaced、认证失效停止自动重连并清会话回登录；401/403 握手认证失败不重连并清会话；1001/1012/网络错误继续指数退避 1→2→4→8→…→30s；server_restarting 提示服务器更新中 |
-| HUD / 采屏 + 干员识别 | 独立「HUD / 采屏」tab（识别全异步 QThreadPool/10s 超时）（采集开关、窗口检测/选窗/帧统计、标定、自动识别干员/阈值/重新识别）；抓帧前仅隐藏与游戏 rect 相交的客户端窗口（grab_frame_hidden，副屏不闪）；标定预览用连续内存 tobytes 转 QImage，非黑屏；头像 ROI 模板匹配命中后持久化 operator_id 并刷新面板/悬浮窗/上报，30s 缓存 |
-| 崩溃可观测性 | `faulthandler` + `sys/threading.excepthook` + Qt message handler 写 `%APPDATA%\DeltaClient\logs\crash.log`；last_step 标记异常退出，下次启动提示并打开日志目录；关闭/切服时主动 close aiohttp session |
-| 窗口检测兜底 | 进程名忽略 `.exe`/大小写；标题「三角洲/Delta Force」+客户区 ≥800×600 兜底；设置页选择/检测窗口与匹配方式/失败原因；排除自身客户端窗口；候选窗口日志；默认 mss，WGC 可选；帧尺寸/均值/异常日志/全黑诊断 |
-| 悬浮窗（强制 topmost / 不预判独占全屏）/自动循环（E4） | 可选技能 CD 悬浮窗（默认关闭）：无边框/置顶/鼠标穿透/WS_EX_TOOLWINDOW；跟随游戏窗口 500ms，最小化隐藏、独占全屏回落提示；透明度默认 30%、缩放、位置重置、快捷键可自定义（录制+冲突）；自动识别 2s 采样+变化去抖+2 次/秒限频；房间面板原样保留 |
-| 连通性测试 | 设置页「测试连接」：探测 `/health` + `/api/v1/rooms?page=1`，分别报告可达/鉴权失效/超时/网络错误 |
-| 协议对齐 | PROTOCOL C/D 定稿：`data.error_code`、§7.2/§7.3 实名错误码、WS `room_id_or_code`、聊天字段、画板 `rev`/快照语义 |
-| Mock | `--mock` / `DELTA_MOCK=1`：内置内存后端（昵称/聊天历史/画板快照/房主管理/我的房间），可完整离线演示 |
-| 测试 | 436 个 stdlib unittest（含 40 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑；真实 HUD OCR 测试需 requirements-e3.txt 环境 |
----
+### 1.1 安装包
 
-## 2. 目录结构
+从发布页下载：
+
+- `DeltaClient-Setup-0.1.4.exe`：安装版（推荐）
+- `DeltaClient-0.1.4-portable.zip`：便携版，解压后运行 `DeltaClient.exe`
+- `SHA256SUMS.txt`：校验文件
+
+安装版使用 Inno Setup，默认安装到 `%LOCALAPPDATA%\Programs\DeltaClient`，无需管理员权限。
+
+### 1.2 SmartScreen 提示
+
+客户端当前**未做代码签名**。首次运行可能出现 Windows SmartScreen「Windows 已保护你的电脑」：
+
+1. 点击「更多信息」；
+2. 点击「仍要运行」；
+3. 如仍有疑虑，先用 `certutil -hashfile DeltaClient-Setup-0.1.4.exe SHA256` 对照 `SHA256SUMS.txt`。
+
+### 1.3 数据目录
+
+所有本地数据在：
 
 ```
-delta_client/
-├── main.py                  # 入口（--mock / --server / --check / --print-config）
-├── config.py                # 配置加载与保存（env > 文件 > 默认，CLI 最高）
-├── core/                    # 纯逻辑（仅标准库，单测直接覆盖）
-│   ├── protocol.py          # PROTOCOL 常量、路径、WS 消息、响应包兼容
-│   ├── errors.py            # HTTP/WS 错误 -> 统一 ApiError + 中文提示
-│   ├── backoff.py           # WS 重连指数退避
-│   ├── connection.py        # 连通性测试结果模型（/health + /api/v1/rooms）
-│   ├── chat.py              # 聊天时间线：乐观更新/广播认领/去重/失败重试/历史分页
-│   ├── canvas.py            # 画板逻辑：归一化/op 校验分段/快照上限/撤销重做/限频
-│   ├── canvas_geometry.py   # 画板随底图比例/画布坐标换算（纯逻辑）
-│   ├── skills.py            # E2 技能状态/倒计时/缓存/上报限频（纯逻辑）
-│   ├── operators.py         # E3a 干员配置/槽位技能/CD/头像路径（纯逻辑）
-│   ├── hud_profile.py       # E3b HUD ROI profile/缩放/JSON
-│   ├── hud_recognition.py   # E3b 百分比/秒数/充能/遮罩识别纯逻辑
-│   ├── hud_ocr.py           # E3b RapidOCR 适配（惰性导入）
-│   ├── operator_match.py    # E3b 干员头像模板匹配
-│   ├── hud_pipeline.py      # E3b 单帧 -> 三槽 -> SkillState
-│   ├── room_list.py         # 大厅列表 diff/room_key（自动刷新就地更新）
-│   ├── rooms.py             # 房间号/房间名/可见性/密码校验
-│   ├── models.py            # Room / Member / ChatMessage 与容错解析
-│   └── validation.py        # 登录/注册输入校验、用户信息清洗
-├── net/
-│   ├── api_client.py        # aiohttp HTTP 客户端（/api/v1 契约）
-│   ├── ws_client.py         # websockets 客户端（auth/心跳/重连）
-│   └── mock_backend.py      # 可切换 Mock HTTP + Mock WS
-├── state/
-│   ├── session.py           # JWT 会话（可选落盘，不含密码）
-│   └── saved_logins.py      # H2 历史账号/DPAPI 加密密码（30 天）
-├── ui/                      # PySide6 界面
-│   ├── main_window.py       # QStackedWidget + 网络编排
-│   ├── login_view.py        # 登录/注册
-│   ├── username_edit.py     # 账号输入框即时过滤（IME/粘贴/光标）
-│   ├── room_list_view.py    # 房间大厅（公共 + 我的房间 tab）
-│   ├── my_rooms_view.py     # 我的房间列表（diff/退出/关闭）
-│   ├── room_view.py         # 房间内页（成员/聊天/画板）
-│   ├── canvas_view.py       # 画板控件（底图/透明层/图标工具栏）
-│   ├── canvas_icons.py      # 画板矢量图标（QPainter）
-│   ├── skill_panel.py       # E2/E3a 技能 CD 面板（三槽/倒计时/干员配置/模拟共享）
-│   ├── calibration_dialog.py# E3b HUD 框选标定/预览/导入导出
-│   ├── dialogs.py           # 创建房间 / 加入房间 / 连接设置 / 干员选择
-│   ├── async_bridge.py      # asyncio 线程 <-> Qt 主线程桥
-│   └── theme.py             # 深色 + 橙色 QSS 主题
-├── assets/
-│   ├── canvas_map.png       # 内置三角洲地图底图（1105×1260，原图，不重采样）
-│   ├── app.ico              # 多尺寸应用图标（16–256）
-│   ├── operators.json       # E3a 17 干员配置（槽位/技能名/total_cd_ms/max_charges）
-│   ├── operators.README.md  # 配置说明/未知 CD/版本口径
-│   └── operators/           # 干员头像模板（17/17）
-├── installer/               # Inno Setup 安装脚本 + 简体中文语言文件
-├── scripts/                 # build_win.ps1 / make_icon.py / write_version_info.py
-├── capture/                 # E3b 窗口查找/WGC+mss/2FPS 工作线程
-├── delta_client.spec        # PyInstaller one-folder 配置
-├── tests/                   # stdlib unittest（离线；fixtures/hud 真实截图）
-├── requirements.txt
-├── requirements-build.txt   # 打包锁定依赖
-├── requirements-e3.txt      # E3b 采集/OCR 依赖（Python 3.12 wheels）
-└── README.md
+%APPDATA%\DeltaClient\
+├── config.json          # 服务器/模式/HUD/悬浮窗等配置
+├── session.json         # 可选保存的登录 token（默认关闭）
+├── saved_logins.json    # 历史账号 + DPAPI 加密密码（最多 5 个，30 天）
+├── operators.json       # 配置中心缓存（17 干员，ETag/热更新）
+└── logs\
+    ├── client.log       # 运行日志（2MB × 3 轮转，敏感值脱敏）
+    └── crash.log        # 崩溃/最后步骤日志
 ```
 
-> 打包：`assets/` 整目录（`canvas_map.png`、`operators.json`、`operators/*.png`、`app.ico`）由
-> `delta_client.spec` 的 `datas` 收录，代码兼容 `sys._MEIPASS/assets/`；
-> `scripts/build_win.ps1` 输出 `release/DeltaClient-Setup-<version>.exe`、便携 ZIP 与 `SHA256SUMS.txt`。
+卸载时安装器会询问是否同时删除用户数据；便携版直接删除解压目录即可（用户数据仍在 `%APPDATA%`）。
+
+### 1.4 运行要求
+
+- Windows 10/11 x64；
+- 游戏使用**无边框窗口 / 窗口化**模式（独占全屏会遮挡悬浮窗，且部分采集方式不可用）；
+- 识别需要本机安装 OCR/采集依赖；发行包已内置，源码运行见 `requirements.txt` / `requirements-e3.txt`。
 
 ---
 
-## 3. 安装
+## 2. 功能一览
 
-需要 **Python 3.10+**（本项目在 Python 3.11 上开发）。
+### 2.1 登录与账号
+
+- 登录 / 注册；账号 6–20 位字母数字（注册至少 1 个字母），密码 8–32 位。
+- **历史账号下拉**：账号输入框右侧 **▼** 打开非模态列表；行高 38px，长账号中间省略并带完整 tooltip；显示最近登录时间、密码已保存锁标记、单条删除；支持 ↑/↓ + Enter、Esc、点击外部关闭；底部「清空历史」需确认。
+- 密码本机用 Windows DPAPI 加密保存（30 天有效）；DPAPI 不可用时只保存账号，**绝不明文保存密码**。
+- 登录成功自动带出最近账号/未过期密码；登录失败或改密后清除该账号保存的密码。
+
+### 2.2 房间与社交
+
+- 公共房间列表每 **5s** 自动刷新（仅大厅可见/有焦点时），按 room id 就地更新，保留选中与滚动。
+- 「我的房间」tab：显示我加入/创建的房间，可退出；房主可关闭房间（输入房名确认）。
+- 创建房间：公开/私有 + 密码（4–32 位），实时校验。
+- 按 5 位房间号加入；私有房需密码。
+- 房主可修改房间名/密码、移出成员；处理 `room_updated` / `room_deleted` / `room_kicked` 实时事件。
+- 房间内：成员列表（40px 行高、右键移出）、聊天（发送/历史分页/失败重试）、共享画板。
+
+### 2.3 画板
+
+- 内置三角洲地图底图（1105×1260，随窗口等比缩放居中）。
+- 画笔/橡皮/颜色/粗细/撤销/重做/清空工具栏（QPainter 矢量图标 + 快捷键）。
+- 透明笔画层；坐标 0–1；增量同步（≤512 点分段、30 条/秒本地节流）；离开/关窗保存快照（≤5000 笔 / 512KB）。
+- undo/redo 仅本地，队友看不到撤销，直到下一次快照保存。
+
+### 2.4 技能共享面板
+
+- 按队友一行：头像首字母/昵称/干员名 + 大招百分比 + 战术技能/投掷物充能数 + CD。
+- ready 高亮；charging 本地倒计时；unknown 显示「?」。
+- 默认关闭共享；开启后本地 2 次/秒限频上报，关闭发 `skill_share_off`。
+- 支持「模拟我的技能」用于离线演示。
+
+### 2.5 干员自动识别
+
+- 进房/识别时自动扫描游戏窗口**左下角**头像区域（2560×1440 默认 `(40,1284,78,80)`，多尺度 0.5–1.8，阈值 0.65）。
+- 命中后写入 `operator_id` 并刷新面板/悬浮窗/上报；未命中保留手动选择。
+- **红狼实测**：自动扫描 `honglang` 置信度 **0.823**（top2 0.56）；合成/真实头像 fixture 测试覆盖。
+- 设置页可手动选择干员（17 干员配置），不依赖技能图标模板库。
+
+### 2.6 HUD 采集 / 标定
+
+- 独立「HUD / 采屏」设置 tab：采集开关、窗口检测/选择、帧尺寸/均值统计。
+- 标定对话框框选技能栏、头像 ROI、下方文字行；默认 2560×1440 profile，其他分辨率自动缩放。
+- 抓帧只隐藏**与游戏窗口相交**的客户端窗口，副屏不闪；标定预览使用连续内存转 QImage，避免黑屏。
+- 识别异步执行（QThreadPool 单线程，10s 超时），不阻塞 UI。
+- 详细原理见第 4 节。
+
+### 2.7 悬浮窗
+
+- 可选技能 CD 悬浮窗，默认关闭；登录后才允许显示。
+- 默认 **Ctrl+Shift+D** 显示/隐藏，**Ctrl+Shift+E** 编辑模式（可拖动/缩放），可在设置页自定义。
+- 仅登录后注册全局热键；登出/切账号立即注销；未登录按热键静默无动作。
+- 必须检测到游戏窗口才显示；无窗口/最小化自动隐藏并显示「等待游戏窗口」。
+- 强制 topmost、不抢焦点、默认 **30% 透明 + 鼠标穿透**；编辑模式恢复输入并 100% 不透明。
+- 500ms 跟随游戏窗口；仅在窗口位置/大小变化、attach 时调用原生置顶，避免反复 `SetWindowPos`。
+
+### 2.8 配置中心
+
+- 启动/登录后/进房前 `GET /api/v1/config/operators`（If-None-Match）：
+  - 304：使用缓存；
+  - 200：校验后写 `%APPDATA%\DeltaClient\operators.json` 并热更新；
+  - 损坏/缺失/空配置/非法：回退内置 `assets/operators.json`（17 干员），**拒绝空配置覆盖**；
+  - 网络失败静默。
+- 设置页显示配置版本/来源/更新时间，可手动检查。
+
+---
+
+## 3. 快捷键
+
+| 功能 | 默认快捷键 | 说明 |
+|---|---|---|
+| 显示/隐藏悬浮窗 | `Ctrl+Shift+D` | 登录后生效；无游戏窗口不显示 |
+| 悬浮窗编辑模式 | `Ctrl+Shift+E` | 可拖动/缩放，退出恢复穿透 |
+| 画板画笔 | `P` | |
+| 画板橡皮 | `E` | |
+| 画板颜色 | `C` | |
+| 画板粗细 | `W` | |
+| 画板撤销 | `Ctrl+Z` | |
+| 画板重做 | `Ctrl+Shift+Z` | |
+| 画板清空 | `Ctrl+Delete` | 只清笔画层 |
+| 提交登录/注册 | `Enter` | 密码框/确认框 |
+
+悬浮窗两个全局热键可在「设置 → 悬浮窗」录制修改；若被其他程序占用，设置页会显示失败原因，不影响其他功能。
+
+---
+
+## 4. HUD 识别原理（0.1.4）
+
+### 4.1 目标
+
+只上报结构化技能状态（state / remaining / charges / max_charges / ready_at），不发送任何截图。队友端用 `ready_at - now` 本地倒计时，网络延迟不影响秒数。
+
+### 4.2 数据来源（按优先级）
+
+1. **文字层（最准）**：技能栏下方文字行（默认 y 1352–1408，三槽各 96×56），3× 放大 + 灰度 OCR。
+   - `NN秒` / `N分M秒` → 该槽剩余时间；
+   - `N%` → 大招已充能百分比（槽 0）；
+   - `0秒` → 立即 ready；
+   - 单数字 `2/1` 只作为右上角充能数，不与下方 CD 混淆。
+2. **充能数字事件**：图标右上角充能数 OCR（0–max，clamp）。
+   - 数字减少（2→1、1→0）视为「刚释放」；
+   - 有剩余充能：`ready_at = t0 + charge_cd_ms`；0 充能优先用下方 `NN秒`，否则用 `total_cd_ms`；
+   - 数字增加表示该次充能恢复；充满且下一帧仍保持满才 ready。
+3. **亮度事件兜底**：非充能技能监测 p90 亮度，高亮→变暗连续 **2 帧**确认后视为释放，`ready_at = t0 + total_cd_ms`；恢复反向。单帧噪声不触发。
+4. **兜底**：p90 状态 + 上次已知值；无法判断则 `unknown`。
+
+### 4.3 状态与上报
+
+- `charge_cd_ms` 优先取配置，缺省 `total_cd_ms / max_charges`（如红狼手炮 70s/2 = 35s）。
+- 上报只在以下情况发生：state 变化、charges/max_charges 变化、`ready_at` 被文字/事件重同步（>1s）、首次识别/进出房间。
+- 同 state 下 remaining 自然减少**不会**触发上报；队友端自行倒计时。
+- 误差约 **1–2s**：事件 `t0` 取截图识别时刻而非释放瞬间，叠加 OCR 1–2 帧去抖。
+
+### 4.4 为什么不用技能图标模板库
+
+- 实测图标冷却时是整体变暗，没有可用的扇形进度；
+- 图标模板受分辨率/皮肤/遮挡影响大；
+- 0.1.4 主链路只依赖「干员头像识别 + 配置 CD + 亮度/文字/充能数事件」。技能图标模板仅保留为实验代码（灰带路径默认关闭）。
+
+---
+
+## 5. 设置项说明
+
+| 设置页 | 项目 | 说明 |
+|---|---|---|
+| 连接 | 服务器地址 / WebSocket | 默认 HTTPS/WSS；支持反代路径 |
+| 连接 | Mock 模式、保存 token | Mock 用于离线演示 |
+| HUD / 采屏 | 采集窗口、窗口检测/选择 | 进程名/标题/尺寸兜底，排除自身窗口 |
+| HUD / 采屏 | 标定 HUD、自动识别干员、阈值、重新识别 | 默认识别阈值 0.65 |
+| HUD / 采屏 | 调试导出 | 导出三槽 ROI/帧/result.json，保留最近 10 次 |
+| 干员 | 手动选择 17 干员 | 自动识别失败时兜底 |
+| 悬浮窗 | 启用、透明度、缩放、位置重置、两个热键 | 默认 30% 透明、关闭 |
+| 个人资料 | 昵称、修改密码 | 昵称 1–20；密码 8–32 |
+
+配置文件可直接编辑 `%APPDATA%\DeltaClient\config.json`；也可用环境变量（`DELTA_SERVER` / `DELTA_WS` / `DELTA_MOCK` / `DELTA_SAVE_TOKEN` 等）或命令行覆盖。
+
+---
+
+## 6. 常见问题
+
+### 6.1 提示「未检测到游戏窗口」
+
+- 确认游戏进程为 `DeltaForceClient-Win64-Shipping.exe`；
+- 设置 → HUD / 采屏 → 手动「选择窗口」，或检查进程名/标题关键词；
+- 游戏需使用无边框/窗口模式；
+- 游戏最小化时悬浮窗会隐藏，恢复窗口后自动跟随。
+
+### 6.2 标定预览黑屏
+
+- 把客户端移到副屏或最小化后再标定；
+- 切换采集方式（WGC / mss）；
+- 确认标定保存后重新打开 HUD 预览；
+- 全黑通常表示采集 API 未取到游戏表面，而非配置错误。
+
+### 6.3 悬浮窗不显示
+
+- 必须**登录后**才启用；
+- 需要检测到游戏窗口；
+- 设置 → 悬浮窗确认已勾选启用；
+- 按 `Ctrl+Shift+D` 检查是否被手动隐藏；
+- 独占全屏会盖住悬浮窗，切无边框模式。
+
+### 6.4 全局快捷键无效
+
+- 快捷键只在登录后注册；登出会注销；
+- 检查是否被其他程序占用：设置 → 悬浮窗会显示冲突；
+- 重新录制为其他组合（如 `Ctrl+Alt+D`）；
+- 未登录按快捷键无反应是预期行为。
+
+### 6.5 历史账号/密码
+
+- 最多保存 5 个账号；密码用 DPAPI 加密，30 天后需重新输入；
+- 登录失败/改密会清除该账号保存的密码，但保留账号；
+- 「清空历史」会删除账号与密码记录。
+
+### 6.6 崩溃/卡死
+
+- 崩溃日志：`%APPDATA%\DeltaClient\logs\crash.log`；
+- 普通日志：`%APPDATA%\DeltaClient\logs\client.log`（2MB × 3 轮转）；
+- 也检查 Windows 事件查看器 → Windows 日志 → 应用程序，或 WER 报告
+  `%LOCALAPPDATA%\CrashDumps` / `%PROGRAMDATA%\Microsoft\Windows\WER`；
+- 反馈时请附 `crash.log` 末尾、`last_step`、版本号与复现步骤（勿附密码/token）。
+
+---
+
+## 7. 安全与隐私
+
+- 截屏与识别全部在本机内存中完成，不上传图像；
+- 服务端只接收技能状态/画板/聊天等结构化数据；
+- 密码绝不明文落盘；token 落盘需显式开启；
+- 日志对 token/password 做脱敏；
+- 画板/聊天内容仅当前房间可见。
+
+---
+
+## 8. 开发与测试
+
+源码运行：
 
 ```powershell
-cd delta_client
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-```
-
-`requirements.txt`：`PySide6>=6.5`、`aiohttp>=3.8`、`websockets>=10`。
-
-检查依赖是否就绪：
-
-```powershell
-python main.py --check
-```
-
----
-
-## 4. 启动
-
-### 4.1 Mock 模式（后端未就绪也能演示，推荐先跑这个）
-
-```powershell
 python main.py --mock
 ```
 
-演示账号（仅内存、仅 Mock 模式）：
-
-| 账号 | 密码 | 说明 |
-|---|---|---|
-| `demo` | `demo123` | 登录后可见演示公共房间 |
-| `player` | `player123` | 同上 |
-
-Mock 数据：公共房间 `AB12C`、`K7M2P`；私有房间 `Q4W8E`，密码 `1234`。
-Mock 模式可正常走完「登录 → 房间列表 → 创建/加入 → 房间内聊天回显 → 离开/退出」全流程。
-
-### 4.2 连接真实后端
-
-```powershell
-# 方式一：命令行
-python main.py --server https://deltachat.icu:8443
-
-# 方式二：环境变量（当前终端有效）
-$env:DELTA_SERVER = "https://deltachat.icu:8443"
-python main.py
-
-# 方式三：界面右上角「连接设置」，保存到 %APPDATA%\DeltaClient\config.json
-python main.py
-```
-
-服务器地址优先级：**CLI `--server` > 环境变量 `DELTA_SERVER` > 配置文件 > 默认 `https://deltachat.icu:8443`**。
-
-WebSocket 地址：
-
-- 默认由 HTTP 地址推导：`http(s)://host[/path]` → `ws(s)://host[/path]/ws`（PROTOCOL B 阶段目标）；
-- 生产 WS 与 HTTP 同域：`https://deltachat.icu:8443` 自动推导 `wss://deltachat.icu:8443/ws`；旧 `http://114.132.161.169:8000` 配置首次启动自动迁移并保留其它字段，设置页会提示。
-- 地址支持反代路径前缀，例如 `https://example.com/delta` → `wss://example.com/delta/ws`。
-
-### 4.3 配置文件 `%APPDATA%\DeltaClient\config.json`
-
-```json
-{
-  "server_url": "https://deltachat.icu:8443",
-  "ws_url": null,
-  "mock": false,
-  "save_token": false,
-  "request_timeout": 15.0
-}
-```
-
-- `mock`：是否默认使用内置 Mock 后端（也可用 `DELTA_MOCK=1/0`）；
-- `save_token`：是否把 JWT 落盘到 `%APPDATA%\DeltaClient\session.json`（默认关闭；**任何时候都不保存密码**）；
-- 相应环境变量：`DELTA_SERVER` / `DELTA_WS` / `DELTA_MOCK` / `DELTA_SAVE_TOKEN` / `DELTA_CLIENT_CONFIG`（自定义配置文件路径）/ `DELTA_SESSION_FILE`（自定义会话文件路径）。
-
----
-
-## 5. 测试
-
-纯逻辑测试只用标准库，**不需要 PySide6、不联网、不需要后端**：
+测试（无需后端/网络；GUI/OCR 依赖缺失自动 skip）：
 
 ```powershell
 python -m unittest discover -s tests -v
 ```
 
-覆盖：配置加载与优先级、URL 规范化、协议路径/WS 消息、HTTP 错误映射、WS 重连退避、房间号校验（5 位 `[A-Z0-9]`）、房间/成员/消息解析、登录注册校验、token 存取与“不落盘密码”、Mock 后端完整流程。
-
-当前结果：**436 个用例全部通过**（构建 venv 含真实头像/OCR 441 个）（约 1.2s；无 GUI/OCR 依赖时跳过 40 个）。
-
----
-
-## 6. 后端接口依赖（B2b / C / D 已联调）
-
-契约以 `delta_service/PROTOCOL.md` 为准；B2b（JWT + 房间）、C（聊天）、D（画板，master `3787ed9`）均已上线，客户端真实代码已对 `http://114.132.161.169:8000` 完成联调（2026-10-19）。
-
-### 6.1 已按目标契约调用
-
-| 用途 | 方法/路径 | 说明 |
-|---|---|---|
-| 登录签发 JWT | `POST /api/v1/auth/login` | 读 `data.access_token`（兼容 `token` / `accessToken`）；`user` 取 `data.user` |
-| 注册 | `POST /api/v1/auth/register` | 响应同登录（含 token，客户端注册后自动登录）；404 时回退旧 `/api/users/create` |
-| 公共房间列表 | `GET /api/v1/rooms` | 读 `data.items + has_more + next_before`；字段 `id/code/name/member_count/has_password/owner_id/created_at/background_id` |
-| 我的房间（H1） | `GET /api/v1/rooms/mine?page=1&page_size=20` | 读 `data.items/has_more/next_before`（按加入时间倒序）；字段 `id/code/name/visibility/member_count/joined_at/role` |
-| 房间详情（成员兜底） | `GET /api/v1/rooms/{room_id_or_code}` | 读 `data.{room, members:[{id,username,online}]}`；进房先渲染一次，WS `room_joined` 丢失/重连失败时按 5s 节流刷新 |
-| 创建房间 | `POST /api/v1/rooms` | `{name, visibility:"public"|"private", password?}`；响应 `data.room` |
-| 加入房间 | `POST /api/v1/rooms/{room_id_or_code}/join` | body `{password?}`；路径接受 5 位 room_code 或内部 id，客户端输入自动转大写 |
-| 离开房间 | WS `leave_room` + `POST /api/v1/rooms/{room_id_or_code}/leave` | 客户端离开/退出/关窗先发 WS `leave_room` 再 HTTP leave；服务端广播 `user_left(reason=left)` |
-| 实时连接 | `WS /ws` | 首消息 `{"type":"auth","token","protocol_version":1,"client":{...}}` |
-| 加入实时频道 | WS `join_room` | `{"room_id_or_code": ...}`（同时带旧字段 `room_code` 兼容）；**前置条件：先 HTTP 加入房间**，否则 `NOT_ROOM_MEMBER`；`password` 服务端忽略；成功回 `room_joined{room,members}` |
-| 聊天收发（C） | WS `chat_send` | `{client_msg_id,content,content_type,room_id}`；服务端向房间内所有连接（含发送者）广播 `chat_message`，客户端按 `client_msg_id` 认领「发送中→已发送」，不重复插入 |
-| 聊天历史（C） | `GET /api/v1/rooms/{room_id_or_code}/messages` | `?before=<消息 id>&limit=50`；`data.{items,has_more,next_before}`，`items` 新→旧；进房拉最近一页，上滚用 `next_before` 续拉 |
-| 画板快照（D） | `GET /api/v1/rooms/{room_id_or_code}/canvas` | `data.{strokes,rev,updated_at}`；`room_joined.canvas_snapshot` 缺失/为空时 fallback |
-| 画板增量（D） | WS `canvas_op` | `{room_id,rev,op}`；op 为 `stroke{points≤512,color,width,tool}` 或 `clear`；坐标 0–1；服务端只广播给其他人 |
-| 画板快照保存（D） | WS `canvas_snapshot_save` | `{room_id,rev,strokes}`（≤5000 笔 / ≤512KB）；等 `canvas_snapshot_saved` ack 后断开；离开/关窗前必须发 |
-| 修改房间（F） | `PATCH /api/v1/rooms/{room_id_or_code}` | 房主：`{name?}` / `{password?}`（公开房不允许设密码，服务端 `ROOM_PASSWORD_NOT_ALLOWED`）；响应 `data.room` |
-| 删除房间（F） | `DELETE /api/v1/rooms/{room_id_or_code}` | 房主：关闭房间并摘除成员会话；响应 `{closed:true}` |
-| 房间事件（F） | WS `room_updated` / `room_deleted` | 实时更新房名/密码状态；删除后提示并退回大厅 |
-| 移出成员（H3） | `POST /api/v1/rooms/{room_id_or_code}/kick` | body `{"user_id": <成员id>}`；房主专用，错误码 `NOT_ROOM_OWNER`/`MEMBER_NOT_FOUND`/`CANNOT_KICK_OWNER`；成功响应含最新 `members` |
-| 被踢事件（H3） | WS `room_kicked` | `{room_id, room_code, by:{id,nickname}, reason:"kicked"}`；当前房间被踢时提示、清空房间状态并回大厅 |
-| 技能状态（E2/E2b） | WS `skill_share_state` / `room_joined.skill_states`：顶层 `server_received_at`，每槽 `ready_at` 绝对服务器毫秒；接收端优先 `ready_at - server_now_est` 倒计时（≤0 就绪），缺失时回退旧 remaining+captured_at 公式 || 技能移除（E2） | WS `skill_share_removed` | `{user_id}`；从面板移除该队友 |
-| 服务器时钟（E2b） | `auth_ok.server_time` + pong RTT/2 估计 offset（EMA α=0.2）；本地 tick 用 `time.monotonic()`，系统时间跳变不影响 || 技能上报统一 serialize_skill_state（所有槽 remaining_ms 必为 0–600000 int；max_charges 1–9；单槽非法降级 unknown）（E2/E3a） | WS `skill_share_update` / `skill_share_off` | `{room_id,captured_at,skills:[{slot,state,remaining_ms,charges,max_charges,pct}],operator_id,operator_name}` / `{room_id}`；默认关闭，开启后 2 次/秒本地节流，关闭时发 off；未知 CD 槽 `state=unknown` |
-| 修改昵称（F） | `PATCH /api/v1/users/me` | body `{"nickname": "新昵称"}`；响应 `{"user": {...}}`；成功后本地立即更新展示、保持登录 |
-| 修改密码（F） | `POST /api/v1/users/me/password` | body `{"old_password","new_password"}`；旧密码错 `WRONG_OLD_PASSWORD`、新密码不合规 `INVALID_NEW_PASSWORD`（8–32，前端先校验）；成功后 token 继续有效 |
-| 心跳 | WS `ping` / 服务端 `heartbeat` | 服务端每 30s 下发；客户端 25s ping，90s 无消息判定失联 |
-
-错误体统一读取 `data.error_code`（§1.4/§7.3），并已映射 §7.2 全部 WS 错误码（`NOT_AUTHENTICATED`/`AUTH_INVALID`/`AUTH_EXPIRED`/`NOT_ROOM_MEMBER`/`ROOM_CLOSED`/`INVALID_MESSAGE`/`INVALID_CANVAS_OP`/`CANVAS_OUT_OF_ORDER`/`RATE_LIMITED` 等）。
-
-### 6.2 当前兼容分支（保留以兼容旧后端）
-
-- `POST /api/v1/auth/login` 返回 404 时回退 `POST /api/users/login`（A 现状，无 token → 提示“已登录但无 JWT，聊天仅本地回显”）；
-- `POST /api/v1/auth/register` 返回 404 时回退 `POST /api/users/create`；
-- `GET /api/v1/rooms` 返回 404 时回退 `GET /api/room/public/list`；
-- 错误体同时兼容 `{code,message,data}`、`{detail:{error_code,message}}`、`{detail:"..."}`、Pydantic 422 列表与 `data.error_code`。
-
-### 6.3 真实联调结论（客户端实测）
-
-- 登录：返回 `access_token`；JWT `sub`=user_id、有效期 7 天；`GET /api/v1/users/me` 正常。
-- 401 形态：`40100 未认证`、`40102 登录凭证无效`；客户端按 401 清会话回登录页。
-- 房间：列表分页字段齐全；创建公开/私有正确（`has_password`）；join 接受小写/大写 room_code；私有密码错误返回 HTTP 400 + `data.error_code = ROOM_PASSWORD_REQUIRED / ROOM_PASSWORD_INVALID`，客户端准确识别并弹密码框。
-- 房间详情：`GET /api/v1/rooms/{code|id}` 正常返回 `room + members`（含 `online`），已作为成员兜底接入 UI。
-- WS：`auth` → `auth_ok`；双账号 `room_joined` 成员互见、`user_joined` 正常；未认证发 `join_room` 返回 `NOT_AUTHENTICATED`（PR#9 §7.2 已统一为该码）。
-- 断线重连：同账号新连接顶号后，客户端自动重连 → 重新 auth → 重新 `join_room` 成功。
-- 离开：WS `leave_room`（填 code 或内部 id 均可）会广播 `user_left(reason=left)`；B2b 当前直接断连不广播，PR#9 起断连会清理并广播 `reason=disconnected`（客户端已按 `left/disconnected/kicked/replaced` 展示原因）。
-- 连通性自检：真实后端 `/health` 与 `/api/v1/rooms?page=1` 均通过，设置页「测试连接」可区分可达/鉴权失效/超时/网络错误。
-- 聊天（C，部署后实测）：双账号 `dsh_test`/`dsh_test2` 收发（A 发 A/B 都收到、B 发 A 收到）；`chat_message` 字段 `id/room_id/user/content/client_msg_id/created_at` 正确，`client_msg_id` 原样回传；历史分页 4 页 7 条无重复、顺序新→旧；5 条/秒限频第 6 条返回 `RATE_LIMITED`；2001 字返回 `INVALID_MESSAGE`；HTTP leave 后 WS 发送返回 `NOT_ROOM_MEMBER`。
-- 画板（D，部署后实测）：A 画 B 实时收到 `canvas_op`（含 `user_id/rev/op`），A 无自回显；B 画 A 收到；`clear` 生效；`canvas_snapshot_save` 收到 `canvas_snapshot_saved{rev,updated_at}`，HTTP canvas 与后进房 `room_joined.canvas_snapshot` 均能恢复已保存笔画；非法 op→`INVALID_CANVAS_OP`、rev 回退→`CANVAS_OUT_OF_ORDER`、超 30 条/秒→`RATE_LIMITED`、HTTP leave 后→`NOT_ROOM_MEMBER`。
-- 房间管理（F，当前 master 实测）：`PATCH /rooms/{ref}` 改名成功；私有房改密码后旧密码失效、新密码可加入；`DELETE /rooms/{ref}` 成功且删除后房间不可访问（返回 409 + `ROOM_NOT_FOUND`）；公开房设置密码返回 `ROOM_PASSWORD_NOT_ALLOWED`（UI 只对私有房展示密码修改）。
-- 个人资料/房间事件（F，部署后实测）：`PATCH /users/me` 改昵称成功（响应 `{"user": {...}}`）；`POST /users/me/password` 成功且原 token 继续有效，旧密码错→`WRONG_OLD_PASSWORD`、短新密码→`INVALID_NEW_PASSWORD`；WS `room_updated`（字段 `room_id/name/visibility/has_password`）和 `room_deleted` 均已下发并被客户端处理；`room_joined`/历史接口当前暂未返回 `history_window_days`/`window_days`，客户端按缺省不提示，后端补字段后自动生效。
-- 房间对象比 PROTOCOL 多 `visibility/updated_at/closed_at/background` 等字段，客户端忽略未知字段。
-- 我的房间（H1）：Mock 已覆盖预置/退出/创建/删除；真实 `GET /api/v1/rooms/mine` 当前返回 404（路径被当作 room ref），接口上线后联调。底层 `POST /leave` 与房间成员减少走既有接口。
-- 注册/改密密码规则：前端统一 8–32（与后端 F/B 一致），注册页 6–7 位提交前即被拦截并提示「密码至少 8 位」；登录密码只校验非空，历史短密码账号不受影响。
-
-### 6.4 后续里程碑
-
-1. C 聊天、D 画板均已部署并通过真实双账号联调。
-2. F 客户端已完成；昵称/改密/`room_updated`/`room_deleted` 已真实联调通过，历史窗口字段待后端补返回。
-3. 列表分页 UI：只渲染首屏 `items`，后续视需要加分页/滚动加载。
-4. 技能共享（E）`skill_report`/`skill_state` 仍为占位，等 E 协议/通知后实现。
-
----
-
-## 7. 安全约定
-
-- 服务器地址可配置，仓库内**无硬编码 IP**；
-- 密码只在登录请求体内发送，**不落盘、不写日志、不进配置文件**（H2 历史账号密码例外：仅 DPAPI 加密密文落盘，绝不明文）；
-- H2 历史账号：密码用 Windows DPAPI（`CRYPTPROTECT_UI_FORBIDDEN`）加密后 base64 存入 `%APPDATA%\DeltaClient\saved_logins.json`；DPAPI 失败/非 Windows 时降级为**只存账号、不存密码**，无明文回退；
-- JWT 默认只存内存；开启 `save_token` 时才落盘到 `%APPDATA%\DeltaClient\session.json`，并用 `core.validation.sanitize_user` 清洗用户信息（去掉 password/token/secret 类字段）；
-- 错误提示只展示服务端 `message` 或客户端兜底文案，5xx 不展示内部细节；
-- 画板只收发矢量操作/快照（坐标+颜色+粗细），**不上传截图或图像**；截屏/OCR（E）未实现。
-
----
-
-## 8. 已知限制 / TODO
-
-- 技能共享（E）未实现，房间内技能卡片仅为占位；截屏/识别尚未接入；
-- F 个人资料/房间事件接口已真实联调通过；历史窗口字段后端暂未返回，客户端已兼容，后端返回 `window_days`/`truncated` 后自动提示；
-- 修改密码走 `POST /users/me/password`（8–32 位且新旧不同，前端先校验，后端错误 `WRONG_OLD_PASSWORD`/`INVALID_NEW_PASSWORD` 直接展示）；修改昵称走 `PATCH /users/me`，成功后立即更新本地展示（含聊天历史中自己的名字），不退出登录；
-- 房主改房名 1–30、私有房密码 4–32；删除房间必须原样输入房间名确认；非房主看不到入口（服务端仍会校验）；
-- 我的房间（H1）接口未上线前 Mock 可完整演示；真实接口 `/api/v1/rooms/mine` 当前 404，上线后按 PROTOCOL 联调；退出/关闭后立即本地移除，失败保留行并提示；
-- 房主移出（H3）：成员操作改为右键菜单（行内不再放按钮，行高固定 40px，长昵称右侧省略 + tooltip）；真实 `POST /rooms/{ref}/kick` 已用 QA 双账号验证（成员被移除、返回最新 members）；`room_kicked` 定向事件当前未下发，待后端补；客户端已实现提示+回大厅，Mock 可演示；
-- 大厅自动刷新仅在大厅可见且窗口有焦点时运行；失败按 5→10→20s 退避；手动刷新会重置退避；
-- 历史窗口提示依赖后端返回 `window_days`/`truncated`（字段名兼容多种写法）；未返回时按普通历史展示；
-- 画板 undo/redo 为**纯本地**（服务端无 undo，队友不会看到撤销，保存快照后才持久化）；`clear` 为全房间生效；
-- H4 底图为客户端内置资源 `assets/canvas_map.png`（1105×1260，约 2MB），打包需 add-data；画布控件锁定底图宽高比，随宿主可用空间等比缩放居中（宿主外部留白，控件内部底图铺满、不裁切/不留边）；坐标 0–1 以画布控件为基准，不做旧视口坐标迁移（线上无真实数据）；
-- E3a 干员配置来自 `assets/operators.json`（17 人）；当前 `assets/operators/*.png` 头像 17/17 齐全；缺失时 UI 用首字母占位，文件存在时自动加载；`total_cd_ms` 为 null/0 的 5 个槽位显示「CD未知」，不画环/不倒计时、上报 `state=unknown`；E3b 截图识别尚未开始（显示模式/OCR 依赖待确认）。
-- 画板快照只在离开房间/关闭应用/切服务器时显式保存（服务端无定时快照），进程崩溃可能丢失未保存增量；快照上限 5000 笔 / 512KB，超限会提示「画布已满」；
-- 房间列表暂无分页；只渲染 `items` 首屏；
-- 成员列表以 WS `room_joined` 为准，HTTP 房间详情做兜底（进房一次 + 重连失败时 5s 节流）；
-- 聊天：进房拉最近 50 条，上滚按 `next_before` 续拉（服务端 `items` 新→旧）；发送失败/超时标红，双击重试复用同一 `client_msg_id`；`RATE_LIMITED` 会保留输入内容；
-- 断线重连后自动重新 `join_room`，画板以 `room_joined.canvas_snapshot` 为准（不保留旧增量）；
-- 离开房间/退出登录/关闭窗口会先保存画板快照、再发 WS `leave_room` 与 HTTP leave；
-- 设置页「测试连接」使用当前登录 token 探测 `/health` 与 `/api/v1/rooms?page=1`，未登录时会显示鉴权失效；
-- Mock 后端只用于演示，不模拟限频/多客户端/持久化（但包含昵称、聊天历史、画板快照、房主管理、我的房间、踢人/room_kicked，可离线演示）；
-- 若后端返回的登录响应没有 token，界面会提示并进入“无 JWT 兼容模式”（聊天仅本地回显）。
-- E3b：采集/标定/识别核心与「识别 HUD」一键按钮已完成；当前机器没有运行游戏窗口，WGC/mss 真实抓帧未实机验证；真实识别单测用 `tests/fixtures/hud/` 截图（16%/15秒/充能2/遮罩），缺 OCR 依赖时跳过；连续 2 FPS 工作线程已实现但未接入自动共享循环（当前单次按钮触发）。
-
----
-
-## 9. 开发约定
-
-- 纯逻辑（config/core/state）不得 import PySide6/aiohttp/websockets，保证离线单测；
-- aiohttp / websockets 采用函数内延迟导入，缺失依赖时给出明确安装提示；
-- 新增 UI 页面时沿用 `ui/` + 信号/槽，网络请求统一经 `AsyncBridge` 提交，不在 UI 线程直接 `asyncio.run`；
-- **聊天/画板协议细节、已知限制与 TODO 见 [`CLIENT-NOTES.md`](CLIENT-NOTES.md)**（交接必读）。
-
-
-
-
-
-
-
-
-
-
-
-
-
+当前：**489 个用例全部通过**（构建 venv 含真实头像/OCR fixture 494 个）。依赖、打包、模块地图与踩坑见 `CLIENT-NOTES.md`。

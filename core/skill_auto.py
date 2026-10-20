@@ -50,9 +50,12 @@ class ChangeTracker:
                 return True
             if int(item.get("charges", 0) or 0) != int(old.get("charges", 0) or 0):
                 return True
-            if abs(int(item.get("remaining_ms", 0) or 0) - int(old.get("remaining_ms", 0) or 0)) > self.remaining_threshold_ms:
+            if int(item.get("max_charges", 0) or 0) != int(old.get("max_charges", 0) or 0):
                 return True
-            if abs(float(item.get("pct", 0) or 0) - float(old.get("pct", 0) or 0)) >= 1.0:
+            # 仅 ready_at 重同步（文字/充能事件时间跳变 >1s）才发；remaining 变化不发
+            old_ready = int(old.get("ready_at", 0) or 0)
+            new_ready = int(item.get("ready_at", 0) or 0)
+            if abs(new_ready - old_ready) > 1000:
                 return True
         return False
 

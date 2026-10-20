@@ -39,9 +39,9 @@ class HudProfileTests(unittest.TestCase):
         profile = HudProfile()
         scaled = profile.scaled(1280, 720)
         self.assertEqual((1280, 720), (scaled.client_width, scaled.client_height))
-        self.assertEqual((950, 623), (scaled.skill_bar.x, scaled.skill_bar.y))
-        self.assertEqual((154, 84), (scaled.skill_bar.width, scaled.skill_bar.height))
-        self.assertEqual((19, 620), (scaled.avatar_roi.x, scaled.avatar_roi.y))
+        self.assertEqual((961, 631), (scaled.skill_bar.x, scaled.skill_bar.y))
+        self.assertEqual((126, 42), (scaled.skill_bar.width, scaled.skill_bar.height))
+        self.assertEqual((20, 642), (scaled.avatar_roi.x, scaled.avatar_roi.y))
         self.assertEqual(3, len(scaled.slot_rois()))
 
     def test_split_skill_bar_with_gap(self) -> None:
@@ -76,4 +76,5 @@ class HudProfileTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 

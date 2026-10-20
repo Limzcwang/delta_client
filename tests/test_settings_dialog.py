@@ -54,7 +54,7 @@ class SettingsOperatorTests(unittest.TestCase):
         from PySide6.QtWidgets import QLabel
 
         self.assertTrue(
-            any("版本 v0.1.3" in label.text() for label in dialog.findChildren(QLabel))
+            any("版本 v0.1.4" in label.text() for label in dialog.findChildren(QLabel))
         )
 
     def test_hud_tab_has_calibration_detection_and_auto_operator(self) -> None:
@@ -65,13 +65,22 @@ class SettingsOperatorTests(unittest.TestCase):
         self.assertIsNotNone(dialog.calibration_button)
         self.assertIsNotNone(dialog.detect_window_button)
         self.assertTrue(dialog.auto_operator_check.isChecked())
-        self.assertAlmostEqual(0.70, dialog.operator_threshold_spin.value())
+        self.assertAlmostEqual(0.65, dialog.operator_threshold_spin.value())
+        self.assertFalse(dialog.hud_debug_check.isChecked())
+        self.assertEqual(140, dialog.brightness_spin.value())
+        self.assertIn("亮度阈值", dialog.hud_profile_label.text())
+        self.assertIn("skill_bar", dialog.hud_profile_label.text())
+        self.assertIn("avatar_roi", dialog.hud_profile_label.text())
+        dialog.hud_debug_check.setChecked(True)
+        dialog.brightness_spin.setValue(155)
         dialog.auto_operator_check.setChecked(False)
         dialog.operator_threshold_spin.setValue(0.83)
         dialog.accept()
         result = dialog.config_result()
         self.assertFalse(result.auto_operator_enabled)
+        self.assertTrue(result.hud_debug_export)
         self.assertAlmostEqual(0.83, result.operator_recognition_threshold)
+        self.assertEqual(155, result.hud_profile["brightness_threshold"])
 
     def test_config_center_labels_and_check_button(self) -> None:
         from types import SimpleNamespace
@@ -119,6 +128,8 @@ class SettingsOperatorTests(unittest.TestCase):
         dialog.overlay_scale_spin.setValue(1.2)
         dialog.shortcut_toggle_edit.setKeySequence("Ctrl+Alt+D")
         dialog.shortcut_edit_edit.setKeySequence("Ctrl+Alt+E")
+        dialog.set_hotkey_status("快捷键被其他程序占用，请换一个：F9")
+        self.assertIn("占用", dialog.hotkey_status_label.text())
         dialog._overlay_position_reset = True
         dialog.accept()
         result = dialog.config_result()
@@ -167,6 +178,7 @@ class SettingsOperatorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 
 
 

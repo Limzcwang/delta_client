@@ -35,6 +35,25 @@ def parse_seconds(texts: Iterable[str]) -> int | None:
     return values[-1] * 1000 if values else None
 
 
+def parse_duration_ms(texts: Iterable[str]) -> int | None:
+    """解析 NN秒、N分M秒、N分、M:SS；返回毫秒。"""
+    for text in texts:
+        value = str(text)
+        match = re.search(r"(\d{1,2})\s*分\s*(\d{1,2})\s*秒", value)
+        if match:
+            return (int(match.group(1)) * 60 + int(match.group(2))) * 1000
+        match = re.search(r"(\d{1,2})\s*分", value)
+        if match:
+            return int(match.group(1)) * 60 * 1000
+        match = re.search(r"(\d{1,4})\s*秒", value)
+        if match:
+            return int(match.group(1)) * 1000
+        match = re.search(r"(\d{1,2}):(\d{2})", value)
+        if match:
+            return (int(match.group(1)) * 60 + int(match.group(2))) * 1000
+    return None
+
+
 def parse_charge(texts: Iterable[str]) -> int | None:
     """读取单独的小数字充能数（如 ``2``）；忽略百分比/秒数文本。"""
     values: list[int] = []
@@ -101,6 +120,7 @@ class SlotRecognition:
     slot: int
     state: str = SKILL_UNKNOWN
     remaining_ms: int = 0
+    ready_at: int = 0
     percent: float = 0.0
     charges: int = 0
     max_charges: int = 0
@@ -109,6 +129,8 @@ class SlotRecognition:
 
     def to_payload(self) -> dict[str, Any]:
         item: dict[str, Any] = {"slot": self.slot, "state": self.state}
+        if self.ready_at > 0:
+            item["ready_at"] = int(self.ready_at)
         if self.state != SKILL_UNKNOWN:
             if self.remaining_ms:
                 item["remaining_ms"] = int(self.remaining_ms)

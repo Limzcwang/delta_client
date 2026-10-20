@@ -53,15 +53,37 @@ class TrackerTests(unittest.TestCase):
         self.assertTrue(tracker.should_emit(first, 1000))
         tracker.mark_sent(first, 1000)
         self.assertFalse(tracker.should_emit(payload(15_200), 2000))
-        self.assertTrue(tracker.should_emit(payload(16_000), 3000))
+        self.assertFalse(tracker.should_emit(payload(16_000), 3000))  # remaining 变化不再上报
         self.assertTrue(tracker.should_emit(payload(charges=2), 4000))
+        self.assertTrue(tracker.should_emit(payload(state="ready"), 5000))
 
     def test_min_interval_hard_limit(self) -> None:
         tracker = ChangeTracker(min_interval_ms=500)
         first = payload()
         tracker.mark_sent(first, 1000)
-        self.assertFalse(tracker.should_emit(payload(remaining=20_000), 1100))
-        self.assertTrue(tracker.should_emit(payload(remaining=20_000), 1600))
+        self.assertFalse(tracker.should_emit(payload(state="ready"), 1100))
+        self.assertTrue(tracker.should_emit(payload(state="ready"), 1600))
+
+
+class ReportTriggerMatrixTests(unittest.TestCase):
+    def _sent(self, tracker, item, now):
+        tracker.mark_sent([item], now)
+
+    def test_report_trigger_matrix(self) -> None:
+        from core.skill_auto import ChangeTracker
+
+        base = {"slot": 1, "state": "charging", "charges": 1, "max_charges": 2, "ready_at": 100_000}
+        tracker = ChangeTracker(min_interval_ms=0)
+        tracker.mark_sent([base], 1000)
+        self.assertFalse(tracker.should_emit([dict(base, ready_at=99_000)], 2000))  # 1s 内不算重同步
+        self.assertTrue(tracker.should_emit([dict(base, ready_at=101_500)], 3000))  # ready_at 跳变>1s
+        tracker.mark_sent([dict(base, ready_at=101_500)], 3000)
+        self.assertFalse(tracker.should_emit([dict(base, ready_at=101_500, remaining_ms=12000)], 4000))
+        self.assertTrue(tracker.should_emit([dict(base, ready_at=101_500, state="ready")], 5000))
+        tracker.mark_sent([dict(base, ready_at=101_500, state="ready")], 5000)
+        self.assertTrue(tracker.should_emit([dict(base, ready_at=101_500, state="ready", charges=2)], 6000))
+        tracker.mark_sent([dict(base, ready_at=101_500, state="ready", charges=2)], 6000)
+        self.assertTrue(tracker.should_emit([dict(base, ready_at=101_500, state="ready", charges=2, max_charges=3)], 7000))
 
 
 class ControllerTests(unittest.TestCase):
@@ -92,7 +114,10 @@ class ControllerTests(unittest.TestCase):
         current[0] = payload(remaining=20_000)
         ctl._recognizer = lambda frame: FakeRecognition(current[0])
         ctl.tick()
-        self.assertEqual(2, len(emitted))
+        self.assertEqual(1, len(emitted))  # remaining 变化不触发
+        current[0] = payload(state="ready")
+        ctl.tick()
+        self.assertEqual(2, len(emitted))  # state 变化触发
 
     def test_pause_conditions(self) -> None:
         source = FakeSource()
