@@ -38,7 +38,7 @@ LEGACY_DEFAULT_SERVER_URL = "http://114.132.161.169:8000"
 LEGACY_WS_URL = "ws://114.132.161.169:8000/ws"
 DEFAULT_TIMEOUT = 15.0
 CONFIG_FILENAME = ".delta_client.json"
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.2.1"
 __version__ = APP_VERSION
 CONFIG_ENV = "DELTA_CLIENT_CONFIG"
 
@@ -379,4 +379,5 @@ def save_config(config: AppConfig, path: str | os.PathLike[str] | None = None) -
             pass
         raise
     return target
+
 
