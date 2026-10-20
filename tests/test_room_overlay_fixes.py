@@ -359,13 +359,16 @@ class RoomOverlayFixTests(unittest.TestCase):
         finally:
             self._close(window)
 
-    def test_no_game_does_not_show_overlay(self) -> None:
+    def test_no_game_toggle_waits_but_edit_preview_allowed(self) -> None:
         window = self._window()
         try:
             window.overlay.hide()
             with mock.patch.object(window, "_find_game_window", return_value=None):
                 window._toggle_overlay()
                 self.assertFalse(window.overlay.isVisible())
+                window._toggle_overlay_edit()
+                self.assertTrue(window.overlay.edit_mode)
+                self.assertTrue(window.overlay.isVisible())
                 window._toggle_overlay_edit()
                 self.assertFalse(window.overlay.edit_mode)
                 self.assertFalse(window.overlay.isVisible())

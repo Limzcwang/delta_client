@@ -59,11 +59,15 @@ class OverlayTests(unittest.TestCase):
         self.assertAlmostEqual(0.55, self.overlay.opacity, delta=0.05)
 
     def test_edit_mode_toggles_input(self) -> None:
+        flags_before = self.overlay.windowFlags()
         self.overlay.set_edit_mode(True)
-        self.assertFalse(self.overlay.windowFlags() & Qt.WindowType.WindowTransparentForInput)
+        # E1：不重建原生窗口，Qt flags 保持不变，穿透由原生样式/属性切换。
+        self.assertEqual(flags_before, self.overlay.windowFlags())
+        self.assertFalse(self.overlay._click_through)
         self.assertAlmostEqual(1.0, self.overlay.opacity, delta=0.05)
         self.overlay.set_edit_mode(False)
-        self.assertTrue(self.overlay.windowFlags() & Qt.WindowType.WindowTransparentForInput)
+        self.assertTrue(self.overlay._click_through)
+        self.assertEqual(flags_before, self.overlay.windowFlags())
 
     def test_follow_and_no_game(self) -> None:
         window = [FakeWindow()]

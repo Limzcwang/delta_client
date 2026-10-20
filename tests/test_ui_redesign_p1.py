@@ -77,6 +77,25 @@ class LobbyLayoutTests(unittest.TestCase):
             view.close()
             view.deleteLater()
 
+    def test_room_type_suffix_and_my_rooms_count(self) -> None:
+        from core.models import Room
+        from ui.room_list_view import room_type_label
+        view = RoomListView()
+        try:
+            room = Room.from_api({"id": "r", "code": "A1", "name": "零号大坝", "mode": "常规"})
+            self.assertEqual("常规", room_type_label(room))
+            view.set_rooms([room])
+            self.assertIn("零号大坝 · 常规", view.table.item(0, 1).text())
+            view.tabs.setTabText(1, "我的房间 (0)")
+            self.assertEqual("我的房间 (0)", view.tabs.tabText(1))
+            view.set_login_status("✓ 登录成功：DeltaQA01")
+            self.assertIn("登录成功", view.login_status_label.text())
+            view.set_server_status("服务器：x · 模式：LIVE")
+            self.assertIn("服务器", view.server_status_label.text())
+        finally:
+            view.close(); view.deleteLater()
+            self.app.processEvents()
+
     def test_selected_row_delegate_and_table_height(self) -> None:
         from ui.room_list_view import _RoomRowDelegate
 

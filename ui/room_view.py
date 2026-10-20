@@ -231,6 +231,10 @@ class RoomView(QWidget):
         self.chat_list.itemDoubleClicked.connect(self._on_chat_double_clicked)
         self.chat_list.verticalScrollBar().valueChanged.connect(self._on_chat_scrolled)
         layout.addWidget(self.chat_list, stretch=1)
+        self.chat_empty_label = QLabel("暂无消息，打个招呼吧")
+        self.chat_empty_label.setObjectName("Hint")
+        self.chat_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.chat_empty_label)
 
         hint = QLabel("向上滚动加载更早消息；发送失败的消息双击可重试")
         hint.setObjectName("Hint")
@@ -368,6 +372,7 @@ class RoomView(QWidget):
         old_value, old_max = bar.value(), bar.maximum()
 
         self.chat_list.clear()
+        self.chat_empty_label.setVisible(not entries)
         for entry in entries:
             item = QListWidgetItem(entry.display_text())
             item.setToolTip(entry.display_text())
@@ -393,6 +398,7 @@ class RoomView(QWidget):
 
     def clear_chat(self) -> None:
         self.chat_list.clear()
+        self.chat_empty_label.show()
 
     def append_chat_input(self, text: str) -> None:
         """恢复输入框内容（发送失败重试用）。"""

@@ -113,7 +113,7 @@ class SkillSlotWidget(QWidget):
             return title, "CD未知", "CD未知"
         state = self.effective_state()
         if state == SKILL_UNKNOWN:
-            return title, "?", "未共享"
+            return title, "—", "未共享"
         if self.kind == SLOT_ULTIMATE:
             main = format_percent(self.slot.percent)
         else:
@@ -170,7 +170,7 @@ class SkillSlotWidget(QWidget):
             center_font.setPixelSize(14)
             painter.setFont(center_font)
             painter.setPen(QPen(QColor("#71808f")))
-            painter.drawText(middle, Qt.AlignmentFlag.AlignCenter, "?")
+            painter.drawText(middle, Qt.AlignmentFlag.AlignCenter, "—")
         else:
             # 充能/就绪：大号计数（例如 1/2），20px bold
             count_font = QFont(self.font())
@@ -255,7 +255,7 @@ class SkillRow(QFrame):
     ) -> None:
         super().__init__(parent)
         self.setObjectName("Card")
-        self.setFixedHeight(180)
+        self.setFixedHeight(150)
         self.user_id = state.user_id
         self.state = state
         self.operator_def = operator

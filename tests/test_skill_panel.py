@@ -86,7 +86,7 @@ class SkillPanelTests(unittest.TestCase):
         throwable = row.slot_widgets[SLOT_THROWABLE]
         self.assertEqual(("大招", "100%", "就绪"), ultimate.text_lines())
         self.assertEqual(("技能", "1/2", "0:30"), ability.text_lines())
-        self.assertEqual(("投掷物", "?", "未共享"), throwable.text_lines())
+        self.assertEqual(("投掷物", "—", "未共享"), throwable.text_lines())
 
         row.update_state(state(), state().captured_at + 10_000, pulse=False)
         self.assertEqual(("技能", "1/2", "0:20"), ability.text_lines())
@@ -214,6 +214,14 @@ class SkillPanelTests(unittest.TestCase):
         self.assertFalse(throwable.cd_known)
         self.assertFalse(throwable.slot.percent)
         self.assertNotIn("0:", throwable.text_lines()[2])
+
+    def test_operator_avatar_resolved_from_name(self) -> None:
+        catalog = load_operator_catalog()
+        panel = self._panel(catalog=catalog)
+        panel.set_states([state(operator_id="", operator="红狼")])
+        row = panel._rows["2"]
+        self.assertEqual("operator", row._avatar_source)
+        self.assertEqual("红狼", row.operator_label.text())
 
     def test_existing_avatar_file_loads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -344,7 +352,7 @@ class SkillPanelTests(unittest.TestCase):
         self.assertEqual(Qt.ScrollBarPolicy.ScrollBarAsNeeded, panel.scroll.verticalScrollBarPolicy())
         self.assertEqual(10, panel.list_layout.spacing())
         for row in panel._rows.values():
-            self.assertEqual(180, row.height())
+            self.assertEqual(150, row.height())
         bar = panel.scroll.verticalScrollBar()
         self.assertTrue(bar.isVisible())
         self.assertEqual(8, bar.width())
