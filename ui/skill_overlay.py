@@ -9,7 +9,7 @@ import time
 from typing import Any, Callable, Iterable
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
 from core.operators import OperatorCatalog
@@ -138,6 +138,7 @@ class SkillOverlay(QWidget):
         if enabled == self._edit_mode:
             return
         self._edit_mode = enabled
+        self.setCursor(Qt.CursorShape.SizeAllCursor if enabled else Qt.CursorShape.ArrowCursor)
         self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, not enabled)
         # 编辑时完全可见；退出恢复用户配置（默认 30%）。
         self.setWindowOpacity(1.0 if enabled else max(0.10, min(1.0, self._base_opacity)))
@@ -151,16 +152,47 @@ class SkillOverlay(QWidget):
     def edit_mode(self) -> bool:
         return self._edit_mode
 
-    def arrow_rects(self) -> dict[str, Any]:
-        """四向拖拽手柄矩形（编辑模式绘制/命中测试）。"""
-        w, h = self.width(), self.height()
-        size = 22
-        return {
-            "up": QRect(w // 2 - size // 2, 4, size, size),
-            "down": QRect(w // 2 - size // 2, h - size - 4, size, size),
-            "left": QRect(4, h // 2 - size // 2, size, size),
-            "right": QRect(w - size - 4, h // 2 - size // 2, size, size),
-        }
+    def drag_handle_rect(self) -> QRect:
+        """编辑模式中心单一四向拖动手柄（28×28）。"""
+        size = 28
+        return QRect(self.width() // 2 - size // 2, self.height() // 2 - size // 2 - 4, size, size)
+
+    def _draw_cross_handle(self, painter: QPainter) -> None:
+        rect = self.drag_handle_rect()
+        painter.setPen(QPen(QColor("#f5a800"), 1))
+        painter.setBrush(QColor(24, 34, 53, 235))
+        painter.drawRoundedRect(rect, 7, 7)
+        center = rect.center()
+        cx, cy = center.x(), center.y()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#f5a800"))
+        # 横向/纵向连杆
+        painter.drawRoundedRect(QRect(cx - 9, cy - 2, 18, 4), 1, 1)
+        painter.drawRoundedRect(QRect(cx - 2, cy - 9, 4, 18), 1, 1)
+        # 四向实心箭头
+        for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+            path = QPainterPath()
+            if dx == 0:
+                tip = QPoint(cx, cy + dy * 10)
+                a = QPoint(cx - 5, cy + dy * 4)
+                b = QPoint(cx + 5, cy + dy * 4)
+            else:
+                tip = QPoint(cx + dx * 10, cy)
+                a = QPoint(cx + dx * 4, cy - 5)
+                b = QPoint(cx + dx * 4, cy + 5)
+            path.moveTo(tip)
+            path.lineTo(a)
+            path.lineTo(b)
+            path.closeSubpath()
+            painter.drawPath(path)
+        painter.setPen(QColor("#8b98ab"))
+        font = QFont(self.font())
+        font.setPointSize(7)
+        painter.setFont(font)
+        painter.drawText(
+            QRect(rect.left() - 20, rect.bottom() + 1, rect.width() + 40, 14),
+            Qt.AlignmentFlag.AlignHCenter, "拖动移动",
+        )
 
     def _content_height(self) -> int:
         scale = self._scale
@@ -236,38 +268,21 @@ class SkillOverlay(QWidget):
                 )
             y += ROW_HEIGHT * scale
         if self._edit_mode:
-            painter.setPen(QPen(QColor("#ffb61f"), 2))
-            painter.setBrush(QColor(24, 34, 53, 220))
-            for label, rect in self.arrow_rects().items():
-                painter.drawRoundedRect(rect, 5, 5)
-                arrow = {"up": "▲", "down": "▼", "left": "◀", "right": "▶"}[label]
-                painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, arrow)
+            self._draw_cross_handle(painter)
         painter.end()
 
     # ---------- 编辑模式拖动 ----------
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if not self._edit_mode or event.button() != Qt.MouseButton.LeftButton:
             return
-        point = event.position().toPoint()
-        for name, rect in self.arrow_rects().items():
-            if rect.contains(point):
-                self._drag_axis = {"up": "y", "down": "y", "left": "x", "right": "x"}[name]
-                self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-                return
-        # 非手柄区域也允许整体拖动（兼容旧编辑交互）。
+        # 中心十字手柄：自由拖动（x/y 同时跟随）。
         self._drag_axis = None
         self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if not self._edit_mode or self._drag_offset is None:
             return
-        delta = event.globalPosition().toPoint() - self._drag_offset
-        if self._drag_axis == "x":
-            self.move(delta.x(), self.y())
-        elif self._drag_axis == "y":
-            self.move(self.x(), delta.y())
-        else:
-            self.move(delta)
+        self.move(event.globalPosition().toPoint() - self._drag_offset)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if self._drag_offset is not None:

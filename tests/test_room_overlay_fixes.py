@@ -188,22 +188,25 @@ class RoomOverlayFixTests(unittest.TestCase):
         finally:
             self._close(window)
 
-    def test_overlay_edit_opacity_and_arrows(self) -> None:
+    def test_overlay_edit_opacity_and_cross_handle(self) -> None:
         overlay = SkillOverlay()
         try:
             overlay.show()
             overlay.set_opacity(0.30)
             overlay.set_edit_mode(True)
             self.assertAlmostEqual(1.0, overlay.opacity, delta=0.01)
-            self.assertEqual({"up", "down", "left", "right"}, set(overlay.arrow_rects()))
-            up = overlay.arrow_rects()["up"].center()
+            self.assertTrue(hasattr(overlay, "drag_handle_rect"))
+            handle = overlay.drag_handle_rect()
+            self.assertEqual(28, handle.width())
+            self.assertEqual(28, handle.height())
+            up = handle.center()
             press = QMouseEvent(QMouseEvent.Type.MouseButtonPress, up, up, Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
             overlay.mousePressEvent(press)
-            self.assertEqual("y", overlay._drag_axis)
-            start_y = overlay.y()
-            move_point = QPoint(up.x(), up.y() + 30)
+            start_x, start_y = overlay.x(), overlay.y()
+            move_point = QPoint(up.x() + 30, up.y() + 24)
             move = QMouseEvent(QMouseEvent.Type.MouseMove, move_point, move_point, Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
             overlay.mouseMoveEvent(move)
+            self.assertNotEqual(start_x, overlay.x())
             self.assertNotEqual(start_y, overlay.y())
             overlay.set_edit_mode(False)
             self.assertAlmostEqual(0.30, overlay.opacity, delta=0.02)
