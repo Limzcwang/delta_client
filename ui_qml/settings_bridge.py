@@ -192,6 +192,13 @@ class ProfileBridge(QObject):
         self._nickname = str(nickname or "")
         self.nickname_requested.emit(self._nickname)
 
+    @Slot(str, str, str, str, bool)
+    def save_profile(self, nickname: str, old_password: str, new_password: str, confirm: str, expanded: bool) -> None:
+        if expanded:
+            self.change_password(old_password, new_password, confirm)
+        else:
+            self.save_nickname(nickname)
+
     @Slot(str, str, str)
     def change_password(self, old_password: str, new_password: str, confirm: str) -> None:
         try:

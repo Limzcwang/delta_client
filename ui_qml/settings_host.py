@@ -35,6 +35,12 @@ class _QmlPageView(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.quick)
 
+    def shutdown(self) -> None:
+        try:
+            self.quick.setSource(QUrl())
+        except RuntimeError:
+            pass
+
 
 class QmlConnView(_QmlPageView):
     test_requested = Signal(str, str)

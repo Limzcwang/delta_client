@@ -69,6 +69,10 @@ class LobbyBridge(QObject):
         self._selected_code = str(code or "")
         self.changed.emit()
 
+    def set_my_rooms(self, rooms) -> None:
+        self.my_model.set_rooms(rooms)
+        self.changed.emit()
+
     @Slot()
     def refresh(self) -> None:
         self.refresh_requested.emit()
@@ -106,6 +110,7 @@ class LoginBridge(QObject):
         self._loading = False
         self._register = False
         self._history_visible = False
+        self._confirm_clear = False
         self._account = ""
         self._password = ""
         self.history_model = LoginHistoryModel()
@@ -126,9 +131,21 @@ class LoginBridge(QObject):
     def historyVisible(self) -> bool:  # noqa: N802
         return self._history_visible
 
+    @Property(bool, notify=changed)
+    def confirmClearVisible(self) -> bool:  # noqa: N802
+        return self._confirm_clear
+
     @Property("QVariantList", notify=changed)
     def historyEntries(self):  # noqa: N802
         return list(self._history_entries)
+
+    @Slot(str, result=str)
+    def historyTooltip(self, username: str) -> str:  # noqa: N802
+        for entry in self._history_entries:
+            if str(entry.get("username", "")) == str(username):
+                when = str(entry.get("timeText", "") or "-")
+                return f"{username}\n最近登录：{when}   （含本机保存的密码）"
+        return str(username)
 
     @Property(str, notify=changed)
     def account(self) -> str:
@@ -186,6 +203,7 @@ class LoginBridge(QObject):
         if self._history_visible:
             self._history_visible = False
             self.changed.emit()
+        self._confirm_clear = False
 
     @Slot(str, str)
     def submit(self, username: str, password: str) -> None:
@@ -216,6 +234,28 @@ class LoginBridge(QObject):
 
     @Slot()
     def clear_history(self) -> None:
+        self.request_clear_history()
+
+    @Slot()
+    def request_clear_history(self) -> None:
+        if not self._history_entries:
+            return
+        self._confirm_clear = True
+        self.changed.emit()
+
+    @Slot()
+    def cancel_clear_history(self) -> None:
+        self._confirm_clear = False
+        self.changed.emit()
+
+    @Slot()
+    def confirm_clear_history(self) -> None:
+        if not self._confirm_clear:
+            return
+        self._confirm_clear = False
+        self._history_entries = []
+        self.history_model.set_entries([])
+        self.changed.emit()
         self.history_clear_requested.emit()
 
     @Slot()

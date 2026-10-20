@@ -71,13 +71,14 @@ class QmlLobbyView(QWidget):
 
     def set_rooms(self, rooms) -> None:
         self.bridge.public_model.set_rooms(rooms)
+        self.bridge.changed.emit()
         if rooms and not self.bridge.selectedCode:
             first = str(getattr(rooms[0], "code", "") or "")
             if first:
                 self.bridge.select_room(first)
 
     def set_my_rooms(self, rooms) -> None:
-        self.bridge.my_model.set_rooms(rooms)
+        self.bridge.set_my_rooms(rooms)
 
     def shutdown(self) -> None:
         try:

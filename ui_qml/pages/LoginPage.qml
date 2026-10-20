@@ -6,6 +6,15 @@ import ".."
 
 Item {
     id: page
+    property int debugHistoryTooltipIndex: -1
+    property string debugTooltipText: ""
+    property int historyTooltipIndex: -1
+    property string historyTooltipText: ""
+    function showHistoryTooltip(i) {
+        historyTooltipIndex = i
+        var e = loginApi.historyEntries[i]
+        if (e) historyTooltipText = e.username + "\n最近登录：" + e.timeText + "   （含本机保存的密码）"
+    }
     Rectangle { anchors.fill: parent; color: Theme.bg }
 
     Rectangle {
@@ -170,7 +179,22 @@ Item {
                             text: modelData.username
                             elide: Text.ElideMiddle
                             color: Theme.text; font.family: Theme.fontFamily; font.pixelSize: 13
-                            MouseArea { anchors.fill: parent; onClicked: loginApi.select_history(modelData.username) }
+                            MouseArea {
+                                id: accountHover
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                onClicked: loginApi.select_history(modelData.username)
+                            }
+                            Timer {
+                                id: tooltipTimer
+                                interval: 400
+                                running: accountHover.containsMouse
+                                onTriggered: page.showHistoryTooltip(index)
+                            }
+                            Connections {
+                                target: accountHover
+                                function onExited() { page.historyTooltipIndex = -1 }
+                            }
                         }
                         Text {
                             anchors.right: parent.right; anchors.rightMargin: 34
@@ -193,7 +217,77 @@ Item {
                 height: 34; color: "transparent"
                 Rectangle { anchors.top: parent.top; width: parent.width; height: 1; color: Theme.border }
                 Text { anchors.left: parent.left; anchors.leftMargin: 12; anchors.verticalCenter: parent.verticalCenter; text: "清空历史"; color: Theme.muted; font.family: Theme.fontFamily; font.pixelSize: 11 }
-                MouseArea { anchors.fill: parent; onClicked: loginApi.clear_history() }
+                MouseArea { anchors.fill: parent; onClicked: loginApi.request_clear_history() }
+            }
+        }
+    }
+
+    Popup {
+        id: historyTooltipPopup
+        parent: Overlay.overlay
+        width: accountInput.width
+        height: 52
+        x: Math.round((parent.width - width) / 2)
+        y: 372
+        z: 2500
+        padding: 0
+        modal: false
+        closePolicy: Popup.NoAutoClose
+        visible: page.debugHistoryTooltipIndex >= 0 || page.historyTooltipIndex >= 0
+        background: Rectangle {
+            color: "#182235"; border.color: "#24334e"; border.width: 1; radius: 6
+        }
+        contentItem: Text {
+            anchors.fill: parent; anchors.margins: 10
+            text: page.debugHistoryTooltipIndex >= 0 ? page.debugTooltipText : page.historyTooltipText
+            color: "#e8eef7"; font.family: Theme.fontFamily; font.pixelSize: 11
+            wrapMode: Text.WrapAnywhere; verticalAlignment: Text.AlignVCenter
+        }
+    }
+
+    Popup {
+        id: clearConfirm
+        parent: Overlay.overlay
+        width: 420
+        height: 220
+        x: Math.round((parent.width - width) / 2)
+        y: 220
+        z: 3000
+        padding: 0
+        modal: true
+        dim: true
+        focus: true
+        closePolicy: Popup.NoAutoClose
+        visible: loginApi.confirmClearVisible
+
+        background: Rectangle {
+            color: Theme.panel
+            border.color: Theme.border
+            border.width: 1
+            radius: 8
+        }
+        contentItem: Column {
+            anchors.fill: parent; anchors.margins: 22; spacing: 12
+            Text { text: "清空历史账号"; color: Theme.text; font.family: Theme.fontFamily; font.pixelSize: 16; font.bold: true }
+            Text {
+                width: parent.width
+                text: "将删除本机保存的 " + loginApi.historyEntries.length + " 个账号及其密码，不可恢复。"
+                color: Theme.muted; font.family: Theme.fontFamily; font.pixelSize: 12
+                wrapMode: Text.WordWrap
+            }
+            Item { width: 1; height: 8 }
+            Row {
+                anchors.right: parent.right; spacing: 10
+                Rectangle {
+                    width: 88; height: 34; radius: 6; color: "transparent"; border.color: Theme.border
+                    Text { anchors.centerIn: parent; text: "取消"; color: "#c8d3e1"; font.family: Theme.fontFamily; font.pixelSize: 13 }
+                    MouseArea { anchors.fill: parent; onClicked: loginApi.cancel_clear_history() }
+                }
+                Rectangle {
+                    width: 88; height: 34; radius: 6; color: "#c4473f"
+                    Text { anchors.centerIn: parent; text: "清空"; color: "#fff4f3"; font.family: Theme.fontFamily; font.pixelSize: 13; font.bold: true }
+                    MouseArea { anchors.fill: parent; onClicked: loginApi.confirm_clear_history() }
+                }
             }
         }
     }

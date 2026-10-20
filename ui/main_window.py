@@ -2825,6 +2825,12 @@ class MainWindow(QMainWindow):
             self._current_room = None
             self._clear_room_state()
         finally:
+            for view in (self.qml_login, self.qml_conn, self.qml_profile, self.qml_lobby):
+                if view is not None:
+                    try:
+                        view.shutdown()
+                    except Exception:  # noqa: BLE001
+                        pass
             self._hud_timeout.stop()
             self._hud_service.shutdown()
             self.hotkeys.stop()

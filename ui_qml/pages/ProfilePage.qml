@@ -24,7 +24,11 @@ Item {
         Text { anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; text: "退出登录"; color: "#ffb347"; font.family: Theme.fontFamily; font.pixelSize: 12
             MouseArea { anchors.fill: parent; onClicked: profileCtl.logout() } }
         Rectangle { anchors.right: parent.right; width: 88; height: 34; radius: 6; color: Theme.amber
-            Text { anchors.centerIn: parent; text: "保存"; color: "#17130a"; font.family: Theme.fontFamily; font.pixelSize: 13; font.bold: true } }
+            Text { anchors.centerIn: parent; text: "保存"; color: "#17130a"; font.family: Theme.fontFamily; font.pixelSize: 13; font.bold: true }
+            MouseArea { anchors.fill: parent; onClicked: profileCtl.save_profile(nicknameInput.text, oldPassword.text, newPassword.text, confirmPassword.text, page.passwordExpanded) } }
+        Rectangle { anchors.right: parent.right; anchors.rightMargin: 98; width: 88; height: 34; radius: 6; color: "transparent"; border.color: Theme.border
+            Text { anchors.centerIn: parent; text: "取消"; color: "#c8d3e1"; font.family: Theme.fontFamily; font.pixelSize: 13 }
+            MouseArea { anchors.fill: parent; onClicked: profileCtl.back() } }
     }
     Rectangle {
         anchors.horizontalCenter: parent.horizontalCenter; anchors.top: header.bottom; anchors.topMargin: 22

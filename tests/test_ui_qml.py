@@ -187,6 +187,89 @@ class QmlLobbySmokeTests(unittest.TestCase):
             view.close()
             view.deleteLater()
 
+    def test_history_tooltip_and_clear_confirm(self) -> None:
+        try:
+            from ui_qml.login_host import QmlLoginView
+            from state.saved_logins import SavedLoginInfo
+        except Exception:  # noqa: BLE001
+            self.skipTest("QtQuick QML 不可用")
+        try:
+            view = QmlLoginView()
+        except RuntimeError as exc:
+            self.skipTest(f"QtQuick QML 插件不可用：{exc}")
+        try:
+            long_name = "account_" + "x" * 50
+            view.set_saved_logins([SavedLoginInfo(long_name, 1, 2, 1, True, False)])
+            tooltip = view.bridge.historyTooltip(long_name)
+            self.assertIn(long_name, tooltip)
+            self.assertIn("最近登录", tooltip)
+            seen = []
+            view.bridge.history_clear_requested.connect(lambda: seen.append("clear"))
+            view.bridge.request_clear_history()
+            self.assertTrue(view.bridge.confirmClearVisible)
+            view.bridge.cancel_clear_history()
+            self.assertFalse(view.bridge.confirmClearVisible)
+            self.assertEqual([], seen)
+            view.bridge.request_clear_history()
+            view.bridge.confirm_clear_history()
+            self.assertFalse(view.bridge.confirmClearVisible)
+            self.assertEqual(["clear"], seen)
+            self.assertEqual(0, len(view.bridge.historyEntries))
+        finally:
+            view.shutdown()
+            view.close()
+            view.deleteLater()
+
+    def test_my_rooms_count_changes(self) -> None:
+        try:
+            from ui_qml.host import QmlLobbyView
+            from core.models import Room
+        except Exception:  # noqa: BLE001
+            self.skipTest("QtQuick QML 不可用")
+        try:
+            view = QmlLobbyView()
+        except RuntimeError as exc:
+            self.skipTest(f"QtQuick QML 插件不可用：{exc}")
+        try:
+            room = Room.from_api({"id": "r1", "code": "R1", "name": "mine", "member_count": 1})
+            self.assertEqual(0, view.bridge.my_model.rowCount())
+            view.set_my_rooms([room])
+            self.assertEqual(1, view.bridge.my_model.rowCount())
+            self.assertEqual(1, view.bridge.myRoomsCount)
+            view.set_my_rooms([])
+            self.assertEqual(0, view.bridge.myRoomsCount)
+        finally:
+            view.shutdown()
+            view.close()
+            view.deleteLater()
+
+    def test_profile_save_two_states(self) -> None:
+        try:
+            from ui_qml.settings_host import QmlProfileView
+        except Exception:  # noqa: BLE001
+            self.skipTest("QtQuick QML 不可用")
+        try:
+            view = QmlProfileView()
+        except RuntimeError as exc:
+            self.skipTest(f"QtQuick QML 插件不可用：{exc}")
+        try:
+            nicknames = []
+            passwords = []
+            view.bridge.nickname_requested.connect(lambda n: nicknames.append(n))
+            view.bridge.password_requested.connect(lambda o, n: passwords.append((o, n)))
+            view.bridge.save_profile("昵称", "", "", "", False)
+            self.assertEqual(["昵称"], nicknames)
+            self.assertEqual([], passwords)
+            view.bridge.save_profile("昵称", "oldpass1", "newpass1", "newpass2", True)
+            self.assertEqual([], passwords)
+            self.assertIn("不一致", view.bridge.passwordResult)
+            view.bridge.save_profile("昵称", "oldpass1", "newpass1", "newpass1", True)
+            self.assertEqual([("oldpass1", "newpass1")], passwords)
+        finally:
+            view.shutdown()
+            view.close()
+            view.deleteLater()
+
     def test_cli_flag_accepts_qml_lobby(self) -> None:
         from main import build_parser
 
