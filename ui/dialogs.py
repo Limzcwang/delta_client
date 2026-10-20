@@ -309,6 +309,7 @@ class SettingsDialog(QDialog):
     password_change_requested = Signal(str, str)  # (旧密码, 新密码)
     config_check_requested = Signal()
     operator_recognition_requested = Signal()
+    hotkey_test_requested = Signal()
 
     def __init__(
         self,
@@ -783,6 +784,9 @@ class SettingsDialog(QDialog):
         self.hotkey_status_label.setObjectName("Hint")
         self.hotkey_status_label.setWordWrap(True)
         layout.addWidget(self.hotkey_status_label)
+        self.test_hotkey_button = QPushButton("测试热键")
+        self.test_hotkey_button.clicked.connect(self.hotkey_test_requested.emit)
+        layout.addWidget(self.test_hotkey_button)
 
         reset_row = QHBoxLayout()
         self.overlay_reset_button = QPushButton("重置悬浮窗位置")

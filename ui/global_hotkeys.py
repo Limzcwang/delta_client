@@ -61,7 +61,7 @@ def parse_hotkey(text: str) -> HotkeySpec | None:
 
 
 def _user32() -> Any:
-    return ctypes.windll.user32
+    return ctypes.WinDLL("user32", use_last_error=True)
 
 
 def register_hotkey(hwnd: int, hotkey_id: int, modifiers: int, vk: int) -> bool:
@@ -146,13 +146,30 @@ class GlobalHotkeyManager(QObject):
             spec = parse_hotkey(text)
             if spec is None:
                 self._failed[action] = f"快捷键格式不支持：{text}（仅单键或 Ctrl/Alt/Shift+字母/数字/F1-F12）"
+                logger.info(
+                    "全局热键注册 action=%s key=%s success=False error=invalid",
+                    action, text,
+                )
                 continue
             if register_hotkey(self._hwnd, hotkey_id, spec.modifiers, spec.vk):
                 self._registered[action] = hotkey_id
                 self._specs[action] = spec
+                logger.info(
+                    "全局热键注册 action=%s key=%s success=True error=0",
+                    action, text,
+                )
             else:
-                self._failed[action] = f"快捷键被其他程序占用，请换一个：{text}"
+                error = int(ctypes.get_last_error() or 1409)
+                hint = "（1409=被其他程序占用）" if error == 1409 else ""
+                self._failed[action] = f"快捷键被其他程序占用，请换一个：{text}（错误码 {error}{hint}）"
+                logger.info(
+                    "全局热键注册 action=%s key=%s success=False error=%s",
+                    action, text, error,
+                )
         return dict(self._failed)
+
+    def spec_for(self, action: str) -> HotkeySpec | None:
+        return self._specs.get(str(action))
 
     def handle_message(self, message: int, wparam: int) -> bool:
         if int(message) != WM_HOTKEY:

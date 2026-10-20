@@ -54,7 +54,7 @@ class SettingsOperatorTests(unittest.TestCase):
         from PySide6.QtWidgets import QLabel
 
         self.assertTrue(
-            any("版本 v0.2.4" in label.text() for label in dialog.findChildren(QLabel))
+            any("版本 v0.2.5" in label.text() for label in dialog.findChildren(QLabel))
         )
 
     def test_hud_tab_has_calibration_detection_and_auto_operator(self) -> None:
@@ -119,6 +119,15 @@ class SettingsOperatorTests(unittest.TestCase):
         self.assertIn("CD未知", dialog.operator_detail_label.text())
         dialog.accept()
         self.assertEqual("muyangren", dialog.config_result().operator_id)
+
+    def test_hotkey_test_button_emits(self) -> None:
+        from PySide6.QtWidgets import QPushButton
+
+        dialog = self._dialog("honglang")
+        seen: list[bool] = []
+        dialog.hotkey_test_requested.connect(lambda: seen.append(True))
+        dialog.test_hotkey_button.click()
+        self.assertEqual([True], seen)
 
     def test_overlay_settings_persist(self) -> None:
         dialog = self._dialog("honglang")

@@ -70,7 +70,7 @@ class _FakeSettingsDialog:
         self.tabs = SimpleNamespace(setCurrentIndex=lambda _i: None, count=lambda: 3)
         for name in (
             "config_check_requested", "operator_recognition_requested", "test_requested",
-            "nickname_save_requested", "password_change_requested",
+            "nickname_save_requested", "password_change_requested", "hotkey_test_requested",
         ):
             setattr(self, name, _Signals())
         self._is_accepted = True

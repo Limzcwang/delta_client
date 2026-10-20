@@ -1696,6 +1696,7 @@ class MainWindow(QMainWindow):
 
             keywords = (self.config.capture_window_title,) if self.config.capture_window_title else None
             kwargs = {"title_keywords": keywords} if keywords else {}
+            kwargs["title_match_strict"] = bool(self.config.title_match_strict)
             return find_game_window(self.config.capture_window_process, **kwargs).window
         except Exception:  # noqa: BLE001
             return None
@@ -1744,16 +1745,35 @@ class MainWindow(QMainWindow):
             str(self.config.shortcut_toggle), str(self.config.shortcut_edit)
         )
         if self._hotkey_failures:
-            logger.debug("全局快捷键注册失败：%s", self._hotkey_failures)
+            logger.info("全局快捷键注册失败，保留应用内 QShortcut：%s", self._hotkey_failures)
 
     def _on_global_hotkey(self, action: str) -> None:
         # 未登录阶段静默忽略：不提示、不显示、不记错误日志
         if not self.session.is_logged_in:
             return
+        window = self._find_game_window()
+        logger.info(
+            "全局热键触发 action=%s game_window=%s overlay_enabled=%s edit=%s",
+            action,
+            "None" if window is None else (
+                f"pid={getattr(window, 'pid', '?')},title={getattr(window, 'title', '')!r}"
+            ),
+            self.overlay_controller.enabled,
+            self.overlay.edit_mode,
+        )
         if action == "edit":
             self._toggle_overlay_edit()
         else:
             self._toggle_overlay()
+        self._set_status(f"热键触发：{action}")
+
+    def _on_test_hotkey(self, dialog: SettingsDialog) -> None:
+        self._on_global_hotkey("toggle")
+        try:
+            dialog.set_hotkey_status("热键触发成功（显示/隐藏动作已执行）")
+        except RuntimeError:
+            pass
+        self._set_status("热键触发成功")
 
     def _hotkey_ready(self) -> bool:
         if not self.session.is_logged_in:
@@ -1768,6 +1788,7 @@ class MainWindow(QMainWindow):
             return
         if not self._hotkey_ready():
             self.overlay.hide()
+            self._set_status("等待游戏窗口后再显示悬浮窗")
             self.room_view.set_status("等待游戏窗口后再显示悬浮窗")
             return
         self.overlay_controller.start()
@@ -1778,6 +1799,7 @@ class MainWindow(QMainWindow):
         enabled = not self.overlay.edit_mode
         if enabled and self._find_game_window() is None:
             self.overlay.hide()
+            self._set_status("等待游戏窗口后再进入编辑模式")
             self.room_view.set_status("等待游戏窗口后再进入编辑模式")
             return
         self.overlay.set_edit_mode(enabled)
@@ -2831,22 +2853,24 @@ class MainWindow(QMainWindow):
                 dialog, old_password, new_password
             )
         )
+        dialog.hotkey_test_requested.connect(lambda: self._on_test_hotkey(dialog))
         dialog.set_account(self._account())
         dialog.set_nickname(self.session.nickname or self.session.username)
         dialog.set_overlay_status(self.overlay_controller.last_reason or "未附加")
         if not self.session.is_logged_in:
             dialog.set_hotkey_status("登录后注册")
-        elif self._hotkey_failures:
-            dialog.set_hotkey_status("；".join(self._hotkey_failures.values()))
         else:
-            dialog.set_hotkey_status("已注册")
+            parts = []
+            for action, label in (("toggle", "显示/隐藏"), ("edit", "编辑")):
+                spec = self.hotkeys.spec_for(action)
+                if spec is not None:
+                    parts.append(f"{spec.label} 已注册（{label}）")
+            if self._hotkey_failures:
+                parts.extend(self._hotkey_failures.values())
+                parts.append("全局热键被占用，已回退为应用内快捷键，请更换按键")
+            dialog.set_hotkey_status("；".join(parts) if parts else "未注册")
         dialog.set_server_migrated(self.config.server_migrated)
         dialog.set_operator_recognition_status(self._operator_recognition_text)
-        dialog.set_hotkey_status(
-            "；".join(self._hotkey_failures.values())
-            if self._hotkey_failures
-            else "全局热键已注册（游戏前台可用）"
-        )
         dialog.tabs.setCurrentIndex(max(0, min(int(start_tab), dialog.tabs.count() - 1)))
         self.overlay_controller.pause("settings")
         try:

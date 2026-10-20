@@ -64,6 +64,15 @@ class LoadConfigTests(unittest.TestCase):
         self.assertEqual(cfg.source, "default")
         self.assertEqual(cfg.effective_ws_url, "wss://deltachat.icu/ws")
 
+    def test_title_match_strict_default_and_override(self) -> None:
+        cfg = load_config(path=self.config_path, env={})
+        self.assertTrue(cfg.title_match_strict)
+        self.write = self._write
+        self._write({"title_match_strict": False})
+        cfg = load_config(path=self.config_path, env={})
+        self.assertFalse(cfg.title_match_strict)
+        self.assertFalse(cfg.public_dict()["title_match_strict"])
+
     def test_legacy_http_default_migrates_to_https(self) -> None:
         self._write(
             {

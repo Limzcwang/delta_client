@@ -41,7 +41,7 @@ LEGACY_HTTPS_SERVER_URL = "https://deltachat.icu:8443"
 LEGACY_HTTPS_WS_URL = "wss://deltachat.icu:8443/ws"
 DEFAULT_TIMEOUT = 15.0
 CONFIG_FILENAME = ".delta_client.json"
-APP_VERSION = "0.2.4"
+APP_VERSION = "0.2.5"
 __version__ = APP_VERSION
 CONFIG_ENV = "DELTA_CLIENT_CONFIG"
 
@@ -161,6 +161,7 @@ class AppConfig:
     auto_sample_ms: int = 2000
     capture_window_process: str = "DeltaForceClient-Win64-Shipping"
     capture_window_title: str = ""
+    title_match_strict: bool = True
     auto_operator_enabled: bool = True
     operator_recognition_threshold: float = 0.65
     hud_debug_export: bool = False
@@ -197,6 +198,7 @@ class AppConfig:
             "auto_sample_ms": self.auto_sample_ms,
             "capture_window_process": self.capture_window_process,
             "capture_window_title": self.capture_window_title,
+            "title_match_strict": self.title_match_strict,
             "auto_operator_enabled": self.auto_operator_enabled,
             "operator_recognition_threshold": self.operator_recognition_threshold,
             "hud_debug_export": self.hud_debug_export,
@@ -337,6 +339,7 @@ def load_config(
         file_data.get("capture_window_process") or "DeltaForceClient-Win64-Shipping"
     ).strip()
     capture_window_title = str(file_data.get("capture_window_title") or "").strip()
+    title_match_strict = parse_bool(file_data.get("title_match_strict"), True)
     auto_operator_enabled = parse_bool(file_data.get("auto_operator_enabled"), True)
     hud_debug_export = parse_bool(file_data.get("hud_debug_export"), False)
     try:
@@ -371,6 +374,7 @@ def load_config(
         auto_sample_ms=auto_sample_ms,
         capture_window_process=capture_window_process,
         capture_window_title=capture_window_title,
+        title_match_strict=title_match_strict,
         auto_operator_enabled=auto_operator_enabled,
         operator_recognition_threshold=operator_recognition_threshold,
         hud_debug_export=hud_debug_export,
