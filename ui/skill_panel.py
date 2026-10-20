@@ -271,6 +271,16 @@ class SkillRow(QFrame):
         self.avatar.setFixedSize(22, 22)
         self.avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header.addWidget(self.avatar)
+        self.squad_badge = QLabel(self.avatar)
+        self.squad_badge.setObjectName("SquadBadge")
+        self.squad_badge.setFixedSize(13, 13)
+        self.squad_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.squad_badge.setStyleSheet(
+            "QLabel#SquadBadge { background:#f5a800; color:#10131a; border-radius:6px; "
+            "font-size:10px; font-weight:700; }"
+        )
+        self.squad_badge.move(11, -3)
+        self.squad_badge.hide()
         names = QVBoxLayout()
         names.setSpacing(1)
         self.name_label = QLabel(state.display_name)
@@ -317,6 +327,7 @@ class SkillRow(QFrame):
         self.operator_label.setText(
             (operator.display_name if operator is not None else (state.operator or "干员未共享"))
         )
+        self._apply_squad_number(state.squad_number)
         unshared = state.is_unshared(server_now)
         self.status_label.setText("未共享" if unshared else "● 已共享")
         self.status_label.setStyleSheet("color: #ffd071;" if unshared else "color: #5fc98e;")
@@ -330,6 +341,14 @@ class SkillRow(QFrame):
                 skill_name=meta.name if meta is not None else "",
                 cd_known=meta.cd_known if meta is not None else True,
             )
+
+    def _apply_squad_number(self, number: int | None) -> None:
+        if number in (1, 2, 3):
+            self.squad_badge.setText(str(number))
+            self.squad_badge.show()
+            self.squad_badge.raise_()
+        else:
+            self.squad_badge.hide()
 
     def _apply_avatar(self, state: SkillState) -> None:
         """按干员文件加载头像；缓存按 operator_id；缺失时用首字渐变占位。"""

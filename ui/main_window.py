@@ -1909,6 +1909,7 @@ class MainWindow(QMainWindow):
             captured_at=self._server_now_ms(),
             operator_id=operator.id if operator is not None else "",
             operator_name=operator.display_name if operator is not None else "",
+            squad_number=result.squad_number,
         )
         self._self_skill_state = state
         self._skills.update(state)
@@ -2020,6 +2021,7 @@ class MainWindow(QMainWindow):
                 payload,
                 state.operator_id,
                 state.operator,
+                state.squad_number,
             )
         )
 

@@ -313,6 +313,28 @@ class SkillPanelTests(unittest.TestCase):
         slot.set_data(slot.slot, slot.captured_at, slot.server_now, skill_name="非常非常非常长的大招名称")
         self.assertIn("非常非常非常长的大招名称", slot.toolTip())
 
+    def test_squad_number_badge_show_hide_and_duplicates(self) -> None:
+        from dataclasses import replace
+
+        panel = self._panel()
+        panel.set_states([
+            replace(state("2"), squad_number=1),
+            replace(state("3"), squad_number=1),
+        ])
+        try:
+            rows = list(panel._rows.values())
+            self.assertEqual("1", rows[0].squad_badge.text())
+            self.assertTrue(rows[0].squad_badge.isVisibleTo(rows[0]))
+            self.assertEqual("1", rows[1].squad_badge.text())
+            self.assertTrue(rows[1].squad_badge.isVisibleTo(rows[1]))
+            # 编号允许重复，不做去重/合并
+            self.assertEqual(2, len(rows))
+            panel.upsert(replace(state("2"), squad_number=None))
+            self.assertFalse(rows[0].squad_badge.isVisibleTo(rows[0]))
+        finally:
+            panel.close()
+            panel.deleteLater()
+
     def test_multi_member_scroll_and_card_height(self) -> None:
         panel = self._panel()
         panel.resize(520, 520)

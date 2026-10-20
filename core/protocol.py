@@ -224,6 +224,7 @@ def skill_share_update_message(
     skills: Any,
     operator_id: str = "",
     operator_name: str = "",
+    squad_number: int | None = None,
 ) -> dict[str, Any]:
     """E2/E3a：上报本机技能状态（``captured_at`` 为服务器时钟毫秒）。"""
     message: dict[str, Any] = {
@@ -236,6 +237,8 @@ def skill_share_update_message(
         message["operator_id"] = str(operator_id)
     if operator_name:
         message["operator_name"] = str(operator_name)
+    if squad_number in (1, 2, 3):
+        message["squad_number"] = int(squad_number)
     return message
 
 

@@ -378,6 +378,7 @@ def to_skill_state(
     captured_at: int,
     operator_id: str = "",
     operator_name: str = "",
+    squad_number: int | None = None,
 ) -> SkillState:
     slots = []
     kinds = (SLOT_ULTIMATE, SLOT_ABILITY, SLOT_THROWABLE)
@@ -393,6 +394,7 @@ def to_skill_state(
             "operator_id": operator_id or recognized.operator_id,
             "operator_name": operator_name or recognized.operator_name,
             "captured_at": captured_at,
+            "squad_number": squad_number,
             "skills": slots,
         }
     )

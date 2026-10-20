@@ -71,6 +71,14 @@ class MessageTests(unittest.TestCase):
         self.assertEqual("honglang", message["operator_id"])
         self.assertEqual("红狼", message["operator_name"])
         self.assertNotIn("room_id", protocol.leave_room_message())
+        with_number = protocol.skill_share_update_message(
+            "AB12C", 1_700_000_000_000, skills, "honglang", "红狼", squad_number=2
+        )
+        self.assertEqual(2, with_number["squad_number"])
+        filtered = protocol.skill_share_update_message(
+            "AB12C", 1_700_000_000_000, skills, "honglang", "红狼", squad_number=9
+        )
+        self.assertNotIn("squad_number", filtered)
 
     def test_chat_and_ping_messages(self) -> None:
         chat = protocol.chat_send_message("大家好", "m-1")

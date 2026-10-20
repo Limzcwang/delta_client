@@ -9,6 +9,7 @@ from pathlib import Path
 
 from core.hud_profile import (
     DEFAULT_AVATAR_ROI,
+    DEFAULT_SELF_AVATAR_ROI,
     DEFAULT_SKILL_BAR,
     HudProfile,
     Roi,
@@ -29,6 +30,7 @@ class HudProfileTests(unittest.TestCase):
         self.assertEqual(3, len(profile.slot_rois()))
         self.assertEqual(DEFAULT_SKILL_BAR, profile.skill_bar.as_tuple())
         self.assertEqual(DEFAULT_AVATAR_ROI, profile.avatar_roi.as_tuple())
+        self.assertEqual(DEFAULT_SELF_AVATAR_ROI, profile.self_avatar_roi.as_tuple())
         self.assertEqual("charged", profile.ult_pct_meaning)
         slots = profile.slot_rois()
         self.assertEqual(slots[0].x, profile.skill_bar.x)
@@ -42,6 +44,7 @@ class HudProfileTests(unittest.TestCase):
         self.assertEqual((961, 631), (scaled.skill_bar.x, scaled.skill_bar.y))
         self.assertEqual((126, 42), (scaled.skill_bar.width, scaled.skill_bar.height))
         self.assertEqual((20, 642), (scaled.avatar_roi.x, scaled.avatar_roi.y))
+        self.assertEqual((18, 640), (scaled.self_avatar_roi.x, scaled.self_avatar_roi.y))
         self.assertEqual(3, len(scaled.slot_rois()))
 
     def test_split_skill_bar_with_gap(self) -> None:
@@ -63,6 +66,7 @@ class HudProfileTests(unittest.TestCase):
             self.assertEqual(profile.slot_rois(), loaded.slot_rois())
             data = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(3, len(data["slots"]))
+            self.assertIn("self_avatar_roi", data)
 
     def test_bad_json_and_invalid_meaning(self) -> None:
         profile = HudProfile.from_dict({"ult_pct_meaning": "wat", "skill_bar": None})

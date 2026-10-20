@@ -10,6 +10,7 @@ from typing import Any, Mapping
 DEFAULT_CLIENT_SIZE = (2560, 1440)
 DEFAULT_SKILL_BAR = (1922, 1262, 252, 84)
 DEFAULT_AVATAR_ROI = (40, 1284, 78, 80)
+DEFAULT_SELF_AVATAR_ROI = (36, 1280, 88, 90)
 DEFAULT_TEXT_ROW = (1916, 1352, 300, 56)
 DEFAULT_ULT_TOTAL_CD_MS = 90_000
 SLOT_COUNT = 3
@@ -85,6 +86,7 @@ class HudProfile:
     slots: list[Roi] | None = None
     text_row: Roi = field(default_factory=lambda: Roi(*DEFAULT_TEXT_ROW))
     avatar_roi: Roi = field(default_factory=lambda: Roi(*DEFAULT_AVATAR_ROI))
+    self_avatar_roi: Roi = field(default_factory=lambda: Roi(*DEFAULT_SELF_AVATAR_ROI))
     ult_pct_meaning: str = "charged"
     ocr_threshold: float = 0.5
     template_threshold: float = 0.70
@@ -133,6 +135,7 @@ class HudProfile:
             slots=[roi.scaled(source, target).clamp(*target) for roi in self.slots] if self.slots else None,
             text_row=self.text_row.scaled(source, target).clamp(*target),
             avatar_roi=self.avatar_roi.scaled(source, target).clamp(*target),
+            self_avatar_roi=self.self_avatar_roi.scaled(source, target).clamp(*target),
             ult_pct_meaning=self.ult_pct_meaning,
             ocr_threshold=self.ocr_threshold,
             template_threshold=self.template_threshold,
@@ -151,6 +154,7 @@ class HudProfile:
             "slots": [roi.to_dict() for roi in self.slots] if self.slots else None,
             "text_row": self.text_row.to_dict(),
             "avatar_roi": self.avatar_roi.to_dict(),
+            "self_avatar_roi": self.self_avatar_roi.to_dict(),
             "ult_pct_meaning": self.ult_pct_meaning,
             "ocr_threshold": self.ocr_threshold,
             "template_threshold": self.template_threshold,
@@ -173,6 +177,7 @@ class HudProfile:
             slots=[Roi.from_dict(item) for item in slots] if isinstance(slots, list) and slots else None,
             text_row=Roi.from_dict(data.get("text_row") or DEFAULT_TEXT_ROW),
             avatar_roi=Roi.from_dict(data.get("avatar_roi") or DEFAULT_AVATAR_ROI),
+            self_avatar_roi=Roi.from_dict(data.get("self_avatar_roi") or DEFAULT_SELF_AVATAR_ROI),
             ult_pct_meaning=str(data.get("ult_pct_meaning") or "charged"),
             ocr_threshold=float(data.get("ocr_threshold", 0.5)),
             template_threshold=float(data.get("template_threshold", 0.70)),
