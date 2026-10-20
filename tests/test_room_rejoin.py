@@ -35,6 +35,9 @@ class _FakeApi:
         self.joins.append((code, password))
         return _DummyCoro()
 
+    def get_canvas(self, code):
+        return _DummyCoro()
+
 
 class _FakeWs:
     connected = True
@@ -123,8 +126,11 @@ class RejoinTests(unittest.TestCase):
             self.assertTrue(window._rejoin_in_progress)
             # HTTP rejoin 成功 → 再发 WS join
             window._on_http_rejoin_success(window._current_room)
-            self.assertFalse(window._rejoin_in_progress)
+            self.assertTrue(window._rejoin_in_progress)
             self.assertEqual([("ABC123", None)], fake.joins)
+            window._on_ws_message(1, {"type": "room_joined", "room": {"id": "1", "code": "ABC123", "name": "test"}})
+            self.assertFalse(window._rejoin_in_progress)
+            self.assertTrue(window._membership_confirmed)
         finally:
             self._close(window)
 

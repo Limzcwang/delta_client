@@ -1134,6 +1134,7 @@ class MainWindow(QMainWindow):
         self._rejoin_in_progress = False
         self._membership_confirmed = False
         self._system_message("HTTP 重新加入成功，正在恢复实时会话…")
+        self._rejoin_in_progress = True
         if self._ws is not None and getattr(self._ws, "connected", False):
             try:
                 self._safe_submit(
@@ -1165,6 +1166,7 @@ class MainWindow(QMainWindow):
         detail = str(info.get("message") or info.get("error") or "")
         if state == "connected":
             self._rejoin_attempts = 0
+            self._rejoin_in_progress = True
             self.room_view.set_connection_state("connected", "实时连接已建立")
             self._system_message("实时连接已建立")
             self._set_skill_server_time(info.get("server_time"))
@@ -2086,7 +2088,7 @@ class MainWindow(QMainWindow):
         if self._ws is None or not getattr(self._ws, "connected", False):
             self.room_view.set_status("实时连接未建立，技能状态未上报", error=True)
             return
-        if not self._membership_confirmed:
+        if self._rejoin_in_progress and not self._membership_confirmed:
             self.room_view.set_status("正在重新加入房间，技能状态暂缓上报")
             return
         if not self._skill_throttle.allow(now_ms()):
@@ -2316,7 +2318,7 @@ class MainWindow(QMainWindow):
             self.room_view.set_status("实时连接未建立，消息未发送", error=True)
             self.room_view.append_chat_input(text)
             return
-        if not self._membership_confirmed:
+        if self._rejoin_in_progress and not self._membership_confirmed:
             self.room_view.set_status("正在重新加入房间，消息暂缓发送")
             self.room_view.append_chat_input(text)
             return
