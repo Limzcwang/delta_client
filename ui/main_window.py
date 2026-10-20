@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+import asyncio
 from dataclasses import replace
 from typing import Any, Mapping
 
@@ -20,7 +21,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from config import AppConfig, ConfigError, normalize_server_url, normalize_ws_url, save_config
+from config import (
+    AppConfig,
+    ConfigError,
+    connection_candidates,
+    normalize_server_url,
+    normalize_ws_url,
+    save_config,
+)
 from core.backoff import ReconnectBackoff
 from core.clock import ServerClock
 from core.canvas import (
@@ -157,6 +165,9 @@ class MainWindow(QMainWindow):
         self._server_clock = ServerClock()
         self._skill_throttle = SkillShareThrottle(max_events=2, window_ms=1000)
         self._skill_share_enabled = False
+        self._login_candidates: list[str] = []
+        self._login_candidate_index = 0
+        self._login_credentials = ("", "")
         self._room_share_off_sent = False
         self._membership_confirmed = False
         self._last_membership_error = ""
@@ -509,11 +520,74 @@ class MainWindow(QMainWindow):
         if self.qml_login is not None:
             self.qml_login.set_busy(True)
         self.login_view.hide_messages()
+        self._login_credentials = (str(username), str(password))
+        self._login_candidates = connection_candidates(self.config.server_url)
+        self._login_candidate_index = 0
+        self._try_login_candidate()
+
+    def _build_api_for(self, server_url: str) -> Any:
+        if self.config.use_mock:
+            return MockApiClient()
+        return ApiClient(
+            server_url,
+            token_provider=lambda: self.session.token,
+            timeout=self.config.request_timeout,
+        )
+
+    def _try_login_candidate(self) -> None:
+        if self._login_candidate_index >= len(self._login_candidates):
+            self._on_login_candidates_failed()
+            return
+        server = self._login_candidates[self._login_candidate_index]
+        try:
+            self.api = self._build_api_for(server)
+        except Exception as exc:  # noqa: BLE001
+            self._on_login_candidate_failure(exc)
+            return
+        username, password = self._login_credentials
         self._safe_submit(
             self.api.login(username, password),
-            lambda result: self._on_login_success(result, username, password),
-            lambda exc: self._on_login_failure(exc, username),
+            lambda result: self._on_login_candidate_success(server, result, username, password),
+            lambda exc: self._on_login_candidate_failure(exc),
         )
+
+    def _on_login_candidate_success(
+        self, server: str, result: LoginResult, username: str, password: str
+    ) -> None:
+        if server != self.config.server_url:
+            new_config = replace(self.config, server_url=server, ws_url=None)
+            try:
+                save_config(new_config)
+            except OSError:
+                pass
+            self.config = new_config
+            self.room_list_view.set_mode(new_config.use_mock, new_config.server_url)
+            self.login_view.set_server_text(new_config.server_url, new_config.mode_label)
+            self._set_status(f"已切换到可用地址：{server}")
+        self._on_login_success(result, username, password)
+
+    def _on_login_candidate_failure(self, exc: BaseException) -> None:
+        kind = getattr(exc, "kind", None)
+        network = kind in (ErrorKind.NETWORK, ErrorKind.TIMEOUT) or isinstance(
+            exc, (asyncio.TimeoutError, ConnectionError, OSError)
+        )
+        if network and self._login_candidate_index + 1 < len(self._login_candidates):
+            self._login_candidate_index += 1
+            self._try_login_candidate()
+            return
+        if network:
+            self._on_login_candidates_failed()
+            return
+        self._on_login_failure(exc, self._login_credentials[0])
+
+    def _on_login_candidates_failed(self) -> None:
+        self.login_view.set_busy(False)
+        if self.qml_login is not None:
+            self.qml_login.set_busy(False)
+            self.qml_login.show_error("无法连接服务器（已尝试 443/8443）")
+        self.login_view.show_error("无法连接服务器（已尝试 443/8443）")
+        self._set_status("无法连接服务器（已尝试 443/8443）")
+
 
     def _on_login_success(
         self, result: LoginResult, username: str = "", password: str = ""
@@ -2845,9 +2919,12 @@ class MainWindow(QMainWindow):
             self._update_test_dialog(dialog, f"配置错误：{exc}", False)
             return
         dialog.set_testing(True)
+        candidates = connection_candidates(server_url)
         self._safe_submit(
-            _run_connection_check(server_url, self.session.token, timeout=8.0),
-            lambda check: self._update_test_dialog(dialog, check.format_text(), check.ok),
+            _run_connection_check_candidates(candidates, self.session.token, timeout=8.0),
+            lambda result: self._update_test_dialog(
+                dialog, f"{result[0]}：{result[1].format_text()}", result[1].ok
+            ),
             lambda exc: self._update_test_dialog(dialog, f"测试失败：{to_user_message(exc)}", False),
         )
 
@@ -3001,6 +3078,18 @@ class MainWindow(QMainWindow):
                 future.result(timeout=timeout)
         except Exception as exc:  # noqa: BLE001
             logger.debug("关闭 HTTP 连接池失败：%s", exc)
+
+
+async def _run_connection_check_candidates(
+    server_urls: list[str], token: str | None, timeout: float = 8.0
+) -> tuple[str, Any]:
+    last_exc: BaseException | None = None
+    for server_url in server_urls:
+        try:
+            return server_url, await _run_connection_check(server_url, token, timeout)
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+    raise last_exc or ApiError(ErrorKind.NETWORK, "无法连接服务器")
 
 
 async def _run_connection_check(server_url: str, token: str | None, timeout: float = 8.0) -> Any:

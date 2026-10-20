@@ -34,13 +34,14 @@ from core.protocol import ws_url_for
 from state.paths import APP_NAME
 
 DEFAULT_SERVER_URL = "https://deltachat.icu"
+FALLBACK_SERVER_URL = "https://deltachat.icu:8443"
 LEGACY_DEFAULT_SERVER_URL = "http://114.132.161.169:8000"
 LEGACY_WS_URL = "ws://114.132.161.169:8000/ws"
 LEGACY_HTTPS_SERVER_URL = "https://deltachat.icu:8443"
 LEGACY_HTTPS_WS_URL = "wss://deltachat.icu:8443/ws"
 DEFAULT_TIMEOUT = 15.0
 CONFIG_FILENAME = ".delta_client.json"
-APP_VERSION = "0.2.3"
+APP_VERSION = "0.2.4"
 __version__ = APP_VERSION
 CONFIG_ENV = "DELTA_CLIENT_CONFIG"
 
@@ -105,6 +106,21 @@ def normalize_ws_url(raw: Any) -> str:
     elif text.lower().startswith("http://"):
         text = "ws://" + text[len("http://") :]
     return _normalize_url(text, ("ws", "wss"), "WebSocket 地址")
+
+
+def connection_candidates(server_url: Any) -> list[str]:
+    """连接候选：用户/当前地址优先，其次 443 默认与 8443 兼容；去重且保持顺序。"""
+    candidates: list[str] = []
+    for raw in (server_url, FALLBACK_SERVER_URL):
+        if not raw:
+            continue
+        try:
+            value = normalize_server_url(raw)
+        except ConfigError:
+            continue
+        if value not in candidates:
+            candidates.append(value)
+    return candidates
 
 
 def config_path_from_env(env: Mapping[str, str] | None = None) -> Path:
