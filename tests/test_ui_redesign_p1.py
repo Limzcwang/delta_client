@@ -88,10 +88,8 @@ class LobbyLayoutTests(unittest.TestCase):
             self.assertIn("零号大坝 · 常规", view.table.item(0, 1).text())
             view.tabs.setTabText(1, "我的房间 (0)")
             self.assertEqual("我的房间 (0)", view.tabs.tabText(1))
-            view.set_login_status("✓ 登录成功：DeltaQA01")
-            self.assertIn("登录成功", view.login_status_label.text())
-            view.set_server_status("服务器：x · 模式：LIVE")
-            self.assertIn("服务器", view.server_status_label.text())
+            self.assertFalse(hasattr(view, "server_status_label"))
+            self.assertFalse(hasattr(view, "login_status_label"))
         finally:
             view.close(); view.deleteLater()
             self.app.processEvents()
