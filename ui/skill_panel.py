@@ -456,7 +456,7 @@ class SkillPanel(QWidget):
         self.scroll.setWidget(self.list_widget)
         root.addWidget(self.scroll, stretch=1)
 
-        self.empty_label = QLabel("还没有队友共享技能")
+        self.empty_label = QLabel("暂无成员共享技能")
         self.empty_label.setObjectName("Hint")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root.addWidget(self.empty_label)

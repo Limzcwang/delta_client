@@ -159,6 +159,49 @@ class OperatorRecognitionTests(unittest.TestCase):
             dialog.deleteLater()
             self._close(window)
 
+    def test_share_off_removes_own_card_even_without_ws(self) -> None:
+        window = self._window()
+        try:
+            assert window._self_skill_state is not None
+            window._skills.update(window._self_skill_state)
+            window.room_view.skill_panel.upsert(window._self_skill_state)
+            window._skill_share_enabled = True
+            window._ws = None
+            window._on_skill_sharing_toggled(False)
+            self.assertIsNone(window._skills.get("12"))
+            self.assertIsNone(window._self_skill_state)
+            self.assertNotIn("12", window.room_view.skill_panel._rows)
+        finally:
+            self._close(window)
+
+    def test_share_off_then_on_restores_own_card(self) -> None:
+        window = self._window()
+        try:
+            window._skills.update(window._self_skill_state)
+            window.room_view.skill_panel.upsert(window._self_skill_state)
+            window._skill_share_enabled = True
+            window._on_skill_sharing_toggled(False)
+            self.assertNotIn("12", window.room_view.skill_panel._rows)
+            window._on_skill_sharing_toggled(True)
+            self.assertIn("12", window.room_view.skill_panel._rows)
+            self.assertIsNotNone(window._skills.get("12"))
+            self.assertIsNotNone(window._self_skill_state)
+        finally:
+            self._close(window)
+
+    def test_leave_room_clears_skill_state_and_cards(self) -> None:
+        window = self._window()
+        try:
+            window._skills.update(window._self_skill_state)
+            window.room_view.skill_panel.upsert(window._self_skill_state)
+            window._skill_share_enabled = False
+            window._clear_room_state()
+            self.assertEqual([], window._skills.states())
+            self.assertIsNone(window._self_skill_state)
+            self.assertEqual({}, window.room_view.skill_panel._rows)
+        finally:
+            self._close(window)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1975,6 +1975,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_auto_controller"):
             self._apply_auto_config()
         if not enabled:
+            # 无论 WS 是否连通，都先本地移除自己，避免卡片残留。
+            self._remove_own_skill_state()
             self._send_skill_off()
             self.room_view.set_status("技能共享已关闭")
             return
@@ -1988,6 +1990,14 @@ class MainWindow(QMainWindow):
             self.room_view.skill_panel.upsert(self._self_skill_state)
         self._send_skill_state(self._self_skill_state)
         self.room_view.set_status("技能共享已开启（本地限频 2 次/秒）")
+
+    def _remove_own_skill_state(self) -> None:
+        uid = self._user_id()
+        if uid:
+            self._skills.remove(uid)
+            self.room_view.skill_panel.remove(uid)
+        self._self_skill_state = None
+        self._sync_overlay_states()
 
     def _send_skill_state(self, state: SkillState) -> None:
         room = self._current_room
