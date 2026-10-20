@@ -72,6 +72,7 @@ from ui.dialogs import (
 from ui.login_view import LoginView
 from ui.room_list_view import RoomListView
 from ui.room_view import RoomView
+from ui.settings_pages import ConnectionPage, ProfilePage
 from ui.auto_share import AutoShareController
 from ui.hud_async import HudRecognitionResult, HudRecognitionService
 from ui.global_hotkeys import GlobalHotkeyManager
@@ -110,9 +111,15 @@ class MainWindow(QMainWindow):
         config: AppConfig,
         session: Session | None = None,
         parent: QWidget | None = None,
+        ui_mode: str = "widgets",
     ) -> None:
         super().__init__(parent)
         self.config = config
+        self.ui_mode = str(ui_mode or "widgets")
+        self.qml_lobby = None
+        self.qml_login = None
+        self.qml_conn = None
+        self.qml_profile = None
         self.session = session or Session(
             persist_token=config.persist_token,
             persist_path=default_session_path(),
@@ -150,6 +157,11 @@ class MainWindow(QMainWindow):
         self._server_clock = ServerClock()
         self._skill_throttle = SkillShareThrottle(max_events=2, window_ms=1000)
         self._skill_share_enabled = False
+        self._membership_confirmed = False
+        self._last_membership_error = ""
+        self._last_membership_error_at = 0.0
+        self._rejoin_in_progress = False
+        self._rejoin_attempts = 0
         self._skill_sim_index = 0
         self._self_skill_state: SkillState | None = None
         self.operator_config = OperatorConfigManager()
@@ -160,14 +172,17 @@ class MainWindow(QMainWindow):
         self._operator_scan_at = 0.0
         self._operator_recognition_text = "当前识别：-"
         self.settings_dialog = None
+        self.connection_page: ConnectionPage | None = None
+        self.profile_page: ProfilePage | None = None
+        self._page_return_widget = None
         self._last_hotkey_notice = ""
         self._hotkey_failures: dict[str, str] = {}
         # F-c5：历史窗口文案（room_joined / 历史接口可选字段）
         self._history_window_days: int | None = None
 
         self.setWindowTitle("Delta Client - 三角洲行动队友房间")
-        self.resize(1200, 780)
-        self.setMinimumSize(1020, 680)
+        self.resize(1120, 720)
+        self.setMinimumSize(1024, 680)
         self._build_ui()
         self._wire_views()
         self._refresh_status_bar()
@@ -194,6 +209,54 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.login_view)
         self.stack.addWidget(self.room_list_view)
         self.stack.addWidget(self.room_view)
+        if self.ui_mode in ("qml", "qml-lobby"):
+            try:
+                from ui_qml.host import QmlLobbyView
+
+                self.qml_lobby = QmlLobbyView()
+                self.stack.addWidget(self.qml_lobby)
+                self.qml_lobby.refresh_requested.connect(self._refresh_lobby)
+                self.qml_lobby.create_requested.connect(self._on_create_room)
+                self.qml_lobby.join_requested.connect(self._on_join_room)
+                self.qml_lobby.settings_requested.connect(self._on_settings)
+                self.qml_lobby.profile_requested.connect(self._on_profile)
+            except Exception as exc:  # noqa: BLE001 - QML 插件缺失时回退 Widgets
+                logger.warning("QML 大厅不可用，回退 Widgets：%s", exc)
+                self.qml_lobby = None
+        if self.ui_mode == "qml":
+            try:
+                from ui_qml.login_host import QmlLoginView
+
+                self.qml_login = QmlLoginView()
+                self.stack.addWidget(self.qml_login)
+                from ui_qml.settings_host import QmlConnView, QmlProfileView
+
+                self.qml_conn = QmlConnView()
+                self.qml_profile = QmlProfileView()
+                self.stack.addWidget(self.qml_conn)
+                self.stack.addWidget(self.qml_profile)
+                self.qml_conn.back_requested.connect(self._show_rooms)
+                self.qml_conn.test_requested.connect(
+                    lambda server, ws: self._on_test_connection(self.qml_conn, server, ws)
+                )
+                self.qml_conn.save_requested.connect(self._on_qml_conn_save)
+                self.qml_conn.reset_requested.connect(lambda: self.qml_conn.set_config(AppConfig()))
+                self.qml_profile.back_requested.connect(self._show_rooms)
+                self.qml_profile.nickname_requested.connect(
+                    lambda nickname: self._on_nickname_save(self.qml_profile, nickname)
+                )
+                self.qml_profile.password_requested.connect(
+                    lambda old, new: self._on_password_change(self.qml_profile, old, new)
+                )
+                self.qml_profile.logout_requested.connect(self._on_logout)
+                self.qml_login.bridge.login_requested.connect(self._on_login)
+                self.qml_login.bridge.register_requested.connect(self._on_register)
+                self.qml_login.bridge.history_selected.connect(self._on_saved_login_selected)
+                self.qml_login.bridge.history_delete_requested.connect(self._on_saved_login_delete)
+                self.qml_login.bridge.history_clear_requested.connect(self._on_saved_login_clear)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("QML 登录页不可用，回退 Widgets：%s", exc)
+                self.qml_login = None
 
         self.overlay = SkillOverlay()
         self.overlay.set_server_now(self._server_clock.now_ms)
@@ -225,9 +288,16 @@ class MainWindow(QMainWindow):
         self._auto_controller.operator_detected.connect(self._on_auto_operator_detected)
         self._apply_auto_config()
 
+        self._status_text = QLabel("未登录")
+        self._status_text.setObjectName("Muted")
+        self.statusBar().addWidget(self._status_text, 1)
         self._server_label = QLabel()
         self._server_label.setObjectName("Muted")
         self.statusBar().addPermanentWidget(self._server_label)
+        self.statusBar().setSizeGripEnabled(False)
+        if self.ui_mode == "qml-lobby":
+            # H0 QML 大厅自带状态栏，避免主窗口状态栏重复。
+            self.statusBar().hide()
 
     def _wire_views(self) -> None:
         self.login_view.login_requested.connect(self._on_login)
@@ -252,6 +322,7 @@ class MainWindow(QMainWindow):
         self.room_view.retry_requested.connect(self._on_retry_chat)
         self.room_view.room_settings_requested.connect(self._on_room_settings)
         self.room_view.kick_requested.connect(self._on_kick_requested)
+        self.room_view.skill_settings_requested.connect(lambda: self._open_settings(start_tab=0))
         self.room_view.skill_panel.sharing_toggled.connect(self._on_skill_sharing_toggled)
         self.room_view.skill_panel.simulate_requested.connect(self._on_simulate_skill)
         self.room_view.skill_panel.capture_requested.connect(self._on_hud_capture)
@@ -280,7 +351,10 @@ class MainWindow(QMainWindow):
         return self.session.user_id
 
     def _set_status(self, message: str) -> None:
-        self.statusBar().showMessage(str(message), 8000)
+        text = str(message)
+        if hasattr(self, "_status_text"):
+            self._status_text.setText(text)
+        self.statusBar().clearMessage()
 
     def _refresh_status_bar(self) -> None:
         self._server_label.setText(
@@ -308,14 +382,26 @@ class MainWindow(QMainWindow):
         self._auto_fill_saved_login()
         if message:
             self.login_view.show_error(message)
-        self.stack.setCurrentWidget(self.login_view)
+        if self.qml_login is not None:
+            self.qml_login.set_server_text(self.config.server_url, self.config.mode_label)
+            self.qml_login.set_busy(False)
+            self.qml_login.set_mode("login")
+            self.qml_login.set_saved_logins(self._saved_login_infos())
+            if message:
+                self.qml_login.show_error(message)
+            self.stack.setCurrentWidget(self.qml_login)
+        else:
+            self.stack.setCurrentWidget(self.login_view)
 
     # ---------- H2：历史账号 ----------
     def _saved_login_infos(self) -> list[SavedLoginInfo]:
         return self.saved_logins.infos()
 
     def _refresh_saved_login_view(self) -> None:
-        self.login_view.set_saved_logins(self._saved_login_infos())
+        infos = self._saved_login_infos()
+        self.login_view.set_saved_logins(infos)
+        if self.qml_login is not None:
+            self.qml_login.set_saved_logins(infos)
 
     def _auto_fill_saved_login(self) -> None:
         self._refresh_saved_login_view()
@@ -327,6 +413,8 @@ class MainWindow(QMainWindow):
         self.login_view.apply_saved_login(
             recent.username, password or "", expired=expired
         )
+        if self.qml_login is not None:
+            self.qml_login.apply_saved_login(recent.username, password or "", expired=expired)
 
     def _on_saved_login_selected(self, username: str) -> None:
         self.login_view.set_mode("login")
@@ -338,6 +426,8 @@ class MainWindow(QMainWindow):
         password = self.saved_logins.password_for(username)
         expired = bool(info is not None and info.has_password and info.expired and password is None)
         self.login_view.apply_saved_login(username, password or "", expired=expired)
+        if self.qml_login is not None:
+            self.qml_login.apply_saved_login(username, password or "", expired=expired)
         if password:
             self.login_view.focus_login_button()
         else:
@@ -360,7 +450,14 @@ class MainWindow(QMainWindow):
     def _show_rooms(self) -> None:
         self.room_list_view.set_user(self._username())
         self.room_list_view.set_mode(self.config.use_mock, self.config.server_url)
-        self.stack.setCurrentWidget(self.room_list_view)
+        if self.qml_lobby is not None:
+            self.qml_lobby.set_user(self._username())
+            self.qml_lobby.set_mode(self.config.use_mock, self.config.server_url)
+            self.qml_lobby.set_rooms(self.room_list_view._rooms)
+            self.qml_lobby.set_my_rooms(self.room_list_view.my_rooms.rooms)
+            self.stack.setCurrentWidget(self.qml_lobby)
+        else:
+            self.stack.setCurrentWidget(self.room_list_view)
         if self.session.is_logged_in:
             self._register_hotkeys()
         else:
@@ -408,6 +505,8 @@ class MainWindow(QMainWindow):
     # ---------- 认证 ----------
     def _on_login(self, username: str, password: str) -> None:
         self.login_view.set_busy(True)
+        if self.qml_login is not None:
+            self.qml_login.set_busy(True)
         self.login_view.hide_messages()
         self._safe_submit(
             self.api.login(username, password),
@@ -419,6 +518,8 @@ class MainWindow(QMainWindow):
         self, result: LoginResult, username: str = "", password: str = ""
     ) -> None:
         self.login_view.set_busy(False)
+        if self.qml_login is not None:
+            self.qml_login.set_busy(False)
         self.session.set_login(result.token, result.user)
         account = str(result.user.get("username") or username or "").strip()
         if account and password:
@@ -426,7 +527,7 @@ class MainWindow(QMainWindow):
             self.saved_logins.upsert(account, password)
             self._refresh_saved_login_view()
         if result.token:
-            self._set_status(f"登录成功：{self._username()}")
+            self._set_status(f"✓ 登录成功：{self._username()}")
         else:
             # 后端 B 阶段前 /api/users/login 不返回 JWT，保留兼容分支
             self._set_status("登录成功，但服务器未返回 JWT（PROTOCOL B 阶段才上线）")
@@ -435,6 +536,9 @@ class MainWindow(QMainWindow):
 
     def _on_login_failure(self, exc: BaseException, username: str = "") -> None:
         self.login_view.set_busy(False)
+        if self.qml_login is not None:
+            self.qml_login.set_busy(False)
+            self.qml_login.show_error(to_user_message(exc))
         message = to_user_message(exc)
         if (
             username
@@ -449,6 +553,8 @@ class MainWindow(QMainWindow):
 
     def _on_register(self, username: str, password: str) -> None:
         self.login_view.set_busy(True)
+        if self.qml_login is not None:
+            self.qml_login.set_busy(True)
         self.login_view.hide_messages()
         self._safe_submit(
             self.api.register(username, password),
@@ -458,6 +564,8 @@ class MainWindow(QMainWindow):
 
     def _on_register_success(self, data: Any, username: str) -> None:
         self.login_view.set_busy(False)
+        if self.qml_login is not None:
+            self.qml_login.set_busy(False)
         # B2b 的 v1 注册响应与登录一致（含 access_token），可直接自动登录
         token = extract_token(data)
         if token:
@@ -469,11 +577,17 @@ class MainWindow(QMainWindow):
         self.login_view.set_mode("login")
         self.login_view.show_success("注册成功，请使用新账号登录")
         self.login_view.prefill_username(username)
+        if self.qml_login is not None:
+            self.qml_login.set_mode("login")
+            self.qml_login.show_success("注册成功，请使用新账号登录")
         self._set_status("注册成功")
 
     def _on_register_failure(self, exc: BaseException) -> None:
         self.login_view.set_busy(False)
         self.login_view.show_error(to_user_message(exc))
+        if self.qml_login is not None:
+            self.qml_login.set_busy(False)
+            self.qml_login.show_error(to_user_message(exc))
 
     def _handle_ws_fatal(self, message: str) -> None:
         """顶号/认证失效：停止重连、清会话并回登录页。"""
@@ -514,6 +628,8 @@ class MainWindow(QMainWindow):
         self._my_rooms_loading = False
         rooms = list(getattr(page, "items", ()) or ())
         self.room_list_view.my_rooms.set_rooms(rooms)
+        if self.qml_lobby is not None:
+            self.qml_lobby.set_my_rooms(rooms)
         self._update_my_rooms_tab(len(rooms))
 
     def _on_my_rooms_failed(self, exc: BaseException, manual: bool = True) -> None:
@@ -550,14 +666,20 @@ class MainWindow(QMainWindow):
         if manual:
             self.room_list_view.set_loading(False)
         self.room_list_view.update_rooms(rooms)
+        if self.qml_lobby is not None:
+            self.qml_lobby.set_rooms(rooms)
         self._lobby_backoff.reset()
         self._lobby_timer.setInterval(5000)
         suffix = "（Mock 演示数据）" if self.config.use_mock else ""
         stamp = time.strftime("%H:%M:%S")
         if rooms:
-            self.room_list_view.set_status(f"共 {len(rooms)} 个公共房间{suffix} · 更新于 {stamp}")
+            text = f"共 {len(rooms)} 个公共房间{suffix} · 更新于 {stamp}"
+            self.room_list_view.set_status(text)
         else:
-            self.room_list_view.set_status(f"暂无公开房间{suffix}，可以创建一个")
+            text = f"暂无公开房间{suffix}，可以创建一个"
+            self.room_list_view.set_status(text)
+        if self.qml_lobby is not None:
+            self.qml_lobby.set_status(text)
 
     def _on_rooms_failed(self, exc: BaseException, manual: bool = True) -> None:
         self._rooms_loading = False
@@ -769,7 +891,11 @@ class MainWindow(QMainWindow):
         self._current_room = room
         self._room_password = password
         self._ws_members_loaded = False
+        self._membership_confirmed = False
         self._last_members_refresh = 0.0
+        self._membership_confirmed = False
+        self._last_membership_error = ""
+        self._last_membership_error_at = 0.0
         self._timeline = ChatTimeline()
         self._chat_has_more = False
         self._chat_next_before = None
@@ -778,6 +904,9 @@ class MainWindow(QMainWindow):
         self._skills.clear()
         self._self_skill_state = None
         self._skill_share_enabled = False
+        self._membership_confirmed = False
+        self._last_membership_error = ""
+        self._last_membership_error_at = 0.0
         self._hud_service.reset_tracker()
         if hasattr(self, "_auto_controller"):
             self._auto_controller.stop()
@@ -969,25 +1098,91 @@ class MainWindow(QMainWindow):
         if self._current_room is not None:
             self._refresh_members_http(self._current_room, fallback=True)
 
+    def _rejoin_current_room(self) -> None:
+        room = self._current_room
+        if room is None or self._ws is None or not getattr(self._ws, "connected", False):
+            return
+        self._membership_confirmed = False
+        try:
+            self._safe_submit(
+                self._ws.join_room(room.code, self._room_password),
+                on_error=self._on_rejoin_failed,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._on_rejoin_failed(exc)
+
+    def _start_http_rejoin(self, reason: BaseException | None = None) -> None:
+        room = self._current_room
+        if room is None or self._rejoin_in_progress:
+            return
+        if self._rejoin_attempts >= 2:
+            self._on_rejoin_failed(reason or RuntimeError("重新加入房间失败"))
+            return
+        self._rejoin_in_progress = True
+        self._rejoin_attempts += 1
+        try:
+            self._safe_submit(
+                self.api.join_room(room.code, self._room_password),
+                on_success=self._on_http_rejoin_success,
+                on_error=self._on_http_rejoin_failed,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._on_http_rejoin_failed(exc)
+
+    def _on_http_rejoin_success(self, room: Room) -> None:
+        self._current_room = room
+        self._rejoin_in_progress = False
+        self._membership_confirmed = False
+        self._system_message("HTTP 重新加入成功，正在恢复实时会话…")
+        self._rejoin_in_progress = True
+        if self._ws is not None and getattr(self._ws, "connected", False):
+            try:
+                self._safe_submit(
+                    self._ws.join_room(room.code, self._room_password),
+                    on_error=self._on_rejoin_failed,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._on_rejoin_failed(exc)
+        else:
+            self._on_rejoin_failed(RuntimeError("实时连接未建立"))
+
+    def _on_http_rejoin_failed(self, exc: BaseException) -> None:
+        self._rejoin_in_progress = False
+        if self._rejoin_attempts < 2:
+            self._start_http_rejoin(exc)
+            return
+        self._on_rejoin_failed(exc)
+
+    def _on_rejoin_failed(self, exc: BaseException) -> None:
+        self._membership_confirmed = False
+        self._rejoin_in_progress = False
+        self._canvas_queue.clear()
+        self._rejoin_attempts = 0
+        self._system_message(f"重新加入房间失败：{to_user_message(exc)}，已返回大厅")
+        self._on_room_closed()
+
     def _on_ws_state(self, generation: int, state: str, info: Mapping[str, Any]) -> None:
         if generation != self._ws_generation or self._current_room is None:
             return
         detail = str(info.get("message") or info.get("error") or "")
         if state == "connected":
+            self._rejoin_attempts = 0
+            self._rejoin_in_progress = True
             self.room_view.set_connection_state("connected", "实时连接已建立")
             self._system_message("实时连接已建立")
             self._set_skill_server_time(info.get("server_time"))
-            room = self._current_room
-            if self._ws is not None and room is not None:
-                self._safe_submit(self._ws.join_room(room.code, self._room_password))
+            self._membership_confirmed = False
+            self._rejoin_current_room()
         elif state in ("connecting", "authenticating"):
             self.room_view.set_connection_state(state, detail or "正在连接")
         elif state == "waiting":
+            self._membership_confirmed = False
             delay = float(info.get("delay") or 0.0)
             self.room_view.set_connection_state("waiting", detail or f"{delay:.0f}s 后重连")
             self.room_view.set_status(f"连接中断，{delay:.0f}s 后自动重连", error=True)
             self._refresh_members_http(self._current_room, fallback=True)
         elif state == "reconnecting":
+            self._membership_confirmed = False
             self.room_view.set_connection_state("reconnecting", detail)
             if detail:
                 self.room_view.set_status(f"重连中：{detail}", error=True)
@@ -1006,6 +1201,7 @@ class MainWindow(QMainWindow):
         else:
             self.room_view.set_connection_state(state, detail)
             if state in ("error", "stopped"):
+                self._membership_confirmed = False
                 self._refresh_members_http(self._current_room, fallback=True)
 
     def _on_ws_message(self, generation: int, message: Mapping[str, Any]) -> None:
@@ -1025,6 +1221,10 @@ class MainWindow(QMainWindow):
         if self._current_room is None:
             return
         if mtype == "room_joined":
+            was_rejoining = self._rejoin_in_progress or self._rejoin_attempts > 0
+            self._membership_confirmed = True
+            self._rejoin_in_progress = False
+            self._rejoin_attempts = 0
             payload = message.get("room")
             if isinstance(payload, Mapping):
                 room = Room.from_api(payload)
@@ -1043,7 +1243,9 @@ class MainWindow(QMainWindow):
                 self.room_view.skill_panel.set_states(self._skills.states())
             self._sync_overlay_states()
             self._on_room_joined_canvas(message.get("canvas_snapshot"))
-            self.room_view.set_status("")
+            if self._canvas_queue:
+                QTimer.singleShot(0, self._drain_canvas_queue)
+            self.room_view.set_status("已重新加入房间" if was_rejoining else "")
         elif mtype == "skill_share_state":
             self._on_skill_share_state(message)
         elif mtype == "skill_share_removed":
@@ -1792,6 +1994,7 @@ class MainWindow(QMainWindow):
             captured_at=self._server_now_ms(),
             operator_id=operator.id if operator is not None else "",
             operator_name=operator.display_name if operator is not None else "",
+            squad_number=result.squad_number,
         )
         self._self_skill_state = state
         self._skills.update(state)
@@ -1857,6 +2060,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_auto_controller"):
             self._apply_auto_config()
         if not enabled:
+            # 无论 WS 是否连通，都先本地移除自己，避免卡片残留。
+            self._remove_own_skill_state()
             self._send_skill_off()
             self.room_view.set_status("技能共享已关闭")
             return
@@ -1871,12 +2076,23 @@ class MainWindow(QMainWindow):
         self._send_skill_state(self._self_skill_state)
         self.room_view.set_status("技能共享已开启（本地限频 2 次/秒）")
 
+    def _remove_own_skill_state(self) -> None:
+        uid = self._user_id()
+        if uid:
+            self._skills.remove(uid)
+            self.room_view.skill_panel.remove(uid)
+        self._self_skill_state = None
+        self._sync_overlay_states()
+
     def _send_skill_state(self, state: SkillState) -> None:
         room = self._current_room
         if room is None:
             return
         if self._ws is None or not getattr(self._ws, "connected", False):
             self.room_view.set_status("实时连接未建立，技能状态未上报", error=True)
+            return
+        if not self._membership_confirmed:
+            self.room_view.set_status("正在重新加入房间，技能状态暂缓上报")
             return
         if not self._skill_throttle.allow(now_ms()):
             self.room_view.set_status("技能上报过快（本地限频 2 次/秒）", error=True)
@@ -1903,6 +2119,7 @@ class MainWindow(QMainWindow):
                 payload,
                 state.operator_id,
                 state.operator,
+                state.squad_number,
             )
         )
 
@@ -1964,7 +2181,12 @@ class MainWindow(QMainWindow):
 
     # ---------- 设置（含个人资料） ----------
     def _on_profile(self) -> None:
-        self._open_settings(start_tab=4)
+        if self.ui_mode == "qml" and self.qml_profile is not None:
+            self.qml_profile.set_account(self._account())
+            self.qml_profile.set_nickname(self.session.nickname or self.session.username)
+            self.stack.setCurrentWidget(self.qml_profile)
+        else:
+            self._show_profile_page()
 
     def _on_nickname_save(self, dialog: SettingsDialog, nickname: str) -> None:
         self._safe_submit(
@@ -2097,6 +2319,10 @@ class MainWindow(QMainWindow):
             return
         if self._ws is None or not getattr(self._ws, "connected", False):
             self.room_view.set_status("实时连接未建立，消息未发送", error=True)
+            self.room_view.append_chat_input(text)
+            return
+        if not self._membership_confirmed:
+            self.room_view.set_status("正在重新加入房间，消息暂缓发送")
             self.room_view.append_chat_input(text)
             return
         client_msg_id = make_client_msg_id()
@@ -2235,6 +2461,9 @@ class MainWindow(QMainWindow):
             self._canvas_queue.clear()
             self.room_view.set_status("实时连接未建立，画板改动仅本地可见", error=True)
             return
+        if not self._membership_confirmed:
+            # 保留队列，等 room_joined 后再 drain。
+            return
         while self._canvas_queue:
             wait = self._canvas_limiter.wait_seconds()
             if wait > 0:
@@ -2256,7 +2485,26 @@ class MainWindow(QMainWindow):
     def _handle_ws_error(self, message: Mapping[str, Any]) -> None:
         code = str(message.get("code") or message.get("error_code") or "")
         text = str(message.get("message") or code or "未知错误")
-        self._timeline.add_system(f"服务端错误：{text}")
+        membership_error = code in ("NOT_ROOM_MEMBER", "ROOM_NOT_MEMBER") or any(
+            marker in text for marker in ("不在该房间", "还没有加入房间", "未加入房间", "not a member")
+        )
+        now = time.monotonic()
+        first_seen = not (
+            text == self._last_membership_error
+            and now - self._last_membership_error_at < 10.0
+        )
+        if first_seen:
+            self._last_membership_error = text
+            self._last_membership_error_at = now
+            self._timeline.add_system(
+                "连接状态已失效，正在重新加入房间…" if membership_error else f"服务端错误：{text}"
+            )
+        if membership_error:
+            self._membership_confirmed = False
+            if not self._rejoin_in_progress:
+                self._start_http_rejoin(RuntimeError(text))
+            self._render_chat()
+            return
         chat_reason = _CHAT_ERROR_REASONS.get(code)
         if chat_reason:
             failed = self._timeline.fail_all_pending(chat_reason)
@@ -2351,7 +2599,114 @@ class MainWindow(QMainWindow):
             self.room_view.set_status(f"已切换干员：{state.operator or state.operator_id}")
 
     def _on_settings(self) -> None:
-        self._open_settings(start_tab=0)
+        if self.ui_mode == "qml" and self.qml_conn is not None:
+            self.qml_conn.set_config(self.config)
+            self.stack.setCurrentWidget(self.qml_conn)
+        else:
+            self._show_connection_page()
+
+    def _remember_page_return(self) -> None:
+        current = self.stack.currentWidget()
+        if current is not self.connection_page and current is not self.profile_page:
+            self._page_return_widget = current
+
+    def _return_from_page(self) -> None:
+        target = self._page_return_widget
+        if target is not None and self.stack.indexOf(target) >= 0:
+            self.stack.setCurrentWidget(target)
+            return
+        if self.session.is_logged_in:
+            self._show_rooms()
+        else:
+            self._show_login()
+
+    def _show_connection_page(self) -> None:
+        self._remember_page_return()
+        if self.connection_page is None:
+            page = ConnectionPage(self.config, self)
+            page.back_requested.connect(self._return_from_page)
+            page.test_requested.connect(
+                lambda server_text, ws_text: self._on_test_connection(page, server_text, ws_text)
+            )
+            page.saved.connect(lambda config: self._on_connection_saved(page, config))
+            self.connection_page = page
+            self.stack.addWidget(page)
+        self.connection_page.set_config(self.config)
+        self.stack.setCurrentWidget(self.connection_page)
+
+    def _on_connection_saved(self, page: ConnectionPage, new_config: AppConfig) -> None:
+        old_operator_id = self.config.operator_id
+        try:
+            saved_path = save_config(new_config)
+        except OSError as exc:
+            QMessageBox.warning(self, "保存失败", f"无法写入配置文件：{exc}")
+            return
+        identity_changed = (
+            new_config.server_url != self.config.server_url
+            or new_config.ws_url != self.config.ws_url
+            or new_config.use_mock != self.config.use_mock
+        )
+        operator_changed = new_config.operator_id != old_operator_id
+        self.config = new_config
+        if operator_changed:
+            self._on_operator_changed()
+        self._apply_overlay_config()
+        self._apply_auto_config()
+        self._refresh_status_bar()
+        self.login_view.set_server_text(new_config.server_url, new_config.mode_label)
+        self.room_list_view.set_mode(new_config.use_mock, new_config.server_url)
+        self.session.set_persist_token(new_config.persist_token)
+        if identity_changed:
+            room = self._current_room
+            self._stop_ws(
+                room.code if room is not None else None,
+                save_canvas=room is not None,
+                http_leave_room=room,
+            )
+            self._current_room = None
+            self._clear_room_state()
+            self.session.clear()
+            self._close_api()
+            self.api = self._build_api()
+            self._show_login()
+            self.login_view.show_success(f"配置已保存到 {saved_path}，请重新登录")
+            return
+        self._close_api()
+        self.api = self._build_api()
+        if self.stack.currentWidget() is self.room_view:
+            self._on_leave_room()
+        else:
+            self._return_from_page()
+        self._set_status(f"配置已保存：{saved_path}")
+
+    def _on_qml_conn_save(self) -> None:
+        try:
+            new_config = self.qml_conn.result_config()
+        except (ConfigError, ValueError) as exc:
+            self.qml_conn.set_error(f"配置错误：{exc}")
+            return
+        self._on_connection_saved(self.qml_conn, new_config)
+
+    def _show_profile_page(self) -> None:
+        self._remember_page_return()
+        if self.profile_page is None:
+            page = ProfilePage(parent=self)
+            page.back_requested.connect(self._return_from_page)
+            page.saved.connect(self._return_from_page)
+            page.logout_requested.connect(self._on_logout)
+            page.nickname_save_requested.connect(
+                lambda nickname: self._on_nickname_save(page, nickname)
+            )
+            page.password_change_requested.connect(
+                lambda old_password, new_password: self._on_password_change(
+                    page, old_password, new_password
+                )
+            )
+            self.profile_page = page
+            self.stack.addWidget(page)
+        self.profile_page.set_account(self._account())
+        self.profile_page.set_nickname(self.session.nickname or self.session.username)
+        self.stack.setCurrentWidget(self.profile_page)
 
     def _open_settings(self, start_tab: int = 0) -> None:
         dialog = SettingsDialog(self.config, self, self.operator_catalog, self.operator_config)
@@ -2597,6 +2952,12 @@ class MainWindow(QMainWindow):
             self._current_room = None
             self._clear_room_state()
         finally:
+            for view in (self.qml_login, self.qml_conn, self.qml_profile, self.qml_lobby):
+                if view is not None:
+                    try:
+                        view.shutdown()
+                    except Exception:  # noqa: BLE001
+                        pass
             self._hud_timeout.stop()
             self._hud_service.shutdown()
             self.hotkeys.stop()

@@ -14,6 +14,7 @@ from core.hud_brightness import SkillTransitionTracker
 from core.hud_pipeline import RecognitionFrame, recognize_frame
 from core.hud_profile import HudProfile
 from core.operator_match import recognize_operator_auto
+from core.squad_number import recognize_squad_number
 from core.operators import Operator, OperatorCatalog
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ class HudRecognitionResult:
     duration_ms: int = 0
     error: str = ""
     debug_path: str = ""
+    squad_number: int | None = None
 
 
 class _TaskSignals(QObject):
@@ -119,12 +121,18 @@ class _HudTask(QRunnable):
             )
             if self.token != self.service.token:
                 return
+            squad_number = recognize_squad_number(ocr, self.frame, self.profile)
+            if squad_number is None:
+                squad_number = self.service.last_squad_number
+            else:
+                self.service.last_squad_number = squad_number
             result = HudRecognitionResult(
                 recognized=recognized,
                 operator_id=operator_id or (operator.id if operator else ""),
                 operator_name=operator.display_name if operator else "",
                 operator_score=score,
                 duration_ms=int((time.monotonic() - started) * 1000),
+                squad_number=squad_number,
             )
             if self.debug_export:
                 from core.hud_debug import HudDebugExporter
@@ -157,6 +165,7 @@ class HudRecognitionService(QObject):
         self.busy = False
         self.tracker = SkillTransitionTracker()
         self.tracker_operator = ""
+        self.last_squad_number: int | None = None
         self._callback: Callable[[HudRecognitionResult], None] | None = None
 
     def reset_tracker(self) -> None:

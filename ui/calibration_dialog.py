@@ -67,6 +67,7 @@ class PreviewWidget(QWidget):
         self.profile = profile
         self._pixmap = QPixmap.fromImage(image)
         self._selection = profile.skill_bar
+        self.selection_target = "skill_bar"
         self._drag_start: QPoint | None = None
         self._drag_current: QPoint | None = None
         self.setMinimumSize(640, 400)
@@ -104,10 +105,16 @@ class PreviewWidget(QWidget):
             max(1, int(roi.height * sy)),
         )
 
+    def set_target(self, target: str) -> None:
+        self.selection_target = target if target in ("skill_bar", "self_avatar_roi") else "skill_bar"
+
     def set_selection(self, roi: Roi) -> None:
         self._selection = roi
-        self.profile.skill_bar = roi
-        self.profile.slots = None
+        if self.selection_target == "self_avatar_roi":
+            self.profile.self_avatar_roi = roi
+        else:
+            self.profile.skill_bar = roi
+            self.profile.slots = None
         self.selection_changed.emit(roi)
         self.update()
 
@@ -131,6 +138,13 @@ class PreviewWidget(QWidget):
             painter.drawRect(slot_rect)
             painter.setPen(QPen(QColor("#e6edf5")))
             painter.drawText(slot_rect.adjusted(4, 2, 0, 0), Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft, str(index))
+
+        avatar_rect = self.image_to_widget_rect(self.profile.self_avatar_roi)
+        painter.setPen(QPen(QColor("#8be3a8"), 1, Qt.PenStyle.DashLine))
+        painter.setBrush(QColor(139, 227, 168, 20))
+        painter.drawRect(avatar_rect)
+        painter.setPen(QPen(QColor("#8be3a8")))
+        painter.drawText(avatar_rect.adjusted(2, 1, 0, 0), Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft, "我")
 
         if self._drag_start is not None and self._drag_current is not None:
             drag = QRect(self._drag_start, self._drag_current).normalized()
@@ -212,6 +226,9 @@ class HudCalibrationDialog(QDialog):
         self.save_button = QPushButton("使用此标定")
         self.save_button.setObjectName("Primary")
         self.save_button.clicked.connect(self.accept)
+        self.self_avatar_button = QPushButton("框选自己头像")
+        self.self_avatar_button.setCheckable(True)
+        self.self_avatar_button.toggled.connect(self._on_self_avatar_mode)
         self.refresh_button = QPushButton("重新抓帧")
         self.refresh_button.clicked.connect(self._request_refresh)
         self.export_button = QPushButton("导出 JSON")
@@ -220,6 +237,7 @@ class HudCalibrationDialog(QDialog):
         self.import_button.clicked.connect(self._import)
         cancel = QPushButton("取消")
         cancel.clicked.connect(self.reject)
+        row.addWidget(self.self_avatar_button)
         row.addWidget(self.import_button)
         row.addWidget(self.export_button)
         row.addWidget(self.refresh_button)
@@ -232,9 +250,16 @@ class HudCalibrationDialog(QDialog):
         self.refresh_requested = True
         self.reject()
 
+    def _on_self_avatar_mode(self, enabled: bool) -> None:
+        self.preview.set_target("self_avatar_roi" if enabled else "skill_bar")
+        self.self_avatar_button.setText("框选技能栏" if enabled else "框选自己头像")
+
     def _on_selection(self, roi: Roi) -> None:
-        self.profile.skill_bar = roi
-        self.profile.slots = None
+        if self.preview.selection_target == "self_avatar_roi":
+            self.profile.self_avatar_roi = roi
+        else:
+            self.profile.skill_bar = roi
+            self.profile.slots = None
         self._update_info()
 
     def _update_info(self) -> None:
@@ -243,6 +268,8 @@ class HudCalibrationDialog(QDialog):
             f"技能栏：({self.profile.skill_bar.x},{self.profile.skill_bar.y}) "
             f"{self.profile.skill_bar.width}×{self.profile.skill_bar.height}；"
             + " / ".join(f"{index}:{roi.width}×{roi.height}" for index, roi in enumerate(slots))
+            + f"；自己头像：({self.profile.self_avatar_roi.x},{self.profile.self_avatar_roi.y}) "
+            f"{self.profile.self_avatar_roi.width}×{self.profile.self_avatar_roi.height}"
         )
 
     def set_selection(self, roi: Roi) -> None:

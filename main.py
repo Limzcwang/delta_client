@@ -54,6 +54,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="打印生效配置后退出（不导入 PySide6，适合排障）",
     )
     parser.add_argument("--check", action="store_true", help="检查 Python 依赖与生效配置后退出")
+    parser.add_argument(
+        "--ui",
+        choices=("widgets", "qml", "qml-lobby"),
+        default="widgets",
+        help="UI 承载方式：widgets（默认）或 qml-lobby（H0 QQuickWidget 大厅 spike）",
+    )
     return parser
 
 
@@ -187,7 +193,7 @@ def main(argv: list[str] | None = None) -> int:
     if icon_file.is_file():
         app.setWindowIcon(QIcon(str(icon_file)))
     apply_theme(app)
-    window = MainWindow(config, session)
+    window = MainWindow(config, session, ui_mode=args.ui)
     window.show()
     if previous_crash:
         try:

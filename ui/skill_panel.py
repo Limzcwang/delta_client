@@ -5,9 +5,17 @@ from __future__ import annotations
 import time
 
 from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontMetrics,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
-    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -19,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.operators import Operator, OperatorCatalog
+from ui.switch_row import SwitchRow
 from core.skills import (
     SLOT_ABILITY,
     SLOT_LABELS,
@@ -53,12 +62,22 @@ class SkillSlotWidget(QWidget):
         self.pulse = False
         self.skill_name = ""
         self.cd_known = True
-        self.setMinimumSize(82, 92)
+        self.setMinimumSize(82, 104)
+        self.setFixedHeight(104)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setToolTip(SLOT_LABELS.get(kind, kind))
 
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt 覆盖
-        return QSize(96, 96)
+        return QSize(96, 104)
+
+    def name_rect(self) -> QRectF:
+        return QRectF(8, 4, max(1, self.width() - 16), 20)
+
+    def middle_rect(self) -> QRectF:
+        return QRectF((self.width() - 54) / 2, 28, 54, 54)
+
+    def bottom_rect(self) -> QRectF:
+        return QRectF(8, 88, max(1, self.width() - 16), 14)
 
     def set_data(
         self,
@@ -111,63 +130,120 @@ class SkillSlotWidget(QWidget):
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        rect = QRectF(1.5, 1.5, self.width() - 3, self.height() - 3)
         state = self.effective_state()
         color = QColor(_COLORS.get(state, _COLORS[SKILL_UNKNOWN]))
-        painter.setBrush(QColor("#1a222c"))
-        border = QPen(color, 2)
-        if state == SKILL_READY and self.pulse:
-            border.setColor(QColor("#ffe08a"))
-            border.setWidth(3)
-        painter.setPen(border)
-        painter.drawRoundedRect(rect, 8, 8)
+        painter.setBrush(QColor("#0c1320"))
+        painter.setPen(QPen(QColor("#24334e"), 1))
+        painter.drawRoundedRect(QRectF(0.5, 0.5, self.width() - 1, self.height() - 1), 8, 8)
 
         title, main, sub = self.text_lines()
+        # 名称行：4–24，单行省略 + 完整 tooltip
+        name_rect = self.name_rect()
+        name_font = QFont(self.font())
+        name_font.setPixelSize(11)
+        painter.setFont(name_font)
+        metrics = QFontMetrics(name_font)
+        elided = metrics.elidedText(title, Qt.TextElideMode.ElideMiddle, int(name_rect.width()))
         painter.setPen(QPen(QColor("#8b98a8")))
-        title_font = QFont(self.font())
-        title_font.setPointSize(8)
-        painter.setFont(title_font)
-        painter.drawText(QRectF(0, 5, self.width(), 16), Qt.AlignmentFlag.AlignHCenter, title)
+        painter.drawText(name_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, elided)
+        self.setToolTip(f"{title}：{main}" if elided == title else f"{title}：{main}")
 
-        painter.setPen(QPen(color))
-        main_font = QFont(self.font())
-        main_font.setPointSize(14 if self.kind != SLOT_ULTIMATE else 15)
-        main_font.setBold(True)
-        painter.setFont(main_font)
-        if self.kind == SLOT_ULTIMATE and state != SKILL_UNKNOWN and self.cd_known:
-            ring_rect = QRectF(self.width() / 2 - 24, 23, 48, 48)
+        # 中间区：28–82。大招/百分比用固定 54px 圆环，充能型用大号计数。
+        middle = self.middle_rect()
+        center = middle.center()
+        use_ring = self.kind == SLOT_ULTIMATE and self.cd_known and state != SKILL_UNKNOWN
+        if use_ring:
+            ring = QRectF(center.x() - 27, center.y() - 27, 54, 54)
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(QPen(QColor("#2b3440"), 5))
-            painter.drawEllipse(ring_rect)
-            painter.setPen(QPen(color, 5))
-            painter.drawArc(ring_rect, 90 * 16, -int(3.6 * self.slot.percent * 16))
-            painter.setPen(QPen(color))
-            painter.drawText(
-                QRectF(0, 32, self.width(), 30),
-                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
-                main,
-            )
+            painter.setPen(QPen(QColor(59, 130, 196, 64), 5))
+            painter.drawEllipse(ring)
+            painter.setPen(QPen(QColor("#3b82c4"), 5))
+            painter.drawArc(ring, 90 * 16, -int(3.6 * self.slot.percent * 16))
+            pct_font = QFont(self.font())
+            pct_font.setPixelSize(13)
+            pct_font.setBold(True)
+            painter.setFont(pct_font)
+            painter.setPen(QPen(QColor("#7fb3e0")))
+            painter.drawText(ring, Qt.AlignmentFlag.AlignCenter, main)
+        elif state == SKILL_UNKNOWN or not self.cd_known:
+            center_font = QFont(self.font())
+            center_font.setPixelSize(14)
+            painter.setFont(center_font)
+            painter.setPen(QPen(QColor("#71808f")))
+            painter.drawText(middle, Qt.AlignmentFlag.AlignCenter, "?")
         else:
-            painter.drawText(
-                QRectF(0, 30, self.width(), 32),
-                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
-                main,
-            )
+            # 充能/就绪：大号计数（例如 1/2），20px bold
+            count_font = QFont(self.font())
+            count_font.setPixelSize(20)
+            count_font.setBold(True)
+            painter.setFont(count_font)
+            painter.setPen(QPen(QColor("#7fb3e0")))
+            painter.drawText(middle, Qt.AlignmentFlag.AlignCenter, main if main not in ("—",) else "—")
 
+        # 底部行：88–102，12px muted；与中区至少 6px
+        bottom_font = QFont(self.font())
+        bottom_font.setPixelSize(12)
+        painter.setFont(bottom_font)
         painter.setPen(QPen(color if state == SKILL_READY else QColor("#8b98a8")))
-        sub_font = QFont(self.font())
-        sub_font.setPointSize(9)
-        painter.setFont(sub_font)
-        painter.drawText(
-            QRectF(0, 66, self.width(), 18),
-            Qt.AlignmentFlag.AlignHCenter,
-            sub,
-        )
+        painter.drawText(self.bottom_rect(), Qt.AlignmentFlag.AlignCenter, sub)
         painter.end()
 
 
+_AVATAR_SIZE = 22
+_AVATAR_RADIUS = 4
+_AVATAR_CACHE: dict[str, QPixmap] = {}
+
+
+def _clip_avatar(source: QPixmap) -> QPixmap:
+    """缩放 22×22 并做圆角裁剪 + 1px 边框；透明区域用于圆角。"""
+    target = QPixmap(_AVATAR_SIZE, _AVATAR_SIZE)
+    target.fill(Qt.GlobalColor.transparent)
+    scaled = source.scaled(
+        _AVATAR_SIZE,
+        _AVATAR_SIZE,
+        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    painter = QPainter(target)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    path = QPainterPath()
+    path.addRoundedRect(0, 0, _AVATAR_SIZE, _AVATAR_SIZE, _AVATAR_RADIUS, _AVATAR_RADIUS)
+    painter.setClipPath(path)
+    painter.drawPixmap(0, 0, scaled)
+    painter.setClipping(False)
+    painter.setPen(QPen(QColor("#24334e"), 1))
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawRoundedRect(0.5, 0.5, _AVATAR_SIZE - 1, _AVATAR_SIZE - 1, _AVATAR_RADIUS, _AVATAR_RADIUS)
+    painter.end()
+    return target
+
+
+def _fallback_avatar(letter: str) -> QPixmap:
+    """未知干员：昵称首字 + 深蓝渐变底，圆角 4、字号 11。"""
+    pixmap = QPixmap(_AVATAR_SIZE, _AVATAR_SIZE)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    path = QPainterPath()
+    path.addRoundedRect(0, 0, _AVATAR_SIZE, _AVATAR_SIZE, _AVATAR_RADIUS, _AVATAR_RADIUS)
+    gradient = QLinearGradient(0, 0, _AVATAR_SIZE, _AVATAR_SIZE)
+    gradient.setColorAt(0.0, QColor("#2b3b52"))
+    gradient.setColorAt(1.0, QColor("#162235"))
+    painter.fillPath(path, gradient)
+    painter.setPen(QPen(QColor("#24334e"), 1))
+    painter.drawPath(path)
+    font = QFont()
+    font.setPixelSize(11)
+    font.setBold(True)
+    painter.setFont(font)
+    painter.setPen(QPen(QColor("#c8d3e1")))
+    painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, (letter or "?")[:1])
+    painter.end()
+    return pixmap
+
+
 class SkillRow(QFrame):
-    """一条队友技能行：头像首字母 + 昵称/干员名 + 3 个固定槽位。"""
+    """一条队友技能行：干员头像/昵称 + 昵称/干员名 + 3 个固定槽位。"""
 
     def __init__(
         self,
@@ -179,10 +255,12 @@ class SkillRow(QFrame):
     ) -> None:
         super().__init__(parent)
         self.setObjectName("Card")
+        self.setFixedHeight(180)
         self.user_id = state.user_id
         self.state = state
         self.operator_def = operator
         self._avatar_key = ""
+        self._avatar_source = ""
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 8)
         root.setSpacing(6)
@@ -190,9 +268,19 @@ class SkillRow(QFrame):
         header.setSpacing(8)
         self.avatar = QLabel(state.avatar_letter)
         self.avatar.setObjectName("SkillAvatar")
-        self.avatar.setFixedSize(30, 30)
+        self.avatar.setFixedSize(22, 22)
         self.avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header.addWidget(self.avatar)
+        self.squad_badge = QLabel(self.avatar)
+        self.squad_badge.setObjectName("SquadBadge")
+        self.squad_badge.setFixedSize(13, 13)
+        self.squad_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.squad_badge.setStyleSheet(
+            "QLabel#SquadBadge { background:#f5a800; color:#10131a; border-radius:6px; "
+            "font-size:10px; font-weight:700; }"
+        )
+        self.squad_badge.move(11, -3)
+        self.squad_badge.hide()
         names = QVBoxLayout()
         names.setSpacing(1)
         self.name_label = QLabel(state.display_name)
@@ -221,7 +309,16 @@ class SkillRow(QFrame):
             pulse=False,
         )
 
-    def update_state(self, state: SkillState, server_now: int, pulse: bool = False) -> None:
+    def update_state(
+        self,
+        state: SkillState,
+        server_now: int,
+        pulse: bool = False,
+        *,
+        operator: Operator | None = None,
+    ) -> None:
+        if operator is not None:
+            self.operator_def = operator
         self.state = state
         if state.display_name != self.name_label.text():
             self.name_label.setText(state.display_name)
@@ -230,9 +327,10 @@ class SkillRow(QFrame):
         self.operator_label.setText(
             (operator.display_name if operator is not None else (state.operator or "干员未共享"))
         )
+        self._apply_squad_number(state.squad_number)
         unshared = state.is_unshared(server_now)
-        self.status_label.setText("未共享" if unshared else "已共享")
-        self.status_label.setStyleSheet("color: #ffd071;" if unshared else "color: #6fdc8c;")
+        self.status_label.setText("未共享" if unshared else "● 已共享")
+        self.status_label.setStyleSheet("color: #ffd071;" if unshared else "color: #5fc98e;")
         for kind, widget in self.slot_widgets.items():
             meta = operator.skill(_SLOT_INDEX[kind]) if operator is not None else None
             widget.set_data(
@@ -244,27 +342,35 @@ class SkillRow(QFrame):
                 cd_known=meta.cd_known if meta is not None else True,
             )
 
+    def _apply_squad_number(self, number: int | None) -> None:
+        if number in (1, 2, 3):
+            self.squad_badge.setText(str(number))
+            self.squad_badge.show()
+            self.squad_badge.raise_()
+        else:
+            self.squad_badge.hide()
+
     def _apply_avatar(self, state: SkillState) -> None:
-        """头像文件存在则加载，否则首字母占位；同一干员不重复加载。"""
+        """按干员文件加载头像；缓存按 operator_id；缺失时用首字渐变占位。"""
         operator = self.operator_def
-        key = operator.id if operator is not None else f"name:{state.display_name}"
-        if key == self._avatar_key:
-            return
-        self._avatar_key = key
         if operator is not None and operator.avatar_available():
-            pixmap = QPixmap(str(operator.avatar_path()))
-            if not pixmap.isNull():
+            key = str(operator.id or "")
+            pixmap = _AVATAR_CACHE.get(key)
+            if pixmap is None:
+                source = QPixmap(str(operator.avatar_path()))
+                if not source.isNull():
+                    pixmap = _clip_avatar(source)
+                    _AVATAR_CACHE[key] = pixmap
+            if pixmap is not None:
                 self.avatar.setText("")
-                self.avatar.setPixmap(
-                    pixmap.scaled(
-                        self.avatar.size(),
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation,
-                    )
-                )
+                self.avatar.setPixmap(pixmap)
+                self._avatar_source = "operator"
+                self._avatar_key = key
                 return
-        self.avatar.setPixmap(QPixmap())
-        self.avatar.setText(state.avatar_letter)
+        self._avatar_source = "fallback"
+        self.avatar.setText("")
+        self.avatar.setPixmap(_fallback_avatar(state.avatar_letter))
+        self._avatar_key = f"name:{state.display_name}"
 
 
 class SkillPanel(QWidget):
@@ -273,6 +379,7 @@ class SkillPanel(QWidget):
     sharing_toggled = Signal(bool)
     simulate_requested = Signal()
     capture_requested = Signal()
+    settings_requested = Signal()
 
     def __init__(
         self,
@@ -301,23 +408,28 @@ class SkillPanel(QWidget):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
         header = QHBoxLayout()
-        title = QLabel("技能共享（E2）")
+        title = QLabel("技能共享 (E2)")
         title.setObjectName("SectionTitle")
         header.addWidget(title)
         header.addStretch(1)
-        self.share_check = QCheckBox("共享我的技能")
-        self.share_check.setChecked(False)
+        self.share_check = SwitchRow("共享我的技能", "", False)
+        self.share_check.title_label.setStyleSheet("color: #f5a800; font-weight: 700;")
+        self.share_check.setFixedWidth(150)
         self.share_check.toggled.connect(self._on_share_toggled)
         header.addWidget(self.share_check)
         self.simulate_button = QPushButton("模拟我的技能")
         self.simulate_button.setObjectName("Link")
         self.simulate_button.clicked.connect(self.simulate_requested.emit)
-        header.addWidget(self.simulate_button)
+        self.simulate_button.hide()
         self.capture_button = QPushButton("识别 HUD")
         self.capture_button.setObjectName("Link")
         self.capture_button.setToolTip("截取游戏窗口并识别技能栏（E3b）")
         self.capture_button.clicked.connect(self.capture_requested.emit)
-        header.addWidget(self.capture_button)
+        self.capture_button.hide()
+        self.settings_button = QPushButton("技能设置")
+        self.settings_button.setObjectName("Ghost")
+        self.settings_button.clicked.connect(self.settings_requested.emit)
+        header.addWidget(self.settings_button)
         root.addLayout(header)
 
         hint = QLabel("默认关闭；开启后 2 次/秒限频上报 · 左大招 / 中技能 / 右投掷物 · 30 分钟未更新=未共享")
@@ -327,16 +439,24 @@ class SkillPanel(QWidget):
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setStyleSheet(
+            "QScrollBar:vertical { background: #0c1320; width: 8px; margin: 0; }"
+            "QScrollBar::handle:vertical { background: #24334e; min-height: 28px; border-radius: 4px; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }"
+        )
         self.list_widget = QWidget()
         self.list_layout = QVBoxLayout(self.list_widget)
-        self.list_layout.setContentsMargins(0, 0, 0, 0)
-        self.list_layout.setSpacing(6)
+        self.list_layout.setContentsMargins(0, 0, 8, 0)
+        self.list_layout.setSpacing(10)
         self.list_layout.addStretch(1)
         self.scroll.setWidget(self.list_widget)
         root.addWidget(self.scroll, stretch=1)
 
-        self.empty_label = QLabel("还没有队友共享技能")
+        self.empty_label = QLabel("暂无成员共享技能")
         self.empty_label.setObjectName("Hint")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root.addWidget(self.empty_label)
@@ -395,7 +515,10 @@ class SkillPanel(QWidget):
         existed = state.user_id in self._rows
         self._states[state.user_id] = state
         if existed:
-            self._rows[state.user_id].update_state(state, self.server_now_ms(), self._pulse)
+            operator = self._catalog.resolve(state.operator_id, state.operator)
+            self._rows[state.user_id].update_state(
+                state, self.server_now_ms(), self._pulse, operator=operator
+            )
         else:
             self._add_row(state)
         self._sync_empty()

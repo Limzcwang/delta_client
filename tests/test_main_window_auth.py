@@ -90,6 +90,7 @@ class WsFatalSessionTests(unittest.TestCase):
         window = MainWindow(config, session)
         try:
             window._current_room = Room(id="1", code="ABC123", name="test")
+            window._membership_confirmed = True
             fake_ws = FakeWs()
             window._ws = fake_ws
             window._self_skill_state = SkillState(

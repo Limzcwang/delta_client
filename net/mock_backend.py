@@ -883,6 +883,7 @@ class MockWsClient:
         skills: Any,
         operator_id: str = "",
         operator_name: str = "",
+        squad_number: int | None = None,
     ) -> bool:
         self.last_skill_update = {
             "room_id": str(room_id),
@@ -890,6 +891,7 @@ class MockWsClient:
             "skills": skills,
             "operator_id": str(operator_id or ""),
             "operator_name": str(operator_name or ""),
+            "squad_number": squad_number,
         }
         return True
 

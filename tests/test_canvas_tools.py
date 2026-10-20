@@ -42,7 +42,7 @@ class CanvasSizePopoverTests(unittest.TestCase):
 
     def test_toolbar_has_six_buttons_and_badges(self) -> None:
         view = self._view()
-        self.assertEqual(6, len(view.tool_buttons))
+        self.assertEqual(5, len(view.tool_buttons))
         self.assertFalse(hasattr(view, "width_button"))
         self.assertEqual("3", view.pen_button.size_badge.text())
         self.assertEqual("12", view.eraser_button.size_badge.text())

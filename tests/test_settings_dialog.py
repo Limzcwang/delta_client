@@ -46,7 +46,7 @@ class SettingsOperatorTests(unittest.TestCase):
 
     def test_dropdown_has_16_operators_and_selects_saved(self) -> None:
         dialog = self._dialog("weilong")
-        self.assertEqual(5, dialog.tabs.count())
+        self.assertEqual(3, dialog.tabs.count())
         self.assertEqual(17, dialog.operator_combo.count())
         self.assertEqual("weilong", dialog.operator_combo.currentData())
         self.assertIn("威龙", dialog.operator_combo.currentText())
@@ -54,14 +54,14 @@ class SettingsOperatorTests(unittest.TestCase):
         from PySide6.QtWidgets import QLabel
 
         self.assertTrue(
-            any("版本 v0.1.4" in label.text() for label in dialog.findChildren(QLabel))
+            any("版本 v0.2.2" in label.text() for label in dialog.findChildren(QLabel))
         )
 
     def test_hud_tab_has_calibration_detection_and_auto_operator(self) -> None:
         dialog = self._dialog("weilong")
         labels = [dialog.tabs.tabText(index) for index in range(dialog.tabs.count())]
-        self.assertEqual(["连接", "HUD / 采屏", "干员", "悬浮窗", "个人资料"], labels)
-        self.assertEqual(dialog.tabs.widget(1), dialog.calibration_button.parent())
+        self.assertEqual(["HUD / 采屏", "干员", "悬浮窗"], labels)
+        self.assertEqual(dialog.tabs.widget(0), dialog.calibration_button.parent())
         self.assertIsNotNone(dialog.calibration_button)
         self.assertIsNotNone(dialog.detect_window_button)
         self.assertTrue(dialog.auto_operator_check.isChecked())

@@ -165,6 +165,7 @@ class SkillState:
     operator_id: str = ""
     operator: str = ""
     captured_at: int = 0
+    squad_number: int | None = None
     updated_at: int = 0
     server_received_at: int = 0
     slots: Mapping[str, SkillSlot] = field(default_factory=dict)
@@ -214,6 +215,15 @@ class SkillState:
         )
         if not captured_at:
             captured_at = updated_at
+        squad_raw = _first(payload, "squad_number", "squadNumber")
+        squad_number: int | None = None
+        try:
+            if isinstance(squad_raw, (int, str)) and not isinstance(squad_raw, bool):
+                value = int(squad_raw)
+                if value in (1, 2, 3):
+                    squad_number = value
+        except (TypeError, ValueError):
+            squad_number = None
         slots_raw = payload.get("skills")
         if not isinstance(slots_raw, (Mapping, list)):
             slots_raw = payload.get("skill_state")
@@ -245,6 +255,7 @@ class SkillState:
             operator_id=operator_id,
             operator=operator,
             captured_at=max(0, captured_at),
+            squad_number=squad_number,
             updated_at=max(0, updated_at),
             server_received_at=max(0, server_received_at),
             slots=slots,

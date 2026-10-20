@@ -52,6 +52,8 @@ class MyRoomsView(QWidget):
         self.table.setShowGrid(False)
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(40)
+        self.table.setMinimumHeight(380)
+        self.table.setMaximumHeight(380)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
@@ -166,7 +168,7 @@ class MyRoomsView(QWidget):
             room.display_name,
             room.code or "-",
             str(room.member_count),
-            "🔒 私有" if room.is_private else "公开",
+            "私有" if room.is_private else "公开",
         ]
         for column, text in enumerate(values):
             item = self.table.item(row, column)
