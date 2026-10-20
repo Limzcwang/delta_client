@@ -231,7 +231,19 @@ class MainWindow(QMainWindow):
                 self.stack.addWidget(self.qml_conn)
                 self.stack.addWidget(self.qml_profile)
                 self.qml_conn.back_requested.connect(self._show_rooms)
+                self.qml_conn.test_requested.connect(
+                    lambda server, ws: self._on_test_connection(self.qml_conn, server, ws)
+                )
+                self.qml_conn.save_requested.connect(self._on_qml_conn_save)
+                self.qml_conn.reset_requested.connect(lambda: self.qml_conn.set_config(self.config))
                 self.qml_profile.back_requested.connect(self._show_rooms)
+                self.qml_profile.nickname_requested.connect(
+                    lambda nickname: self._on_nickname_save(self.qml_profile, nickname)
+                )
+                self.qml_profile.password_requested.connect(
+                    lambda old, new: self._on_password_change(self.qml_profile, old, new)
+                )
+                self.qml_profile.logout_requested.connect(self._on_logout)
                 self.qml_login.bridge.login_requested.connect(self._on_login)
                 self.qml_login.bridge.register_requested.connect(self._on_register)
                 self.qml_login.bridge.history_selected.connect(self._on_saved_login_selected)
@@ -2069,6 +2081,8 @@ class MainWindow(QMainWindow):
     # ---------- 设置（含个人资料） ----------
     def _on_profile(self) -> None:
         if self.ui_mode == "qml" and self.qml_profile is not None:
+            self.qml_profile.set_account(self._account())
+            self.qml_profile.set_nickname(self.session.nickname or self.session.username)
             self.stack.setCurrentWidget(self.qml_profile)
         else:
             self._show_profile_page()
@@ -2459,6 +2473,7 @@ class MainWindow(QMainWindow):
 
     def _on_settings(self) -> None:
         if self.ui_mode == "qml" and self.qml_conn is not None:
+            self.qml_conn.set_config(self.config)
             self.stack.setCurrentWidget(self.qml_conn)
         else:
             self._show_connection_page()
@@ -2536,6 +2551,14 @@ class MainWindow(QMainWindow):
         else:
             self._return_from_page()
         self._set_status(f"配置已保存：{saved_path}")
+
+    def _on_qml_conn_save(self) -> None:
+        try:
+            new_config = self.qml_conn.result_config()
+        except (ConfigError, ValueError) as exc:
+            self.qml_conn.set_error(f"配置错误：{exc}")
+            return
+        self._on_connection_saved(self.qml_conn, new_config)
 
     def _show_profile_page(self) -> None:
         self._remember_page_return()

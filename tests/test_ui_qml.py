@@ -112,6 +112,81 @@ class QmlLobbySmokeTests(unittest.TestCase):
             conn.deleteLater()
             profile.deleteLater()
 
+    def test_conn_bridge_config_binding(self) -> None:
+        try:
+            from ui_qml.settings_host import QmlConnView
+            from config import AppConfig
+        except Exception:  # noqa: BLE001
+            self.skipTest("QtQuick QML 不可用")
+        try:
+            view = QmlConnView()
+        except RuntimeError as exc:
+            self.skipTest(f"QtQuick QML 插件不可用：{exc}")
+        try:
+            cfg = AppConfig(server_url="https://example.test:9443", ws_url="wss://example.test/ws", use_mock=True, persist_token=True)
+            view.set_config(cfg)
+            self.assertEqual("https://example.test:9443", view.bridge.server)
+            self.assertEqual("wss://example.test/ws", view.bridge.ws)
+            self.assertTrue(view.bridge.useMock)
+            self.assertTrue(view.bridge.saveToken)
+            view.bridge.server = "http://127.0.0.1:8000"
+            self.assertEqual("http://127.0.0.1:8000", view.result_config().server_url)
+            view.bridge.set_test_result("✓ 连接成功 118ms", True)
+            self.assertIn("成功", view.bridge.resultText)
+        finally:
+            view.close()
+            view.deleteLater()
+
+    def test_profile_bridge_nickname(self) -> None:
+        try:
+            from ui_qml.settings_host import QmlProfileView
+        except Exception:  # noqa: BLE001
+            self.skipTest("QtQuick QML 不可用")
+        try:
+            view = QmlProfileView()
+        except RuntimeError as exc:
+            self.skipTest(f"QtQuick QML 插件不可用：{exc}")
+        try:
+            view.set_account("account")
+            view.set_nickname("昵称A")
+            self.assertEqual("account", view.bridge.account)
+            self.assertEqual("昵称A", view.bridge.nickname)
+            view.set_nickname_result("昵称已更新", True)
+            self.assertEqual("昵称已更新", view.bridge.nicknameResult)
+            # 新密码 8-64 位 + 两次一致；不一致时不发请求
+            seen = []
+            view.bridge.password_requested.connect(lambda old, new: seen.append((old, new)))
+            view.bridge.change_password("oldpass1", "newpass1", "newpass2")
+            self.assertEqual([], seen)
+            self.assertIn("不一致", view.bridge.passwordResult)
+        finally:
+            view.close()
+            view.deleteLater()
+
+    def test_login_bridge_error_and_history(self) -> None:
+        try:
+            from ui_qml.login_host import QmlLoginView
+            from state.saved_logins import SavedLoginInfo
+        except Exception:  # noqa: BLE001
+            self.skipTest("QtQuick QML 不可用")
+        try:
+            view = QmlLoginView()
+        except RuntimeError as exc:
+            self.skipTest(f"QtQuick QML 插件不可用：{exc}")
+        try:
+            view.bridge.submit("user", "password")
+            self.assertTrue(view.bridge.loading)
+            view.bridge.set_error("账号或密码错误")
+            self.assertFalse(view.bridge.loading)
+            self.assertEqual("账号或密码错误", view.bridge.errorText)
+            view.set_saved_logins([SavedLoginInfo("alpha", 1, 2, 1, True, False)])
+            view.bridge.toggle_history()
+            self.assertTrue(view.bridge.historyVisible)
+            view.bridge.clear_history()
+        finally:
+            view.close()
+            view.deleteLater()
+
     def test_cli_flag_accepts_qml_lobby(self) -> None:
         from main import build_parser
 

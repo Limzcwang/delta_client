@@ -70,9 +70,9 @@ Item {
                 }
             }
 
-            Text { visible: !loginApi.historyVisible; text: "密码"; color: "#c8d3e1"; font.family: Theme.fontFamily; font.pixelSize: Theme.fontSizeSmall; font.bold: true }
+            Text { text: "密码"; color: "#c8d3e1"; font.family: Theme.fontFamily; font.pixelSize: Theme.fontSizeSmall; font.bold: true }
             Rectangle {
-                visible: !loginApi.historyVisible; width: parent.width; height: 38
+                width: parent.width; height: 38
                 color: Theme.input; radius: Theme.radiusControl; border.color: passwordInput.activeFocus ? Theme.amber : Theme.border
                 TextInput {
                     id: passwordInput
@@ -94,7 +94,7 @@ Item {
             }
 
             Rectangle {
-                visible: !loginApi.historyVisible; width: parent.width; height: 44; radius: Theme.radiusControl
+                width: parent.width; height: 44; radius: Theme.radiusControl
                 color: loginApi.loading ? "#5a5138" : Theme.amber
                 Text {
                     anchors.centerIn: parent
@@ -108,7 +108,6 @@ Item {
                 }
             }
             Text {
-                visible: !loginApi.historyVisible
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: loginApi.registerMode ? "已有账号？返回登录" : "没有账号？创建账户"
                 color: Theme.amber; font.family: Theme.fontFamily; font.pixelSize: Theme.fontSizeSmall

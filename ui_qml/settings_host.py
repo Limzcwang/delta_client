@@ -42,7 +42,7 @@ class QmlConnView(_QmlPageView):
     reset_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__("ConnPage.qml", ConnBridge(), "connBridge", parent)
+        super().__init__("ConnPage.qml", ConnBridge(), "connApi", parent)
         self.bridge.test_requested.connect(self.test_requested.emit)
         self.bridge.save_requested.connect(self.save_requested.emit)
         self.bridge.reset_requested.connect(self.reset_requested.emit)
@@ -71,7 +71,7 @@ class QmlConnView(_QmlPageView):
 
 class QmlProfileView(_QmlPageView):
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__("ProfilePage.qml", ProfileBridge(), "profileBridge", parent)
+        super().__init__("ProfilePage.qml", ProfileBridge(), "profileCtl", parent)
         self.nickname_requested = self.bridge.nickname_requested
         self.password_requested = self.bridge.password_requested
         self.logout_requested = self.bridge.logout_requested

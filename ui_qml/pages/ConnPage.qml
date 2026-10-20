@@ -15,7 +15,7 @@ Item {
         anchors.leftMargin: 26; anchors.rightMargin: 26
         height: 62
         Text { anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; text: "← 返回大厅"; color: Theme.muted; font.family: Theme.fontFamily; font.pixelSize: 13
-            MouseArea { anchors.fill: parent; onClicked: connBridge.back() } }
+            MouseArea { anchors.fill: parent; onClicked: connApi.back() } }
         Text { anchors.left: parent.left; anchors.leftMargin: 104; anchors.verticalCenter: parent.verticalCenter; text: "连接设置"; color: Theme.text; font.family: Theme.fontFamily; font.pixelSize: 22; font.bold: true }
         Text { anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; text: "独立页面"; color: Theme.muted2; font.family: Theme.fontFamily; font.pixelSize: 12 }
     }
@@ -26,13 +26,13 @@ Item {
         anchors.leftMargin: 26; anchors.rightMargin: 26; anchors.bottomMargin: 14
         height: 34
         Text { anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; text: "恢复默认"; color: Theme.muted; font.family: Theme.fontFamily; font.pixelSize: 12
-            MouseArea { anchors.fill: parent; onClicked: connBridge.reset() } }
+            MouseArea { anchors.fill: parent; onClicked: connApi.reset() } }
         Rectangle { id: cancel; anchors.right: save.left; anchors.rightMargin: 10; width: 88; height: 34; radius: 6; color: "transparent"; border.color: Theme.border
             Text { anchors.centerIn: parent; text: "取消"; color: "#c8d3e1"; font.family: Theme.fontFamily; font.pixelSize: 13 }
-            MouseArea { anchors.fill: parent; onClicked: connBridge.back() } }
+            MouseArea { anchors.fill: parent; onClicked: connApi.back() } }
         Rectangle { id: save; anchors.right: parent.right; width: 88; height: 34; radius: 6; color: Theme.amber
             Text { anchors.centerIn: parent; text: "保存"; color: "#17130a"; font.family: Theme.fontFamily; font.pixelSize: 13; font.bold: true }
-            MouseArea { anchors.fill: parent; onClicked: connBridge.save() } }
+            MouseArea { anchors.fill: parent; onClicked: connApi.save() } }
     }
 
     Rectangle {
@@ -48,31 +48,31 @@ Item {
                 TextInput {
                     anchors.left: parent.left; anchors.leftMargin: 12; anchors.right: parent.right; anchors.rightMargin: 12
                     anchors.verticalCenter: parent.verticalCenter
-                    text: connBridge.server
+                    text: connApi.server
                     color: Theme.text; font.family: Theme.fontFamily; font.pixelSize: 13
                     selectByMouse: true; clip: true
-                    onTextChanged: if (text !== connBridge.server) connBridge.server = text
+                    onTextChanged: if (text !== connApi.server) connApi.server = text
                 } }
             Text { text: "WebSocket 地址（留空则自动推导为 ws(s)://host/ws）"; color: "#c8d3e1"; font.family: Theme.fontFamily; font.pixelSize: 12; font.bold: true }
             Rectangle { width: parent.width; height: 38; color: Theme.input; radius: 6; border.color: Theme.border
                 TextInput {
                     anchors.left: parent.left; anchors.leftMargin: 12; anchors.right: parent.right; anchors.rightMargin: 12
                     anchors.verticalCenter: parent.verticalCenter
-                    text: connBridge.ws
+                    text: connApi.ws
                     color: Theme.text; font.family: Theme.fontFamily; font.pixelSize: 13
                     selectByMouse: true; clip: true
-                    onTextChanged: if (text !== connBridge.ws) connBridge.ws = text
+                    onTextChanged: if (text !== connApi.ws) connApi.ws = text
                 } }
             Row { spacing: 10
-                ToggleSwitch { checked: connBridge.useMock; onToggled: connBridge.useMock = checked }
+                ToggleSwitch { checked: connApi.useMock; onToggled: connApi.useMock = checked }
                 Text { text: "使用内置 Mock 后端（不联网，用于后端未就绪时演示）"; color: "#c8d3e1"; font.family: Theme.fontFamily; font.pixelSize: 13 } }
             Row { spacing: 10
-                ToggleSwitch { checked: connBridge.saveToken; onToggled: connBridge.saveToken = checked }
+                ToggleSwitch { checked: connApi.saveToken; onToggled: connApi.saveToken = checked }
                 Text { text: "登录后把 token 保存到本机（不保存密码）"; color: "#c8d3e1"; font.family: Theme.fontFamily; font.pixelSize: 13 } }
             Rectangle { width: 96; height: 38; radius: 6; color: "transparent"; border.color: Theme.border
-                Text { anchors.centerIn: parent; text: connBridge.testing ? "测试中…" : "测试连接"; color: "#c8d3e1"; font.family: Theme.fontFamily; font.pixelSize: 13 }
-                MouseArea { anchors.fill: parent; enabled: !connBridge.testing; onClicked: connBridge.test() } }
-            Text { width: parent.width; text: connBridge.resultText; visible: text.length > 0; color: connBridge.resultText.indexOf("✓") === 0 ? Theme.success : "#ff9b8f"; font.family: Theme.fontFamily; font.pixelSize: 11; wrapMode: Text.WordWrap }
+                Text { anchors.centerIn: parent; text: connApi.testing ? "测试中…" : "测试连接"; color: "#c8d3e1"; font.family: Theme.fontFamily; font.pixelSize: 13 }
+                MouseArea { anchors.fill: parent; enabled: !connApi.testing; onClicked: connApi.test() } }
+            Text { width: parent.width; text: connApi.resultText; visible: text.length > 0; color: connApi.resultText.indexOf("✓") === 0 ? Theme.success : "#ff9b8f"; font.family: Theme.fontFamily; font.pixelSize: 11; wrapMode: Text.WordWrap }
             Text { width: parent.width; text: "「测试连接」会请求 /health 与 /api/v1/rooms?page=1，并用当前登录 token 验证鉴权。"; color: Theme.muted2; font.family: Theme.fontFamily; font.pixelSize: 11; wrapMode: Text.WordWrap }
         }
     }

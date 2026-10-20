@@ -13,7 +13,7 @@ Item {
         anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
         anchors.leftMargin: 26; anchors.rightMargin: 26; height: 62
         Text { anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; text: "← 返回大厅"; color: Theme.muted; font.family: Theme.fontFamily; font.pixelSize: 13
-            MouseArea { anchors.fill: parent; onClicked: profileBridge.back() } }
+            MouseArea { anchors.fill: parent; onClicked: profileCtl.back() } }
         Text { anchors.left: parent.left; anchors.leftMargin: 104; anchors.verticalCenter: parent.verticalCenter; text: "个人资料"; color: Theme.text; font.family: Theme.fontFamily; font.pixelSize: 22; font.bold: true }
         Text { anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; text: "仅自己可见"; color: Theme.muted2; font.family: Theme.fontFamily; font.pixelSize: 12 }
     }
@@ -22,7 +22,7 @@ Item {
         anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
         anchors.leftMargin: 26; anchors.rightMargin: 26; anchors.bottomMargin: 14; height: 34
         Text { anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; text: "退出登录"; color: "#ffb347"; font.family: Theme.fontFamily; font.pixelSize: 12
-            MouseArea { anchors.fill: parent; onClicked: profileBridge.logout() } }
+            MouseArea { anchors.fill: parent; onClicked: profileCtl.logout() } }
         Rectangle { anchors.right: parent.right; width: 88; height: 34; radius: 6; color: Theme.amber
             Text { anchors.centerIn: parent; text: "保存"; color: "#17130a"; font.family: Theme.fontFamily; font.pixelSize: 13; font.bold: true } }
     }
@@ -35,21 +35,32 @@ Item {
             Text { text: "账号只在本人资料页可见；房间成员、聊天、加入/离开提示统一显示昵称。"; color: Theme.muted; font.family: Theme.fontFamily; font.pixelSize: 11 }
             Text { text: "账号（仅自己可见）"; color: "#c8d3e1"; font.family: Theme.fontFamily; font.pixelSize: 12; font.bold: true }
             Rectangle { width: parent.width; height: 38; color: Theme.input; radius: 6; border.color: Theme.border
-                Text { anchors.left: parent.left; anchors.leftMargin: 12; anchors.verticalCenter: parent.verticalCenter; text: profileBridge.account; color: "#8b98ab"; font.family: Theme.fontFamily; font.pixelSize: 13 } }
+                Text { anchors.left: parent.left; anchors.leftMargin: 12; anchors.verticalCenter: parent.verticalCenter; text: profileCtl.account; color: "#8b98ab"; font.family: Theme.fontFamily; font.pixelSize: 13 } }
             Text { text: "昵称（1–20 字符，展示给队友）"; color: "#c8d3e1"; font.family: Theme.fontFamily; font.pixelSize: 12; font.bold: true }
-            Row { width: parent.width; spacing: 10
-                Rectangle { width: parent.width - 110; height: 38; color: Theme.input; radius: 6; border.color: Theme.border
-                    TextInput { id: nicknameInput; anchors.left: parent.left; anchors.leftMargin: 12; anchors.right: parent.right; anchors.rightMargin: 8
-                    anchors.verticalCenter: parent.verticalCenter; text: profileBridge.nickname; color: Theme.text
-                    font.family: Theme.fontFamily; font.pixelSize: 13; selectByMouse: true; clip: true
-                    onTextChanged: if (text !== profileBridge.nickname) profileBridge.nickname = text }
-                Rectangle { width: 96; height: 38; radius: 6; color: Theme.green
+            Row {
+                width: parent.width; spacing: 10
+                Rectangle {
+                    width: parent.width - 110; height: 38; color: Theme.input; radius: 6; border.color: Theme.border
+                    TextInput {
+                        id: nicknameInput
+                        anchors.left: parent.left; anchors.leftMargin: 12
+                        anchors.right: parent.right; anchors.rightMargin: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: profileCtl.nickname; color: Theme.text
+                        font.family: Theme.fontFamily; font.pixelSize: 13
+                        selectByMouse: true; clip: true
+                        onTextChanged: if (text !== profileCtl.nickname) profileCtl.nickname = text
+                    }
+                }
+                Rectangle {
+                    width: 96; height: 38; radius: 6; color: Theme.green
                     Text { anchors.centerIn: parent; text: "保存昵称"; color: "#f3fff8"; font.family: Theme.fontFamily; font.pixelSize: 13; font.bold: true }
-                    MouseArea { anchors.fill: parent; onClicked: profileBridge.save_nickname(nicknameInput.text) } }
+                    MouseArea { anchors.fill: parent; onClicked: profileCtl.save_nickname(nicknameInput.text) }
+                }
             }
             Rectangle { width: parent.width; height: 1; color: Theme.border }
-            Text { width: parent.width; visible: profileBridge.passwordResult.length > 0; text: profileBridge.passwordResult; color: profileBridge.passwordResult.indexOf("✓") === 0 ? Theme.success : "#ff9b8f"; font.family: Theme.fontFamily; font.pixelSize: 11; wrapMode: Text.WordWrap }
-            Text { width: parent.width; visible: profileBridge.nicknameResult.length > 0; text: profileBridge.nicknameResult; color: profileBridge.nicknameResult.indexOf("✓") === 0 ? Theme.success : "#ff9b8f"; font.family: Theme.fontFamily; font.pixelSize: 11; wrapMode: Text.WordWrap }
+            Text { width: parent.width; visible: profileCtl.passwordResult.length > 0; text: profileCtl.passwordResult; color: profileCtl.passwordResult.indexOf("✓") === 0 ? Theme.success : "#ff9b8f"; font.family: Theme.fontFamily; font.pixelSize: 11; wrapMode: Text.WordWrap }
+            Text { width: parent.width; visible: profileCtl.nicknameResult.length > 0; text: profileCtl.nicknameResult; color: profileCtl.nicknameResult.indexOf("✓") === 0 ? Theme.success : "#ff9b8f"; font.family: Theme.fontFamily; font.pixelSize: 11; wrapMode: Text.WordWrap }
             Rectangle { visible: !page.passwordExpanded; width: 180; height: 32; anchors.horizontalCenter: parent.horizontalCenter; radius: 6; color: Theme.green
                 Text { anchors.centerIn: parent; text: "修改密码"; color: "#f3fff8"; font.family: Theme.fontFamily; font.pixelSize: 12; font.bold: true }
                 MouseArea { anchors.fill: parent; onClicked: page.passwordExpanded = true } }
@@ -73,7 +84,7 @@ Item {
                 Row { spacing: 10
                     Rectangle { width: 96; height: 32; radius: 6; color: Theme.amber
                         Text { anchors.centerIn: parent; text: "修改密码"; color: "#17130a"; font.family: Theme.fontFamily; font.pixelSize: 12; font.bold: true }
-                        MouseArea { anchors.fill: parent; onClicked: profileBridge.change_password(oldPassword.text, newPassword.text, confirmPassword.text) } }
+                        MouseArea { anchors.fill: parent; onClicked: profileCtl.change_password(oldPassword.text, newPassword.text, confirmPassword.text) } }
                     Rectangle { width: 88; height: 32; radius: 6; color: "transparent"; border.color: Theme.border
                         Text { anchors.centerIn: parent; text: "取消"; color: "#c8d3e1"; font.family: Theme.fontFamily; font.pixelSize: 12 }
                         MouseArea { anchors.fill: parent; onClicked: page.passwordExpanded = false } }
@@ -81,5 +92,4 @@ Item {
             }
         }
     }
-}
 }
