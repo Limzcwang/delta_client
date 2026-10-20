@@ -157,6 +157,7 @@ class MainWindow(QMainWindow):
         self._server_clock = ServerClock()
         self._skill_throttle = SkillShareThrottle(max_events=2, window_ms=1000)
         self._skill_share_enabled = False
+        self._room_share_off_sent = False
         self._membership_confirmed = False
         self._last_membership_error = ""
         self._last_membership_error_at = 0.0
@@ -904,6 +905,7 @@ class MainWindow(QMainWindow):
         self._skills.clear()
         self._self_skill_state = None
         self._skill_share_enabled = False
+        self._room_share_off_sent = False
         self._membership_confirmed = False
         self._last_membership_error = ""
         self._last_membership_error_at = 0.0
@@ -1237,10 +1239,17 @@ class MainWindow(QMainWindow):
                 self._ws_members_loaded = True
                 self._last_members_refresh = time.monotonic()
                 self.room_view.set_members(members)
+            if not self._room_share_off_sent and self._ws is not None and getattr(self._ws, "connected", False):
+                self._room_share_off_sent = True
+                self._send_skill_off()
             joined_skills = parse_room_joined_skill_states(message)
+            joined_skills = [
+                state for state in joined_skills
+                if state.user_id != self._user_id() or self._skill_share_enabled
+            ]
             if joined_skills:
                 self._skills.update_many(joined_skills)
-                self.room_view.skill_panel.set_states(self._skills.states())
+                self.room_view.skill_panel.set_states(self._visible_skill_states())
             self._sync_overlay_states()
             self._on_room_joined_canvas(message.get("canvas_snapshot"))
             if self._canvas_queue:
@@ -1673,21 +1682,25 @@ class MainWindow(QMainWindow):
         return self._find_game_window() is not None
 
     def _toggle_overlay(self) -> None:
-        if not self._hotkey_ready():
-            return
-        if self.overlay_controller.enabled:
+        if self.overlay_controller.enabled or self.overlay.isVisible():
             self.overlay_controller.stop()
             self.overlay.hide()
             self.room_view.set_status("悬浮窗已隐藏")
-        else:
-            self.overlay_controller.start()
-            self.overlay_controller.follow(force=True)
-            self.room_view.set_status(f"悬浮窗：{self.overlay_controller.last_reason or '等待游戏窗口'}")
+            return
+        if not self._hotkey_ready():
+            self.overlay.hide()
+            self.room_view.set_status("等待游戏窗口后再显示悬浮窗")
+            return
+        self.overlay_controller.start()
+        self.overlay_controller.follow(force=True)
+        self.room_view.set_status(f"悬浮窗：{self.overlay_controller.last_reason or '等待游戏窗口'}")
 
     def _toggle_overlay_edit(self) -> None:
-        if not self._hotkey_ready():
-            return
         enabled = not self.overlay.edit_mode
+        if enabled and self._find_game_window() is None:
+            self.overlay.hide()
+            self.room_view.set_status("等待游戏窗口后再进入编辑模式")
+            return
         self.overlay.set_edit_mode(enabled)
         self.room_view.set_status("悬浮窗编辑模式：可拖动，退出后恢复鼠标穿透" if enabled else "悬浮窗已恢复鼠标穿透")
 
@@ -1699,9 +1712,16 @@ class MainWindow(QMainWindow):
         except OSError:
             pass
 
+    def _visible_skill_states(self) -> list[SkillState]:
+        uid = self._user_id()
+        return [
+            state for state in self._skills.states()
+            if state.user_id != uid or self._skill_share_enabled
+        ]
+
     def _sync_overlay_states(self) -> None:
         try:
-            self.overlay.set_states(self._skills.states(), self.operator_catalog)
+            self.overlay.set_states(self._visible_skill_states(), self.operator_catalog)
         except Exception:  # noqa: BLE001
             pass
 
@@ -1736,6 +1756,8 @@ class MainWindow(QMainWindow):
         state = SkillState.from_ws(message)
         if not state.user_id:
             return
+        if state.user_id == self._user_id() and not self._skill_share_enabled:
+            return
         # captured_at 缺失时用本机估算的服务器时间兜底
         if not state.captured_at:
             state = replace(state, captured_at=self._server_now_ms())
@@ -1756,10 +1778,10 @@ class MainWindow(QMainWindow):
             return
         state = self._build_simulated_skill()
         self._self_skill_state = state
-        self._skills.update(state)
-        self.room_view.skill_panel.upsert(state)
-        self._sync_overlay_states()
         if self._skill_share_enabled:
+            self._skills.update(state)
+            self.room_view.skill_panel.upsert(state)
+            self._sync_overlay_states()
             self._send_skill_state(state)
         else:
             self.room_view.set_status("已模拟本地技能状态（技能共享未开启，未上报）")
@@ -1997,9 +2019,10 @@ class MainWindow(QMainWindow):
             squad_number=result.squad_number,
         )
         self._self_skill_state = state
-        self._skills.update(state)
-        self.room_view.skill_panel.upsert(state)
         if self._skill_share_enabled:
+            self._skills.update(state)
+            self.room_view.skill_panel.upsert(state)
+            self._sync_overlay_states()
             self._send_skill_state(state)
         self.room_view.set_status(self._hud_completion_text(state))
         if result.debug_path:
@@ -2544,6 +2567,7 @@ class MainWindow(QMainWindow):
         self._skills.clear()
         self._self_skill_state = None
         self._skill_share_enabled = False
+        self._room_share_off_sent = False
         self._hud_service.reset_tracker()
         if hasattr(self, "_auto_controller"):
             self._auto_controller.stop()
@@ -2803,7 +2827,8 @@ class MainWindow(QMainWindow):
         self._close_api()
         self.api = self._build_api()
         if self.stack.currentWidget() is self.room_view:
-            self._on_leave_room()
+            # 设置保存只关闭弹窗，不离开房间/不切页。
+            self.stack.setCurrentWidget(self.room_view)
         elif self.session.is_logged_in:
             self._show_rooms()
         else:

@@ -9,7 +9,7 @@ import time
 from typing import Any, Callable, Iterable
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
 from core.operators import OperatorCatalog
@@ -93,6 +93,7 @@ class SkillOverlay(QWidget):
         self._edit_mode = False
         self._scale = 1.0
         self._drag_offset: QPoint | None = None
+        self._drag_axis: str | None = None
         self._server_now: Callable[[], int] = lambda: int(time.time() * 1000)
         self._base_opacity = 0.30
         self._timer = QTimer(self)
@@ -137,14 +138,61 @@ class SkillOverlay(QWidget):
         if enabled == self._edit_mode:
             return
         self._edit_mode = enabled
+        self.setCursor(Qt.CursorShape.SizeAllCursor if enabled else Qt.CursorShape.ArrowCursor)
         self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, not enabled)
+        # 编辑时完全可见；退出恢复用户配置（默认 30%）。
         self.setWindowOpacity(1.0 if enabled else max(0.10, min(1.0, self._base_opacity)))
-        self.show()
+        if enabled:
+            self._drag_axis = None
+        if enabled and self.isVisible():
+            self.raise_()
         self.edit_mode_changed.emit(enabled)
 
     @property
     def edit_mode(self) -> bool:
         return self._edit_mode
+
+    def drag_handle_rect(self) -> QRect:
+        """编辑模式中心单一四向拖动手柄（28×28）。"""
+        size = 28
+        return QRect(self.width() // 2 - size // 2, self.height() // 2 - size // 2 - 4, size, size)
+
+    def _draw_cross_handle(self, painter: QPainter) -> None:
+        rect = self.drag_handle_rect()
+        painter.setPen(QPen(QColor("#f5a800"), 1))
+        painter.setBrush(QColor(24, 34, 53, 235))
+        painter.drawRoundedRect(rect, 7, 7)
+        center = rect.center()
+        cx, cy = center.x(), center.y()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#f5a800"))
+        # 横向/纵向连杆
+        painter.drawRoundedRect(QRect(cx - 9, cy - 2, 18, 4), 1, 1)
+        painter.drawRoundedRect(QRect(cx - 2, cy - 9, 4, 18), 1, 1)
+        # 四向实心箭头
+        for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+            path = QPainterPath()
+            if dx == 0:
+                tip = QPoint(cx, cy + dy * 10)
+                a = QPoint(cx - 5, cy + dy * 4)
+                b = QPoint(cx + 5, cy + dy * 4)
+            else:
+                tip = QPoint(cx + dx * 10, cy)
+                a = QPoint(cx + dx * 4, cy - 5)
+                b = QPoint(cx + dx * 4, cy + 5)
+            path.moveTo(tip)
+            path.lineTo(a)
+            path.lineTo(b)
+            path.closeSubpath()
+            painter.drawPath(path)
+        painter.setPen(QColor("#8b98ab"))
+        font = QFont(self.font())
+        font.setPointSize(7)
+        painter.setFont(font)
+        painter.drawText(
+            QRect(rect.left() - 20, rect.bottom() + 1, rect.width() + 40, 14),
+            Qt.AlignmentFlag.AlignHCenter, "拖动移动",
+        )
 
     def _content_height(self) -> int:
         scale = self._scale
@@ -219,20 +267,27 @@ class SkillOverlay(QWidget):
                     text,
                 )
             y += ROW_HEIGHT * scale
+        if self._edit_mode:
+            self._draw_cross_handle(painter)
         painter.end()
 
     # ---------- 编辑模式拖动 ----------
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if self._edit_mode and event.button() == Qt.MouseButton.LeftButton:
-            self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+        if not self._edit_mode or event.button() != Qt.MouseButton.LeftButton:
+            return
+        # 中心十字手柄：自由拖动（x/y 同时跟随）。
+        self._drag_axis = None
+        self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if self._edit_mode and self._drag_offset is not None:
-            self.move(event.globalPosition().toPoint() - self._drag_offset)
+        if not self._edit_mode or self._drag_offset is None:
+            return
+        self.move(event.globalPosition().toPoint() - self._drag_offset)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if self._drag_offset is not None:
             self._drag_offset = None
+            self._drag_axis = None
             self.position_changed.emit(self.x(), self.y())
 
 
