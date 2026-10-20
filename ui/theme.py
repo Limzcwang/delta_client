@@ -347,29 +347,31 @@ QCheckBox::indicator:checked, QRadioButton::indicator:checked {
     background-color: #f5a800; border: 1px solid #ffb91f;
 }
 QCheckBox::indicator:disabled { background-color: #131c2b; border-color: #1c2940; }
-QTabWidget::pane { border: 1px solid #24334e; border-radius: 8px; background: #131c2b; top: -1px; }
+QTabWidget::pane { border: 1px solid #24334e; border-radius: 0 8px 8px 8px; background: #131c2b; top: -1px; }
 QTabBar::tab {
-    background: transparent; color: #8b98ab; border: none;
-    padding: 10px 18px; margin-right: 4px; min-height: 24px;
+    background: transparent; color: #8b98ab;
+    border: 1px solid transparent; border-bottom: none;
+    border-top-left-radius: 6px; border-top-right-radius: 6px;
+    padding: 10px 18px; margin-right: 2px; min-height: 24px;
 }
-QTabBar::tab:hover { color: #e8eef7; }
-QTabBar::tab:selected { color: #f5a800; border-bottom: 2px solid #f5a800; }
+QTabBar::tab:hover { color: #e8eef7; background: #131c2b; }
+QTabBar::tab:selected {
+    background: #131c2b; color: #e8eef7;
+    border: 1px solid #24334e; border-bottom: none;
+}
 QTableWidget {
     background-color: #131c2b;
     alternate-background-color: #131c2b;
     border: 1px solid #24334e;
     border-radius: 8px;
     gridline-color: #1c2940;
-    selection-background-color: rgba(245, 168, 0, 0.16);
+    selection-background-color: #373224;
     selection-color: #e8eef7;
     outline: none;
 }
 QTableWidget::item { padding: 12px 14px; border-bottom: 1px solid #1c2940; }
-QTableWidget::item:selected {
-    background-color: rgba(245, 168, 0, 0.16);
-    color: #e8eef7;
-    border-left: 3px solid #f5a800;
-}
+QTableWidget::item:hover { background-color: #182235; }
+QTableWidget::item:selected { background-color: #373224; color: #e8eef7; }
 QHeaderView::section {
     background-color: #101827; color: #8b98ab; border: none;
     border-bottom: 1px solid #24334e; padding: 11px 14px;

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QRect, Qt, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
@@ -10,6 +11,9 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QTabWidget,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -19,6 +23,24 @@ from PySide6.QtWidgets import (
 from core.models import Room
 from core.room_list import room_key
 from ui.my_rooms_view import MyRoomsView
+
+
+
+class _RoomRowDelegate(QStyledItemDelegate):
+    """选中行：16% 琥珀底 + 仅首列 3px 左竖条（无列分隔线）。"""
+
+    def paint(self, painter, option, index) -> None:  # noqa: N802
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        if selected:
+            opt.state &= ~QStyle.StateFlag.State_Selected
+        super().paint(painter, opt, index)
+        if selected and index.column() == 0:
+            painter.fillRect(
+                QRect(option.rect.left(), option.rect.top() + 1, 3, option.rect.height() - 2),
+                QColor("#f5a800"),
+            )
 
 
 class RoomListView(QWidget):
@@ -117,6 +139,9 @@ class RoomListView(QWidget):
         self.table.setColumnWidth(0, 120)
         self.table.setColumnWidth(2, 80)
         self.table.setColumnWidth(3, 80)
+        self.table.setMinimumHeight(380)
+        self.table.setMaximumHeight(380)
+        self.table.setItemDelegate(_RoomRowDelegate(self.table))
         header_view = self.table.horizontalHeader()
         header_view.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         header_view.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -134,7 +159,8 @@ class RoomListView(QWidget):
         self.tabs.tabBar().setExpanding(False)
         self.tabs.addTab(self.public_tab, "公共房间")
         self.tabs.addTab(self.my_rooms, "我的房间")
-        root.addWidget(self.tabs, stretch=1)
+        root.addWidget(self.tabs, stretch=0)
+        root.addStretch(1)
 
         # 状态由主窗口 statusBar 统一展示；保留字段兼容旧逻辑
         self.status_label = QLabel("尚未加载房间")

@@ -77,6 +77,32 @@ class LobbyLayoutTests(unittest.TestCase):
             view.close()
             view.deleteLater()
 
+    def test_selected_row_delegate_and_table_height(self) -> None:
+        from ui.room_list_view import _RoomRowDelegate
+
+        view = RoomListView()
+        try:
+            self.assertEqual(380, view.table.minimumHeight())
+            self.assertEqual(380, view.table.maximumHeight())
+            self.assertIsInstance(view.table.itemDelegate(), _RoomRowDelegate)
+            self.assertIn("QTableWidget::item:hover", APP_STYLESHEET)
+        finally:
+            view.close()
+            view.deleteLater()
+
+    def test_tab_folder_style_and_private_text(self) -> None:
+        self.assertIn("QTabBar::tab:selected", APP_STYLESHEET)
+        selected_rule = APP_STYLESHEET.split("QTabBar::tab:selected", 1)[1].split("}", 1)[0]
+        self.assertIn("background: #131c2b", selected_rule)
+        self.assertNotIn("border-bottom: 2px", selected_rule)
+        view = RoomListView()
+        try:
+            view.update_rooms([Room.from_api({"id":"r","code":"PRV01","name":"私有房","has_password":True})])
+            self.assertEqual("私有", view.table.item(0, 3).text())
+        finally:
+            view.close()
+            view.deleteLater()
+
     def test_double_click_row_requests_join(self) -> None:
         view = RoomListView()
         joined: list[str] = []
