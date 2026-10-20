@@ -284,14 +284,33 @@ class RoomView(QWidget):
             self._render_members()
         self._refresh_owner_controls()
 
+    @staticmethod
+    def _merge_members(members: list[Member]) -> list[Member]:
+        """同一 user id 只保留一行；昵称取非空最新、online 取 OR。"""
+        merged: dict[str, Member] = {}
+        order: list[str] = []
+        for member in members:
+            key = str(member.id or "") or f"name:{member.display_name}"
+            current = merged.get(key)
+            if current is None:
+                merged[key] = member
+                order.append(key)
+                continue
+            merged[key] = replace(
+                current,
+                username=member.username or current.username,
+                nickname=member.nickname or current.nickname,
+                online=bool(current.online or member.online),
+                legacy_protocol=bool(current.legacy_protocol or member.legacy_protocol),
+            )
+        return [merged[key] for key in order]
+
     def set_members(self, members: list[Member]) -> None:
-        self._members = list(members)
+        self._members = self._merge_members(list(members))
         self._render_members()
 
     def add_member(self, member: Member) -> None:
-        if any(existing.id == member.id and existing.username == member.username for existing in self._members):
-            return
-        self._members.append(member)
+        self._members = self._merge_members([*self._members, member])
         self._render_members()
 
     def update_member(self, user_id: str, nickname: str) -> None:

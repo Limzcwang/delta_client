@@ -157,6 +157,11 @@ class MainWindow(QMainWindow):
         self._server_clock = ServerClock()
         self._skill_throttle = SkillShareThrottle(max_events=2, window_ms=1000)
         self._skill_share_enabled = False
+        self._membership_confirmed = False
+        self._last_membership_error = ""
+        self._last_membership_error_at = 0.0
+        self._rejoin_in_progress = False
+        self._rejoin_attempts = 0
         self._skill_sim_index = 0
         self._self_skill_state: SkillState | None = None
         self.operator_config = OperatorConfigManager()
@@ -886,7 +891,11 @@ class MainWindow(QMainWindow):
         self._current_room = room
         self._room_password = password
         self._ws_members_loaded = False
+        self._membership_confirmed = False
         self._last_members_refresh = 0.0
+        self._membership_confirmed = False
+        self._last_membership_error = ""
+        self._last_membership_error_at = 0.0
         self._timeline = ChatTimeline()
         self._chat_has_more = False
         self._chat_next_before = None
@@ -895,6 +904,9 @@ class MainWindow(QMainWindow):
         self._skills.clear()
         self._self_skill_state = None
         self._skill_share_enabled = False
+        self._membership_confirmed = False
+        self._last_membership_error = ""
+        self._last_membership_error_at = 0.0
         self._hud_service.reset_tracker()
         if hasattr(self, "_auto_controller"):
             self._auto_controller.stop()
@@ -1086,25 +1098,88 @@ class MainWindow(QMainWindow):
         if self._current_room is not None:
             self._refresh_members_http(self._current_room, fallback=True)
 
+    def _rejoin_current_room(self) -> None:
+        room = self._current_room
+        if room is None or self._ws is None or not getattr(self._ws, "connected", False):
+            return
+        self._membership_confirmed = False
+        try:
+            self._safe_submit(
+                self._ws.join_room(room.code, self._room_password),
+                on_error=self._on_rejoin_failed,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._on_rejoin_failed(exc)
+
+    def _start_http_rejoin(self, reason: BaseException | None = None) -> None:
+        room = self._current_room
+        if room is None or self._rejoin_in_progress:
+            return
+        if self._rejoin_attempts >= 2:
+            self._on_rejoin_failed(reason or RuntimeError("重新加入房间失败"))
+            return
+        self._rejoin_in_progress = True
+        self._rejoin_attempts += 1
+        try:
+            self._safe_submit(
+                self.api.join_room(room.code, self._room_password),
+                on_success=self._on_http_rejoin_success,
+                on_error=self._on_http_rejoin_failed,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._on_http_rejoin_failed(exc)
+
+    def _on_http_rejoin_success(self, room: Room) -> None:
+        self._current_room = room
+        self._rejoin_in_progress = False
+        self._membership_confirmed = False
+        self._system_message("HTTP 重新加入成功，正在恢复实时会话…")
+        if self._ws is not None and getattr(self._ws, "connected", False):
+            try:
+                self._safe_submit(
+                    self._ws.join_room(room.code, self._room_password),
+                    on_error=self._on_rejoin_failed,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._on_rejoin_failed(exc)
+        else:
+            self._on_rejoin_failed(RuntimeError("实时连接未建立"))
+
+    def _on_http_rejoin_failed(self, exc: BaseException) -> None:
+        self._rejoin_in_progress = False
+        if self._rejoin_attempts < 2:
+            self._start_http_rejoin(exc)
+            return
+        self._on_rejoin_failed(exc)
+
+    def _on_rejoin_failed(self, exc: BaseException) -> None:
+        self._membership_confirmed = False
+        self._rejoin_in_progress = False
+        self._rejoin_attempts = 0
+        self._system_message(f"重新加入房间失败：{to_user_message(exc)}，已返回大厅")
+        self._on_room_closed()
+
     def _on_ws_state(self, generation: int, state: str, info: Mapping[str, Any]) -> None:
         if generation != self._ws_generation or self._current_room is None:
             return
         detail = str(info.get("message") or info.get("error") or "")
         if state == "connected":
+            self._rejoin_attempts = 0
             self.room_view.set_connection_state("connected", "实时连接已建立")
             self._system_message("实时连接已建立")
             self._set_skill_server_time(info.get("server_time"))
-            room = self._current_room
-            if self._ws is not None and room is not None:
-                self._safe_submit(self._ws.join_room(room.code, self._room_password))
+            self._membership_confirmed = False
+            self._rejoin_current_room()
         elif state in ("connecting", "authenticating"):
             self.room_view.set_connection_state(state, detail or "正在连接")
         elif state == "waiting":
+            self._membership_confirmed = False
             delay = float(info.get("delay") or 0.0)
             self.room_view.set_connection_state("waiting", detail or f"{delay:.0f}s 后重连")
             self.room_view.set_status(f"连接中断，{delay:.0f}s 后自动重连", error=True)
             self._refresh_members_http(self._current_room, fallback=True)
         elif state == "reconnecting":
+            self._membership_confirmed = False
             self.room_view.set_connection_state("reconnecting", detail)
             if detail:
                 self.room_view.set_status(f"重连中：{detail}", error=True)
@@ -1123,6 +1198,7 @@ class MainWindow(QMainWindow):
         else:
             self.room_view.set_connection_state(state, detail)
             if state in ("error", "stopped"):
+                self._membership_confirmed = False
                 self._refresh_members_http(self._current_room, fallback=True)
 
     def _on_ws_message(self, generation: int, message: Mapping[str, Any]) -> None:
@@ -1142,6 +1218,10 @@ class MainWindow(QMainWindow):
         if self._current_room is None:
             return
         if mtype == "room_joined":
+            was_rejoining = self._rejoin_in_progress or self._rejoin_attempts > 0
+            self._membership_confirmed = True
+            self._rejoin_in_progress = False
+            self._rejoin_attempts = 0
             payload = message.get("room")
             if isinstance(payload, Mapping):
                 room = Room.from_api(payload)
@@ -1160,7 +1240,7 @@ class MainWindow(QMainWindow):
                 self.room_view.skill_panel.set_states(self._skills.states())
             self._sync_overlay_states()
             self._on_room_joined_canvas(message.get("canvas_snapshot"))
-            self.room_view.set_status("")
+            self.room_view.set_status("已重新加入房间" if was_rejoining else "")
         elif mtype == "skill_share_state":
             self._on_skill_share_state(message)
         elif mtype == "skill_share_removed":
@@ -2006,6 +2086,9 @@ class MainWindow(QMainWindow):
         if self._ws is None or not getattr(self._ws, "connected", False):
             self.room_view.set_status("实时连接未建立，技能状态未上报", error=True)
             return
+        if not self._membership_confirmed:
+            self.room_view.set_status("正在重新加入房间，技能状态暂缓上报")
+            return
         if not self._skill_throttle.allow(now_ms()):
             self.room_view.set_status("技能上报过快（本地限频 2 次/秒）", error=True)
             return
@@ -2233,6 +2316,10 @@ class MainWindow(QMainWindow):
             self.room_view.set_status("实时连接未建立，消息未发送", error=True)
             self.room_view.append_chat_input(text)
             return
+        if not self._membership_confirmed:
+            self.room_view.set_status("正在重新加入房间，消息暂缓发送")
+            self.room_view.append_chat_input(text)
+            return
         client_msg_id = make_client_msg_id()
         self._timeline.add_pending(
             client_msg_id, self._username(), text, now_ms(), self._user_id()
@@ -2390,7 +2477,26 @@ class MainWindow(QMainWindow):
     def _handle_ws_error(self, message: Mapping[str, Any]) -> None:
         code = str(message.get("code") or message.get("error_code") or "")
         text = str(message.get("message") or code or "未知错误")
-        self._timeline.add_system(f"服务端错误：{text}")
+        membership_error = code in ("NOT_ROOM_MEMBER", "ROOM_NOT_MEMBER") or any(
+            marker in text for marker in ("不在该房间", "还没有加入房间", "未加入房间", "not a member")
+        )
+        now = time.monotonic()
+        first_seen = not (
+            text == self._last_membership_error
+            and now - self._last_membership_error_at < 10.0
+        )
+        if first_seen:
+            self._last_membership_error = text
+            self._last_membership_error_at = now
+            self._timeline.add_system(
+                "连接状态已失效，正在重新加入房间…" if membership_error else f"服务端错误：{text}"
+            )
+        if membership_error:
+            self._membership_confirmed = False
+            if not self._rejoin_in_progress:
+                self._start_http_rejoin(RuntimeError(text))
+            self._render_chat()
+            return
         chat_reason = _CHAT_ERROR_REASONS.get(code)
         if chat_reason:
             failed = self._timeline.fail_all_pending(chat_reason)
