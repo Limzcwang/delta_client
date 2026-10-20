@@ -1768,12 +1768,18 @@ class MainWindow(QMainWindow):
         self._set_status(f"热键触发：{action}")
 
     def _on_test_hotkey(self, dialog: SettingsDialog) -> None:
+        if not self.session.is_logged_in:
+            return
         self._on_global_hotkey("toggle")
+        if self._hotkey_ready():
+            message = "热键触发成功：显示/隐藏悬浮窗"
+        else:
+            message = "热键已收到，但当前无游戏窗口（不会显示悬浮窗）"
         try:
-            dialog.set_hotkey_status("热键触发成功（显示/隐藏动作已执行）")
+            dialog.set_hotkey_status(message)
         except RuntimeError:
             pass
-        self._set_status("热键触发成功")
+        self._set_status(message)
 
     def _hotkey_ready(self) -> bool:
         if not self.session.is_logged_in:

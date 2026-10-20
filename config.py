@@ -41,7 +41,7 @@ LEGACY_HTTPS_SERVER_URL = "https://deltachat.icu:8443"
 LEGACY_HTTPS_WS_URL = "wss://deltachat.icu:8443/ws"
 DEFAULT_TIMEOUT = 15.0
 CONFIG_FILENAME = ".delta_client.json"
-APP_VERSION = "0.2.5"
+APP_VERSION = "0.2.6"
 __version__ = APP_VERSION
 CONFIG_ENV = "DELTA_CLIENT_CONFIG"
 

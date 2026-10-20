@@ -175,6 +175,22 @@ class RoomOverlayFixTests(unittest.TestCase):
         finally:
             self._close(window)
 
+    def test_test_hotkey_no_game_message(self) -> None:
+        window = self._window()
+        try:
+            messages = []
+            statuses = []
+            class Dialog:
+                def set_hotkey_status(self, text):
+                    messages.append(text)
+            window._hotkey_ready = lambda: False
+            window._set_status = lambda text: statuses.append(text)
+            window._on_test_hotkey(Dialog())
+            self.assertTrue(any("无游戏窗口" in text for text in messages))
+            self.assertTrue(statuses)
+        finally:
+            self._close(window)
+
     def test_no_game_does_not_show_overlay(self) -> None:
         window = self._window()
         try:
