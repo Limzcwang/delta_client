@@ -7,15 +7,6 @@ Item {
     id: page
 
     property int selectedTab: 0
-    property int selectedRow: 1
-
-    ListModel {
-        id: roomModel
-        ListElement { code: "AB12C"; name: "零号大坝 · 常规"; members: "4"; kind: "公开" }
-        ListElement { code: "K7M2P"; name: "航天基地 · 机密"; members: "3"; kind: "私有" }
-        ListElement { code: "Q4W8E"; name: "长弓溪谷 · 绝密"; members: "2"; kind: "公开" }
-        ListElement { code: "M9X2A"; name: "巴克什 · 常规"; members: "1"; kind: "公开" }
-    }
 
     Rectangle { anchors.fill: parent; color: Theme.bg }
 
@@ -40,7 +31,7 @@ Item {
         }
         Text {
             x: 0; y: 48
-            text: "服务器：https://deltachat.icu:8443  ·  双击行可直接加入"
+            text: "服务器：" + lobbyApi.serverText + "  ·  双击行可直接加入"
             color: Theme.muted
             font.family: Theme.fontFamily
             font.pixelSize: Theme.fontSizeSmall
@@ -55,12 +46,12 @@ Item {
             Rectangle {
                 width: 52; height: 24; radius: 12
                 color: "#1b3650"; border.color: Theme.blue; border.width: 1
-                Text { anchors.centerIn: parent; text: "LIVE"; color: "#d8ecff";
+                Text { anchors.centerIn: parent; text: lobbyApi.modeText; color: "#d8ecff";
                        font.family: Theme.fontFamily; font.pixelSize: 11; font.bold: true }
             }
             Text {
                 anchors.verticalCenter: parent.verticalCenter
-                text: "当前用户：DeltaQA01"; color: Theme.muted
+                text: "当前用户：" + lobbyApi.userName; color: Theme.muted
                 font.family: Theme.fontFamily; font.pixelSize: Theme.fontSizeBody
             }
             Rectangle { width: 1; height: 22; anchors.verticalCenter: parent.verticalCenter; color: Theme.border }
@@ -69,12 +60,14 @@ Item {
                 color: "transparent"; border.color: Theme.border
                 Text { anchors.centerIn: parent; text: "连接设置"; color: "#c8d3e1";
                        font.family: Theme.fontFamily; font.pixelSize: Theme.fontSizeSmall }
+                MouseArea { anchors.fill: parent; onClicked: lobbyApi.settings() }
             }
             Rectangle {
                 width: 94; height: Theme.buttonHeight; radius: Theme.radiusControl
                 color: "transparent"; border.color: Theme.blue
                 Text { anchors.centerIn: parent; text: "个人资料"; color: "#9ec9f2";
                        font.family: Theme.fontFamily; font.pixelSize: Theme.fontSizeSmall }
+                MouseArea { anchors.fill: parent; onClicked: lobbyApi.profile() }
             }
         }
     }
@@ -92,12 +85,14 @@ Item {
             color: "transparent"; border.color: Theme.border
             Text { anchors.centerIn: parent; text: "刷新列表"; color: "#c8d3e1";
                    font.family: Theme.fontFamily; font.pixelSize: Theme.fontSizeBody }
+            MouseArea { anchors.fill: parent; onClicked: lobbyApi.refresh() }
         }
         Rectangle {
             width: 104; height: Theme.buttonHeight; radius: Theme.radiusControl
             color: Theme.amber
             Text { anchors.centerIn: parent; text: "创建房间"; color: "#17130a";
                    font.family: Theme.fontFamily; font.pixelSize: Theme.fontSizeBody; font.bold: true }
+            MouseArea { anchors.fill: parent; onClicked: lobbyApi.create() }
         }
     }
 
@@ -117,7 +112,7 @@ Item {
             anchors.bottom: parent.bottom
             spacing: 2
             Repeater {
-                model: ["公共房间", "我的房间 (2)"]
+                model: ["公共房间", "我的房间 (" + lobbyApi.myRoomsCount + ")"]
                 delegate: Rectangle {
                     width: index === 0 ? 92 : 108
                     height: 38
@@ -195,15 +190,15 @@ Item {
             anchors.top: tableHeader.bottom
             anchors.bottom: parent.bottom
             clip: true
-            model: roomModel
+            model: page.selectedTab === 0 ? roomsModel : myRoomsModel
             delegate: Item {
                 width: roomList.width
                 height: Theme.rowHeight
                 Rectangle {
                     anchors.fill: parent
-                    color: page.selectedRow === index ? Qt.rgba(245, 168, 0, 0.16) : "transparent"
+                    color: lobbyApi.selectedCode === model.code ? Qt.rgba(245, 168, 0, 0.16) : "transparent"
                     Rectangle {
-                        visible: page.selectedRow === index
+                        visible: lobbyApi.selectedCode === model.code
                         width: 3; height: parent.height
                         anchors.left: parent.left
                         anchors.top: parent.top
@@ -235,7 +230,11 @@ Item {
                     text: model.kind; color: Theme.muted
                     font.family: Theme.fontFamily; font.pixelSize: Theme.fontSizeBody
                 }
-                MouseArea { anchors.fill: parent; onClicked: page.selectedRow = index }
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: lobbyApi.select_room(model.code)
+                    onDoubleClicked: lobbyApi.join(model.code)
+                }
             }
         }
     }
@@ -249,13 +248,13 @@ Item {
         Text {
             anchors.left: parent.left; anchors.leftMargin: Theme.pagePadding
             anchors.verticalCenter: parent.verticalCenter
-            text: "✓ 登录成功：DeltaQA01"; color: Theme.muted
+            text: lobbyApi.statusText; color: Theme.muted
             font.family: Theme.fontFamily; font.pixelSize: Theme.fontSizeSmall
         }
         Text {
             anchors.right: parent.right; anchors.rightMargin: Theme.pagePadding
             anchors.verticalCenter: parent.verticalCenter
-            text: "服务器：https://deltachat.icu:8443 ・ 模式：LIVE"; color: Theme.muted
+            text: "服务器：" + lobbyApi.serverText + " ・ 模式：" + lobbyApi.modeText; color: Theme.muted
             font.family: Theme.fontFamily; font.pixelSize: Theme.fontSizeSmall
         }
     }

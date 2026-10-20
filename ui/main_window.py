@@ -117,6 +117,7 @@ class MainWindow(QMainWindow):
         self.config = config
         self.ui_mode = str(ui_mode or "widgets")
         self.qml_lobby = None
+        self.qml_login = None
         self.session = session or Session(
             persist_token=config.persist_token,
             persist_path=default_session_path(),
@@ -201,15 +202,34 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.login_view)
         self.stack.addWidget(self.room_list_view)
         self.stack.addWidget(self.room_view)
-        if self.ui_mode == "qml-lobby":
+        if self.ui_mode in ("qml", "qml-lobby"):
             try:
                 from ui_qml.host import QmlLobbyView
 
                 self.qml_lobby = QmlLobbyView()
                 self.stack.addWidget(self.qml_lobby)
+                self.qml_lobby.refresh_requested.connect(self._refresh_lobby)
+                self.qml_lobby.create_requested.connect(self._on_create_room)
+                self.qml_lobby.join_requested.connect(self._on_join_room)
+                self.qml_lobby.settings_requested.connect(self._on_settings)
+                self.qml_lobby.profile_requested.connect(self._on_profile)
             except Exception as exc:  # noqa: BLE001 - QML 插件缺失时回退 Widgets
                 logger.warning("QML 大厅不可用，回退 Widgets：%s", exc)
                 self.qml_lobby = None
+        if self.ui_mode == "qml":
+            try:
+                from ui_qml.login_host import QmlLoginView
+
+                self.qml_login = QmlLoginView()
+                self.stack.addWidget(self.qml_login)
+                self.qml_login.bridge.login_requested.connect(self._on_login)
+                self.qml_login.bridge.register_requested.connect(self._on_register)
+                self.qml_login.bridge.history_selected.connect(self._on_saved_login_selected)
+                self.qml_login.bridge.history_delete_requested.connect(self._on_saved_login_delete)
+                self.qml_login.bridge.history_clear_requested.connect(self._on_saved_login_clear)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("QML 登录页不可用，回退 Widgets：%s", exc)
+                self.qml_login = None
 
         self.overlay = SkillOverlay()
         self.overlay.set_server_now(self._server_clock.now_ms)
@@ -334,14 +354,26 @@ class MainWindow(QMainWindow):
         self._auto_fill_saved_login()
         if message:
             self.login_view.show_error(message)
-        self.stack.setCurrentWidget(self.login_view)
+        if self.qml_login is not None:
+            self.qml_login.set_server_text(self.config.server_url, self.config.mode_label)
+            self.qml_login.set_busy(False)
+            self.qml_login.set_mode("login")
+            self.qml_login.set_saved_logins(self._saved_login_infos())
+            if message:
+                self.qml_login.show_error(message)
+            self.stack.setCurrentWidget(self.qml_login)
+        else:
+            self.stack.setCurrentWidget(self.login_view)
 
     # ---------- H2：历史账号 ----------
     def _saved_login_infos(self) -> list[SavedLoginInfo]:
         return self.saved_logins.infos()
 
     def _refresh_saved_login_view(self) -> None:
-        self.login_view.set_saved_logins(self._saved_login_infos())
+        infos = self._saved_login_infos()
+        self.login_view.set_saved_logins(infos)
+        if self.qml_login is not None:
+            self.qml_login.set_saved_logins(infos)
 
     def _auto_fill_saved_login(self) -> None:
         self._refresh_saved_login_view()
@@ -353,6 +385,8 @@ class MainWindow(QMainWindow):
         self.login_view.apply_saved_login(
             recent.username, password or "", expired=expired
         )
+        if self.qml_login is not None:
+            self.qml_login.apply_saved_login(recent.username, password or "", expired=expired)
 
     def _on_saved_login_selected(self, username: str) -> None:
         self.login_view.set_mode("login")
@@ -364,6 +398,8 @@ class MainWindow(QMainWindow):
         password = self.saved_logins.password_for(username)
         expired = bool(info is not None and info.has_password and info.expired and password is None)
         self.login_view.apply_saved_login(username, password or "", expired=expired)
+        if self.qml_login is not None:
+            self.qml_login.apply_saved_login(username, password or "", expired=expired)
         if password:
             self.login_view.focus_login_button()
         else:
@@ -389,6 +425,8 @@ class MainWindow(QMainWindow):
         if self.qml_lobby is not None:
             self.qml_lobby.set_user(self._username())
             self.qml_lobby.set_mode(self.config.use_mock, self.config.server_url)
+            self.qml_lobby.set_rooms(self.room_list_view._rooms)
+            self.qml_lobby.set_my_rooms(self.room_list_view.my_rooms.rooms)
             self.stack.setCurrentWidget(self.qml_lobby)
         else:
             self.stack.setCurrentWidget(self.room_list_view)
@@ -439,6 +477,8 @@ class MainWindow(QMainWindow):
     # ---------- 认证 ----------
     def _on_login(self, username: str, password: str) -> None:
         self.login_view.set_busy(True)
+        if self.qml_login is not None:
+            self.qml_login.set_busy(True)
         self.login_view.hide_messages()
         self._safe_submit(
             self.api.login(username, password),
@@ -450,6 +490,8 @@ class MainWindow(QMainWindow):
         self, result: LoginResult, username: str = "", password: str = ""
     ) -> None:
         self.login_view.set_busy(False)
+        if self.qml_login is not None:
+            self.qml_login.set_busy(False)
         self.session.set_login(result.token, result.user)
         account = str(result.user.get("username") or username or "").strip()
         if account and password:
@@ -466,6 +508,9 @@ class MainWindow(QMainWindow):
 
     def _on_login_failure(self, exc: BaseException, username: str = "") -> None:
         self.login_view.set_busy(False)
+        if self.qml_login is not None:
+            self.qml_login.set_busy(False)
+            self.qml_login.show_error(to_user_message(exc))
         message = to_user_message(exc)
         if (
             username
@@ -480,6 +525,8 @@ class MainWindow(QMainWindow):
 
     def _on_register(self, username: str, password: str) -> None:
         self.login_view.set_busy(True)
+        if self.qml_login is not None:
+            self.qml_login.set_busy(True)
         self.login_view.hide_messages()
         self._safe_submit(
             self.api.register(username, password),
@@ -489,6 +536,8 @@ class MainWindow(QMainWindow):
 
     def _on_register_success(self, data: Any, username: str) -> None:
         self.login_view.set_busy(False)
+        if self.qml_login is not None:
+            self.qml_login.set_busy(False)
         # B2b 的 v1 注册响应与登录一致（含 access_token），可直接自动登录
         token = extract_token(data)
         if token:
@@ -500,11 +549,17 @@ class MainWindow(QMainWindow):
         self.login_view.set_mode("login")
         self.login_view.show_success("注册成功，请使用新账号登录")
         self.login_view.prefill_username(username)
+        if self.qml_login is not None:
+            self.qml_login.set_mode("login")
+            self.qml_login.show_success("注册成功，请使用新账号登录")
         self._set_status("注册成功")
 
     def _on_register_failure(self, exc: BaseException) -> None:
         self.login_view.set_busy(False)
         self.login_view.show_error(to_user_message(exc))
+        if self.qml_login is not None:
+            self.qml_login.set_busy(False)
+            self.qml_login.show_error(to_user_message(exc))
 
     def _handle_ws_fatal(self, message: str) -> None:
         """顶号/认证失效：停止重连、清会话并回登录页。"""
@@ -545,6 +600,8 @@ class MainWindow(QMainWindow):
         self._my_rooms_loading = False
         rooms = list(getattr(page, "items", ()) or ())
         self.room_list_view.my_rooms.set_rooms(rooms)
+        if self.qml_lobby is not None:
+            self.qml_lobby.set_my_rooms(rooms)
         self._update_my_rooms_tab(len(rooms))
 
     def _on_my_rooms_failed(self, exc: BaseException, manual: bool = True) -> None:
@@ -581,14 +638,20 @@ class MainWindow(QMainWindow):
         if manual:
             self.room_list_view.set_loading(False)
         self.room_list_view.update_rooms(rooms)
+        if self.qml_lobby is not None:
+            self.qml_lobby.set_rooms(rooms)
         self._lobby_backoff.reset()
         self._lobby_timer.setInterval(5000)
         suffix = "（Mock 演示数据）" if self.config.use_mock else ""
         stamp = time.strftime("%H:%M:%S")
         if rooms:
-            self.room_list_view.set_status(f"共 {len(rooms)} 个公共房间{suffix} · 更新于 {stamp}")
+            text = f"共 {len(rooms)} 个公共房间{suffix} · 更新于 {stamp}"
+            self.room_list_view.set_status(text)
         else:
-            self.room_list_view.set_status(f"暂无公开房间{suffix}，可以创建一个")
+            text = f"暂无公开房间{suffix}，可以创建一个"
+            self.room_list_view.set_status(text)
+        if self.qml_lobby is not None:
+            self.qml_lobby.set_status(text)
 
     def _on_rooms_failed(self, exc: BaseException, manual: bool = True) -> None:
         self._rooms_loading = False
