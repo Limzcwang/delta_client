@@ -39,9 +39,12 @@ LEGACY_DEFAULT_SERVER_URL = "http://114.132.161.169:8000"
 LEGACY_WS_URL = "ws://114.132.161.169:8000/ws"
 LEGACY_HTTPS_SERVER_URL = "https://deltachat.icu:8443"
 LEGACY_HTTPS_WS_URL = "wss://deltachat.icu:8443/ws"
+AUTO_SAMPLE_MS_ALLOWED = (2000, 1000, 500)
+AUTO_SAMPLE_MS_MIN = 200
+AUTO_SAMPLE_MS_MAX = 5000
 DEFAULT_TIMEOUT = 15.0
 CONFIG_FILENAME = ".delta_client.json"
-APP_VERSION = "0.2.6"
+APP_VERSION = "0.2.7"
 __version__ = APP_VERSION
 CONFIG_ENV = "DELTA_CLIENT_CONFIG"
 
@@ -333,8 +336,8 @@ def load_config(
         auto_sample_ms = int(file_data.get("auto_sample_ms", 2000))
     except (TypeError, ValueError):
         auto_sample_ms = 2000
-    if auto_sample_ms not in (1000, 2000, 3000):
-        auto_sample_ms = 2000
+    if auto_sample_ms not in AUTO_SAMPLE_MS_ALLOWED:
+        auto_sample_ms = min(AUTO_SAMPLE_MS_MAX, max(AUTO_SAMPLE_MS_MIN, auto_sample_ms))
     capture_window_process = str(
         file_data.get("capture_window_process") or "DeltaForceClient-Win64-Shipping"
     ).strip()

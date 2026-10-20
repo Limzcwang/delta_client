@@ -26,7 +26,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from config import APP_VERSION, AppConfig, ConfigError, normalize_server_url, normalize_ws_url
+from config import (
+    APP_VERSION,
+    AUTO_SAMPLE_MS_ALLOWED,
+    AppConfig,
+    ConfigError,
+    normalize_server_url,
+    normalize_ws_url,
+)
 from core.models import Room
 from core.operators import OperatorCatalog, load_operator_catalog
 from state.saved_logins import SavedLoginInfo
@@ -440,7 +447,7 @@ class SettingsDialog(QDialog):
         interval_row = QHBoxLayout()
         interval_row.addWidget(QLabel("采样间隔"))
         self.auto_interval_combo = QComboBox()
-        for value in (2000, 1000, 500):
+        for value in AUTO_SAMPLE_MS_ALLOWED:
             self.auto_interval_combo.addItem(f"{value} ms", value)
         index = self.auto_interval_combo.findData(int(self._config.auto_sample_ms))
         self.auto_interval_combo.setCurrentIndex(max(0, index))

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 import asyncio
 from dataclasses import replace
 from typing import Any, Mapping
 
-from PySide6.QtCore import QEvent, QEventLoop, QTimer
+from PySide6.QtCore import QEvent, QEventLoop, QTimer, Qt
 from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -271,6 +272,13 @@ class MainWindow(QMainWindow):
                 logger.warning("QML 登录页不可用，回退 Widgets：%s", exc)
                 self.qml_login = None
 
+        self._ui_trace = str(os.environ.get("DELTA_UI_TRACE", "")).strip() == "1"
+        self._ui_trace_counts = {"paint": 0, "activation": 0, "show": 0, "hide": 0}
+        self._ui_trace_timer = QTimer(self)
+        self._ui_trace_timer.setInterval(500)
+        self._ui_trace_timer.timeout.connect(self._flush_ui_trace)
+        if self._ui_trace:
+            self._ui_trace_timer.start()
         self.overlay = SkillOverlay()
         self.overlay.set_server_now(self._server_clock.now_ms)
         self.overlay_controller = OverlayController(
@@ -513,7 +521,40 @@ class MainWindow(QMainWindow):
     def changeEvent(self, event: Any) -> None:  # noqa: N802 - Qt 覆盖
         if event.type() == QEvent.Type.ActivationChange:
             self._update_lobby_timer()
+            if getattr(self, "_ui_trace", False):
+                self._ui_trace_counts["activation"] += 1
+                logger.debug(
+                    "ui_trace activation active=%s visible=%s minimized=%s",
+                    self.isActiveWindow(), self.isVisible(), self.isMinimized(),
+                )
         super().changeEvent(event)
+
+    def paintEvent(self, event: Any) -> None:  # noqa: N802 - Qt 覆盖
+        if getattr(self, "_ui_trace", False):
+            self._ui_trace_counts["paint"] += 1
+        super().paintEvent(event)
+
+    def showEvent(self, event: Any) -> None:  # noqa: N802 - Qt 覆盖
+        if getattr(self, "_ui_trace", False):
+            self._ui_trace_counts["show"] += 1
+            logger.debug("ui_trace show active=%s", self.isActiveWindow())
+        super().showEvent(event)
+
+    def hideEvent(self, event: Any) -> None:  # noqa: N802 - Qt 覆盖
+        if getattr(self, "_ui_trace", False):
+            self._ui_trace_counts["hide"] += 1
+            logger.debug("ui_trace hide")
+        super().hideEvent(event)
+
+    def _flush_ui_trace(self) -> None:
+        if not getattr(self, "_ui_trace", False):
+            return
+        if any(self._ui_trace_counts.values()):
+            logger.info("ui_trace 500ms paint=%s activation=%s show=%s hide=%s active=%s",
+                        self._ui_trace_counts["paint"], self._ui_trace_counts["activation"],
+                        self._ui_trace_counts["show"], self._ui_trace_counts["hide"],
+                        self.isActiveWindow())
+            self._ui_trace_counts.update(paint=0, activation=0, show=0, hide=0)
 
     # ---------- 认证 ----------
     def _on_login(self, username: str, password: str) -> None:
@@ -1744,8 +1785,16 @@ class MainWindow(QMainWindow):
         self._hotkey_failures = self.hotkeys.register_all(
             str(self.config.shortcut_toggle), str(self.config.shortcut_edit)
         )
+        registered = self.hotkeys.registered_actions
+        # F4：全局成功时禁用应用内 QShortcut，避免同键位双触发；失败才回退启用。
+        self._toggle_shortcut.setEnabled("toggle" not in registered)
+        self._edit_shortcut.setEnabled("edit" not in registered)
+        logger.debug(
+            "hotkey shortcuts enabled toggle=%s edit=%s",
+            self._toggle_shortcut.isEnabled(), self._edit_shortcut.isEnabled(),
+        )
         if self._hotkey_failures:
-            logger.info("全局快捷键注册失败，保留应用内 QShortcut：%s", self._hotkey_failures)
+            logger.info("全局快捷键注册失败，启用应用内 QShortcut：%s", self._hotkey_failures)
 
     def _on_global_hotkey(self, action: str) -> None:
         # 未登录阶段静默忽略：不提示、不显示、不记错误日志
@@ -2878,11 +2927,29 @@ class MainWindow(QMainWindow):
         dialog.set_server_migrated(self.config.server_migrated)
         dialog.set_operator_recognition_status(self._operator_recognition_text)
         dialog.tabs.setCurrentIndex(max(0, min(int(start_tab), dialog.tabs.count() - 1)))
-        self.overlay_controller.pause("settings")
+        # F3：应用级模态 + 不删除 + 去掉置顶，避免对话框/主窗口重绘抖动。
+        dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowType.WindowStaysOnTopHint)
+        logger.debug(
+            "settings before exec active=%s visible=%s minimized=%s overlay_enabled=%s",
+            self.isActiveWindow(), self.isVisible(), self.isMinimized(),
+            self.overlay_controller.enabled,
+        )
+        # F1：模态期间彻底停掉 overlay（stop 会 hide + enabled False），结束后按原状态恢复。
+        overlay_was_enabled = bool(self.overlay_controller.enabled)
+        self.overlay_controller.stop()
         try:
             accepted = dialog.exec() == QDialog.DialogCode.Accepted
         finally:
-            self.overlay_controller.resume()
+            if overlay_was_enabled:
+                self.overlay_controller.start()
+                self.overlay_controller.follow(force=True)
+            logger.debug(
+                "settings after exec active=%s visible=%s minimized=%s overlay_enabled=%s",
+                self.isActiveWindow(), self.isVisible(), self.isMinimized(),
+                self.overlay_controller.enabled,
+            )
         self.settings_dialog = None
         if not accepted:
             return

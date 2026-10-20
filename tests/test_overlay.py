@@ -129,9 +129,11 @@ class OverlayTests(unittest.TestCase):
             ctl.pause("settings")
             self.assertTrue(ctl.paused)
             self.assertFalse(ctl._timer.isActive())
+            self.assertFalse(self.overlay.isVisible())
             ctl.resume(delay_ms=0)
             self.assertFalse(ctl.paused)
             self.assertTrue(ctl._timer.isActive())
+            self.assertTrue(self.overlay.isVisible())
         finally:
             ctl.stop()
 
@@ -141,10 +143,17 @@ class OverlayTests(unittest.TestCase):
         try:
             ctl.start()
             with mock.patch("ui.skill_overlay.QApplication.activeModalWidget", return_value=object()):
-                with mock.patch("ui.skill_overlay._apply_win32_topmost") as topmost:
+                with mock.patch("ui.skill_overlay._apply_win32_topmost") as topmost, mock.patch.object(
+                    self.overlay, "hide", wraps=self.overlay.hide
+                ) as hide:
+                    ctl.follow(force=True)
                     ctl.follow(force=True)
                     topmost.assert_not_called()
+                    self.assertEqual(1, hide.call_count)
             self.assertIn("模态", ctl.last_reason)
+            self.assertFalse(self.overlay.isVisible())
+            ctl.follow(force=True)
+            self.assertTrue(self.overlay.isVisible())
         finally:
             ctl.stop()
 

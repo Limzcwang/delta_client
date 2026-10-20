@@ -15,7 +15,7 @@ class VersionTests(unittest.TestCase):
         with redirect_stdout(output):
             code = entry.main(["--version"])
         self.assertEqual(0, code)
-        self.assertIn("0.2.6", output.getvalue())
+        self.assertIn("0.2.7", output.getvalue())
 
 
 if __name__ == "__main__":

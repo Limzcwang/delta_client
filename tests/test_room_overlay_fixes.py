@@ -78,6 +78,18 @@ class _FakeSettingsDialog:
     def __getattr__(self, name):
         return lambda *args, **kwargs: None
 
+    def setWindowModality(self, *_args):
+        pass
+
+    def setAttribute(self, *_args):
+        pass
+
+    def windowFlags(self):
+        return Qt.WindowType.Dialog
+
+    def setWindowFlags(self, *_args):
+        pass
+
     def exec(self):
         return QDialog.DialogCode.Accepted
 
@@ -125,6 +137,24 @@ class RoomOverlayFixTests(unittest.TestCase):
                 window._open_settings()
                 leave.assert_not_called()
                 self.assertIs(window.stack.currentWidget(), window.room_view)
+        finally:
+            self._close(window)
+
+    def test_global_hotkey_success_disables_shortcuts(self) -> None:
+        window = self._window()
+        try:
+            window.hotkeys._registered = {"toggle": 1, "edit": 2}
+            window.hotkeys._failed = {}
+            with mock.patch.object(window.hotkeys, "register_all", return_value={}):
+                window._register_hotkeys()
+            self.assertFalse(window._toggle_shortcut.isEnabled())
+            self.assertFalse(window._edit_shortcut.isEnabled())
+            window.hotkeys._registered = {}
+            window.hotkeys._failed = {"toggle": "占用"}
+            with mock.patch.object(window.hotkeys, "register_all", return_value={"toggle": "占用"}):
+                window._register_hotkeys()
+            self.assertTrue(window._toggle_shortcut.isEnabled())
+            self.assertTrue(window._edit_shortcut.isEnabled())
         finally:
             self._close(window)
 
