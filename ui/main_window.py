@@ -235,7 +235,7 @@ class MainWindow(QMainWindow):
                     lambda server, ws: self._on_test_connection(self.qml_conn, server, ws)
                 )
                 self.qml_conn.save_requested.connect(self._on_qml_conn_save)
-                self.qml_conn.reset_requested.connect(lambda: self.qml_conn.set_config(self.config))
+                self.qml_conn.reset_requested.connect(lambda: self.qml_conn.set_config(AppConfig()))
                 self.qml_profile.back_requested.connect(self._show_rooms)
                 self.qml_profile.nickname_requested.connect(
                     lambda nickname: self._on_nickname_save(self.qml_profile, nickname)
