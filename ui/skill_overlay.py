@@ -28,6 +28,7 @@ SWP_NOSIZE = 0x0001
 SWP_NOACTIVATE = 0x0010
 GWL_EXSTYLE = -20
 WS_EX_NOACTIVATE = 0x08000000
+WS_EX_TRANSPARENT = 0x00000020
 WS_EX_TOOLWINDOW = 0x00000080
 
 
@@ -71,6 +72,25 @@ def _apply_win32_topmost(widget: Any) -> bool:
         return False
 
 
+def _set_native_click_through(widget: Any, enabled: bool) -> None:
+    """切换 WS_EX_TRANSPARENT；不改 Qt WindowFlags，避免原生窗口重建。"""
+    if sys.platform != "win32" or not _widget_alive(widget):
+        return
+    try:
+        user32 = ctypes.windll.user32
+        hwnd = int(widget.winId())
+        getter = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
+        setter = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
+        style = int(getter(hwnd, GWL_EXSTYLE))
+        if enabled:
+            style |= WS_EX_TRANSPARENT
+        else:
+            style &= ~WS_EX_TRANSPARENT
+        setter(hwnd, GWL_EXSTYLE, style)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("悬浮窗点击穿透切换失败：%s", exc)
+
+
 class SkillOverlay(QWidget):
     """紧凑技能条：每队友一行，三槽 CD；默认鼠标穿透，编辑模式可拖动。"""
 
@@ -98,6 +118,7 @@ class SkillOverlay(QWidget):
         self._drag_axis: str | None = None
         self._server_now: Callable[[], int] = lambda: int(time.time() * 1000)
         self._base_opacity = 0.30
+        self._click_through = True
         self._timer = QTimer(self)
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self.update)
@@ -139,15 +160,24 @@ class SkillOverlay(QWidget):
         enabled = bool(enabled)
         if enabled == self._edit_mode:
             return
+        before_visible = self.isVisible()
+        before_flags = int(self.windowFlags())
         self._edit_mode = enabled
         self.setCursor(Qt.CursorShape.SizeAllCursor if enabled else Qt.CursorShape.ArrowCursor)
-        self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, not enabled)
-        # 编辑时完全可见；退出恢复用户配置（默认 30%）。
+        # E1：运行时绝不改 Qt WindowFlags（会销毁/重建原生窗口）；用原生扩展样式切穿透。
+        self._click_through = not enabled
+        _set_native_click_through(self, not enabled)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not enabled)
         self.setWindowOpacity(1.0 if enabled else max(0.10, min(1.0, self._base_opacity)))
         if enabled:
             self._drag_axis = None
+            if not self.isVisible():
+                self.show()
         self.update()
-        logger.info("overlay edit_mode=%s visible=%s opacity=%.2f", enabled, self.isVisible(), self.opacity)
+        logger.info(
+            "overlay edit_mode=%s visible_before=%s visible_after=%s opacity=%.2f flags_changed=%s",
+            enabled, before_visible, self.isVisible(), self.opacity, int(self.windowFlags()) != before_flags,
+        )
         self.edit_mode_changed.emit(enabled)
 
     @property
@@ -244,6 +274,8 @@ class SkillOverlay(QWidget):
                 Qt.AlignmentFlag.AlignCenter,
                 self.status,
             )
+            if self._edit_mode:
+                self._draw_cross_handle(painter)
             painter.end()
             return
 

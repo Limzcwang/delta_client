@@ -377,9 +377,10 @@ class MainWindow(QMainWindow):
         self.statusBar().clearMessage()
 
     def _refresh_status_bar(self) -> None:
-        self._server_label.setText(
-            f"服务器：{self.config.server_url}  ·  模式：{self.config.mode_label}"
-        )
+        server_text = f"服务器：{self.config.server_url}  ·  模式：{self.config.mode_label}"
+        self._server_label.setText(server_text)
+        if hasattr(self, "room_list_view"):
+            self.room_list_view.set_server_status(server_text)
 
     def _safe_submit(self, coro: Any, on_success=None, on_error=None) -> Any:
         try:
@@ -770,7 +771,7 @@ class MainWindow(QMainWindow):
     def _update_my_rooms_tab(self, count: int | None = None) -> None:
         rooms = self.room_list_view.my_rooms.rooms
         total = len(rooms) if count is None else int(count)
-        title = f"我的房间 ({total})" if total else "我的房间"
+        title = f"我的房间 ({total})"
         self.room_list_view.tabs.setTabText(1, title)
 
     def _refresh_rooms(self, manual: bool = True) -> None:
@@ -1845,13 +1846,26 @@ class MainWindow(QMainWindow):
         if not self.session.is_logged_in:
             return
         enabled = not self.overlay.edit_mode
-        if enabled and self._find_game_window() is None:
-            self.overlay.hide()
-            self._set_status("等待游戏窗口后再进入编辑模式")
-            self.room_view.set_status("等待游戏窗口后再进入编辑模式")
-            return
-        self.overlay.set_edit_mode(enabled)
-        message = "悬浮窗编辑模式：可拖动，退出后恢复鼠标穿透" if enabled else "悬浮窗已恢复鼠标穿透"
+        if enabled:
+            has_game = self._find_game_window() is not None
+            # E2：无游戏窗口也允许进入编辑预览，不直接隐藏。
+            if not self.overlay.isVisible():
+                if self.config.overlay_x is not None and self.config.overlay_y is not None:
+                    self.overlay.move(int(self.config.overlay_x), int(self.config.overlay_y))
+                else:
+                    screen_w, screen_h = self._screen_size()
+                    self.overlay.move(max(20, screen_w - self.overlay.width() - 40), max(20, screen_h // 4))
+                self.overlay.show()
+            self.overlay.set_edit_mode(True)
+            message = "悬浮窗编辑模式：可拖动，退出后恢复鼠标穿透" if has_game else "预览模式，未检测到游戏窗口"
+        else:
+            self.overlay.set_edit_mode(False)
+            if self._find_game_window() is None:
+                self.overlay.hide()
+                self._overlay_visible = False
+                message = "已退出编辑（无游戏窗口，悬浮窗已隐藏）"
+            else:
+                message = "悬浮窗已恢复鼠标穿透"
         logger.info("overlay edit toggle enabled=%s visible=%s", enabled, self.overlay.isVisible())
         self._set_status(message)
         self.room_view.set_status(message)

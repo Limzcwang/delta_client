@@ -196,7 +196,7 @@ Item {
                 height: Theme.rowHeight
                 Rectangle {
                     anchors.fill: parent
-                    color: lobbyApi.selectedCode === model.code ? Qt.rgba(245, 168, 0, 0.16) : "transparent"
+                    color: lobbyApi.selectedCode === model.code ? "#373224" : "transparent"
                     Rectangle {
                         visible: lobbyApi.selectedCode === model.code
                         width: 3; height: parent.height
