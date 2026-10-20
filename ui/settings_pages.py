@@ -49,7 +49,7 @@ class _PageShell(QWidget):
         self.title_label.setObjectName("PageTitle")
         self.hint_label = QLabel(hint)
         self.hint_label.setObjectName("Hint")
-        self.hint_label.setWordWrap(True)
+        self.hint_label.setWordWrap(False)
         header_layout.addWidget(self.back_button)
         header_layout.addWidget(self.title_label)
         header_layout.addStretch(1)
@@ -94,35 +94,48 @@ class ConnectionPage(_PageShell):
     saved = Signal(object)
 
     def __init__(self, config: AppConfig, parent: QWidget | None = None) -> None:
-        super().__init__("连接设置", "配置保存到 %APPDATA%\\DeltaClient\\config.json", parent)
+        super().__init__("连接设置", "独立页面", parent)
         self._config = config
         self._build()
         self.set_config(config)
 
     def _build(self) -> None:
+        card = QFrame()
+        card.setObjectName("Card")
+        self.card_layout = QVBoxLayout(card)
+        self.card_layout.setContentsMargins(22, 22, 22, 24)
+        self.card_layout.setSpacing(10)
+        card_title = QLabel("服务器连接")
+        card_title.setObjectName("SectionTitle")
+        card_sub = QLabel("连接配置保存到 %APPDATA%\\DeltaClient\\config.json")
+        card_sub.setObjectName("Hint")
+        card_sub.setWordWrap(False)
+        self.card_layout.addWidget(card_title)
+        self.card_layout.addWidget(card_sub)
+        self.form_layout.addWidget(card)
         self.server_migrated_label = QLabel("已切换到 HTTPS 服务器（旧 HTTP 默认地址已自动迁移）")
         self.server_migrated_label.setObjectName("Hint")
         self.server_migrated_label.setStyleSheet("color: #5fc98e;")
         self.server_migrated_label.setWordWrap(True)
         self.server_migrated_label.hide()
-        self.form_layout.addWidget(self.server_migrated_label)
+        self.card_layout.addWidget(self.server_migrated_label)
 
-        self.form_layout.addWidget(self._add_field_label("HTTP(S) 服务器地址"))
+        self.card_layout.addWidget(self._add_field_label("HTTP(S) 服务器地址"))
         self.server_edit = QLineEdit()
         self.server_edit.setPlaceholderText("https://deltachat.icu:8443")
-        self.form_layout.addWidget(self.server_edit)
+        self.card_layout.addWidget(self.server_edit)
 
-        self.form_layout.addWidget(
+        self.card_layout.addWidget(
             self._add_field_label("WebSocket 地址（留空则自动推导为 ws(s)://host/ws）")
         )
         self.ws_edit = QLineEdit()
         self.ws_edit.setPlaceholderText("留空 = 自动推导 ws://<host>:8000/ws")
-        self.form_layout.addWidget(self.ws_edit)
+        self.card_layout.addWidget(self.ws_edit)
 
         self.mock_check = QCheckBox("使用内置 Mock 后端（不联网，用于后端未就绪时演示）")
-        self.form_layout.addWidget(self.mock_check)
+        self.card_layout.addWidget(self.mock_check)
         self.save_token_check = QCheckBox("登录后把 token 保存到本机（不保存密码）")
-        self.form_layout.addWidget(self.save_token_check)
+        self.card_layout.addWidget(self.save_token_check)
 
         test_row = QHBoxLayout()
         self.test_button = QPushButton("测试连接")
@@ -133,24 +146,24 @@ class ConnectionPage(_PageShell):
         )
         test_row.addWidget(self.test_button)
         test_row.addStretch(1)
-        self.form_layout.addLayout(test_row)
+        self.card_layout.addLayout(test_row)
 
         self.test_result_label = QLabel()
         self.test_result_label.setObjectName("Hint")
         self.test_result_label.setWordWrap(True)
         self.test_result_label.hide()
-        self.form_layout.addWidget(self.test_result_label)
+        self.card_layout.addWidget(self.test_result_label)
 
         hint = QLabel("「测试连接」会请求 /health 与 /api/v1/rooms?page=1，并用当前登录 token 验证鉴权。")
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
-        self.form_layout.addWidget(hint)
+        self.card_layout.addWidget(hint)
 
         self.error_label = QLabel()
         self.error_label.setObjectName("ErrorBanner")
         self.error_label.setWordWrap(True)
         self.error_label.hide()
-        self.form_layout.addWidget(self.error_label)
+        self.card_layout.addWidget(self.error_label)
 
         self.reset_button = QPushButton("恢复默认")
         self.reset_button.setObjectName("Text")
@@ -165,6 +178,8 @@ class ConnectionPage(_PageShell):
         self.footer_layout.addStretch(1)
         self.footer_layout.addWidget(self.cancel_button)
         self.footer_layout.addWidget(self.save_button)
+
+        self.form_layout.addStretch(1)
 
     def set_config(self, config: AppConfig) -> None:
         self._config = config
@@ -233,18 +248,36 @@ class ProfilePage(_PageShell):
     saved = Signal()
 
     def __init__(self, account: str = "", nickname: str = "", parent: QWidget | None = None) -> None:
-        super().__init__("个人资料", "账号只在本页对自己可见", parent)
+        super().__init__("个人资料", "仅自己可见", parent)
         self._build()
         self.set_account(account)
         self.set_nickname(nickname)
 
     def _build(self) -> None:
-        self.account_label = QLabel("账号：-（仅自己可见）")
-        self.account_label.setObjectName("Muted")
-        self.account_label.setStyleSheet("color: rgba(232,238,247,0.55);")
-        self.form_layout.addWidget(self.account_label)
+        card = QFrame()
+        card.setObjectName("Card")
+        self.card_layout = QVBoxLayout(card)
+        self.card_layout.setContentsMargins(22, 22, 22, 24)
+        self.card_layout.setSpacing(10)
+        card_title = QLabel("账号信息")
+        card_title.setObjectName("SectionTitle")
+        card_sub = QLabel("账号只在本人资料页可见；房间成员、聊天、加入/离开提示统一显示昵称。")
+        card_sub.setObjectName("Hint")
+        card_sub.setWordWrap(False)
+        self.card_layout.addWidget(card_title)
+        self.card_layout.addWidget(card_sub)
+        self.form_layout.addWidget(card)
+        self.form_layout.addStretch(1)
 
-        self.form_layout.addWidget(self._add_field_label("昵称（1–20 字符，展示给队友）"))
+        self.account_label = QLabel("账号（仅自己可见）")
+        self.account_label.setObjectName("FieldLabel")
+        self.card_layout.addWidget(self.account_label)
+        self.account_edit = QLineEdit()
+        self.account_edit.setReadOnly(True)
+        self.account_edit.setEnabled(False)
+        self.card_layout.addWidget(self.account_edit)
+
+        self.card_layout.addWidget(self._add_field_label("昵称（1–20 字符，展示给队友）"))
         row = QHBoxLayout()
         self.nickname_edit = QLineEdit()
         self.nickname_edit.setPlaceholderText("例如：老王的队友")
@@ -253,27 +286,27 @@ class ProfilePage(_PageShell):
         self.nickname_save_button.clicked.connect(self._on_save_nickname)
         row.addWidget(self.nickname_edit, 1)
         row.addWidget(self.nickname_save_button)
-        self.form_layout.addLayout(row)
+        self.card_layout.addLayout(row)
         self.nickname_result_label = QLabel()
         self.nickname_result_label.setObjectName("Hint")
         self.nickname_result_label.setWordWrap(True)
         self.nickname_result_label.hide()
-        self.form_layout.addWidget(self.nickname_result_label)
+        self.card_layout.addWidget(self.nickname_result_label)
 
         divider = QFrame()
         divider.setObjectName("Divider")
         divider.setFixedHeight(1)
-        self.form_layout.addWidget(divider)
+        self.card_layout.addWidget(divider)
 
         self.password_reveal_button = QPushButton("修改密码")
-        self.password_reveal_button.setObjectName("Green")
-        self.password_reveal_button.setFixedWidth(180)
+        self.password_reveal_button.setObjectName("GreenCompact")
+        self.password_reveal_button.setFixedHeight(32)
         self.password_reveal_button.clicked.connect(self._show_password_form)
         reveal_row = QHBoxLayout()
         reveal_row.addStretch(1)
         reveal_row.addWidget(self.password_reveal_button)
         reveal_row.addStretch(1)
-        self.form_layout.addLayout(reveal_row)
+        self.card_layout.addLayout(reveal_row)
 
         self.password_section = QWidget()
         section = QVBoxLayout(self.password_section)
@@ -314,7 +347,7 @@ class ProfilePage(_PageShell):
         self.password_result_label.hide()
         section.addWidget(self.password_result_label)
         self.password_section.hide()
-        self.form_layout.addWidget(self.password_section)
+        self.card_layout.addWidget(self.password_section)
 
         self.logout_button = QPushButton("退出登录")
         self.logout_button.setObjectName("Text")
@@ -333,7 +366,7 @@ class ProfilePage(_PageShell):
 
     # ---------- 对外/兼容旧设置页接口 ----------
     def set_account(self, account: str) -> None:
-        self.account_label.setText(f"账号：{account or '-'}（仅自己可见）")
+        self.account_edit.setText(str(account or ""))
 
     def set_nickname(self, nickname: str) -> None:
         self.nickname_edit.setText(nickname or "")

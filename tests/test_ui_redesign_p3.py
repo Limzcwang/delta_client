@@ -58,7 +58,8 @@ class SettingsPageTests(unittest.TestCase):
             page.password_cancel_button.click()
             self.assertTrue(page.password_section.isHidden())
             self.assertFalse(page.password_reveal_button.isHidden())
-            self.assertEqual("DeltaQA01", page.account_label.text().split("：", 1)[1].split("（", 1)[0])
+            self.assertEqual("DeltaQA01", page.account_edit.text())
+            self.assertFalse(page.account_edit.isEnabled())
         finally:
             page.close()
             page.deleteLater()

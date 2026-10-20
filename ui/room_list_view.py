@@ -6,11 +6,13 @@ from PySide6.QtCore import QRect, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QButtonGroup,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QPushButton,
     QTabWidget,
+    QStackedWidget,
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
@@ -34,13 +36,75 @@ class _RoomRowDelegate(QStyledItemDelegate):
         opt = QStyleOptionViewItem(option)
         self.initStyleOption(opt, index)
         if selected:
-            opt.state &= ~QStyle.StateFlag.State_Selected
+            opt.state &= ~(QStyle.StateFlag.State_Selected | QStyle.StateFlag.State_HasFocus)
+            opt.showDecorationSelected = False
         super().paint(painter, opt, index)
         if selected and index.column() == 0:
             painter.fillRect(
                 QRect(option.rect.left(), option.rect.top() + 1, 3, option.rect.height() - 2),
                 QColor("#f5a800"),
             )
+
+
+class _LobbyTabs(QWidget):
+    """自定义文件夹 Tab（QPushButton+QStackedWidget），避免 Fusion TabBar 白基线。"""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._labels: list[str] = []
+        self._buttons: list[QPushButton] = []
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
+        self._stack = QStackedWidget()
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        bar = QHBoxLayout()
+        bar.setContentsMargins(0, 0, 0, 0)
+        bar.setSpacing(2)
+        bar.addStretch(1)
+        self._bar_layout = bar
+        root.addLayout(bar)
+        root.addWidget(self._stack, 1)
+
+    def addTab(self, widget: QWidget, label: str) -> int:
+        index = self._stack.addWidget(widget)
+        button = QPushButton(label)
+        button.setObjectName("LobbyTab")
+        button.setCheckable(True)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._group.addButton(button, index)
+        button.clicked.connect(lambda _checked=False, i=index: self.setCurrentIndex(i))
+        # 插到 stretch 前面
+        self._bar_layout.insertWidget(self._bar_layout.count() - 1, button)
+        self._buttons.append(button)
+        self._labels.append(label)
+        if index == 0:
+            self.setCurrentIndex(0)
+        return index
+
+    def count(self) -> int:
+        return len(self._labels)
+
+    def tabText(self, index: int) -> str:
+        return self._labels[index] if 0 <= index < len(self._labels) else ""
+
+    def setTabText(self, index: int, text: str) -> None:
+        if 0 <= index < len(self._labels):
+            self._labels[index] = str(text)
+            self._buttons[index].setText(str(text))
+
+    def currentIndex(self) -> int:
+        return self._stack.currentIndex()
+
+    def setCurrentIndex(self, index: int) -> None:
+        if not (0 <= index < len(self._labels)):
+            return
+        self._stack.setCurrentIndex(index)
+        self._buttons[index].setChecked(True)
+
+    def widget(self, index: int) -> QWidget | None:
+        return self._stack.widget(index)
 
 
 class RoomListView(QWidget):
@@ -123,6 +187,7 @@ class RoomListView(QWidget):
 
         self.table = QTableWidget(0, self.COLUMNS)
         self.table.setHorizontalHeaderLabels(["房间号", "房间名", "人数", "类型"])
+        self.table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -154,9 +219,7 @@ class RoomListView(QWidget):
         public_layout.setContentsMargins(0, 10, 0, 0)
         public_layout.addWidget(self.table)
         self.my_rooms = MyRoomsView()
-        self.tabs = QTabWidget()
-        self.tabs.setDocumentMode(True)
-        self.tabs.tabBar().setExpanding(False)
+        self.tabs = _LobbyTabs()
         self.tabs.addTab(self.public_tab, "公共房间")
         self.tabs.addTab(self.my_rooms, "我的房间")
         root.addWidget(self.tabs, stretch=0)

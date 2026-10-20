@@ -371,7 +371,8 @@ QTableWidget {
 }
 QTableWidget::item { padding: 12px 14px; border-bottom: 1px solid #1c2940; }
 QTableWidget::item:hover { background-color: #182235; }
-QTableWidget::item:selected { background-color: #373224; color: #e8eef7; }
+QTableWidget::item:selected { background-color: #373224; color: #e8eef7; border: none; }
+QTableWidget::item:focus { border: none; }
 QHeaderView::section {
     background-color: #101827; color: #8b98ab; border: none;
     border-bottom: 1px solid #24334e; padding: 11px 14px;
@@ -399,6 +400,23 @@ QFrame#PageHeader { background: #101827; border-bottom: 1px solid #24334e; }
 QFrame#PageFooter { background: #101827; border-top: 1px solid #24334e; }
 QLabel#FieldLabel { color: #c8d3e1; font-size: 12px; font-weight: 600; }
 QFrame#Divider { background: #24334e; border: none; max-height: 1px; }
+
+QPushButton#LobbyTab {
+    background: transparent; color: #8b98ab;
+    border: 1px solid transparent; border-bottom: none;
+    border-top-left-radius: 6px; border-top-right-radius: 6px;
+    min-height: 34px; padding: 0 18px; font-weight: 600;
+}
+QPushButton#LobbyTab:hover { color: #e8eef7; background: #131c2b; }
+QPushButton#LobbyTab:checked {
+    background: #131c2b; color: #e8eef7;
+    border: 1px solid #24334e; border-bottom: 1px solid #131c2b;
+}
+QPushButton#GreenCompact {
+    background-color: #2ea36b; color: #f3fff8; border: 1px solid #37b87c;
+    min-height: 32px; max-height: 32px; padding: 0 16px; font-weight: 700;
+}
+QPushButton#GreenCompact:hover { background-color: #37b87c; }
 """
     try:
         app.setStyle("Fusion")
