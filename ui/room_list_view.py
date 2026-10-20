@@ -247,20 +247,7 @@ class RoomListView(QWidget):
         root.addWidget(self.tabs, stretch=0)
         root.addStretch(1)
 
-        footer = QFrame()
-        footer.setObjectName("PageFooter")
-        footer_layout = QHBoxLayout(footer)
-        footer_layout.setContentsMargins(0, 6, 0, 0)
-        footer_layout.setSpacing(8)
-        self.login_status_label = QLabel("")
-        self.login_status_label.setObjectName("Muted")
-        self.server_status_label = QLabel("")
-        self.server_status_label.setObjectName("Muted")
-        footer_layout.addWidget(self.login_status_label, 1)
-        footer_layout.addWidget(self.server_status_label)
-        root.addWidget(footer)
-
-        # 状态字段保留兼容；主窗口 statusBar 与页脚同步
+        # 底部状态统一由 MainWindow.statusBar 展示，页面内不重复。
 
         self.status_label = QLabel("尚未加载房间")
         self.status_label.setObjectName("Muted")
@@ -347,10 +334,10 @@ class RoomListView(QWidget):
         self.status_label.setStyleSheet("color: #ff9b8f;" if error else "")
 
     def set_login_status(self, text: str) -> None:
-        self.login_status_label.setText(str(text or ""))
+        """兼容旧调用：状态统一由主窗口状态栏展示。"""
 
     def set_server_status(self, text: str) -> None:
-        self.server_status_label.setText(str(text or ""))
+        """兼容旧调用：状态统一由主窗口状态栏展示。"""
 
     def selected_code(self) -> str:
         row = self.table.currentRow()
