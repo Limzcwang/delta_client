@@ -394,7 +394,12 @@ QFrame#VSeparator { background: #24334e; max-width: 1px; min-width: 1px; }
 
 
 def apply_theme(app: Any) -> None:
-    """给 QApplication 应用 Fusion 风格 + 统一 QSS。"""
+    """给 QApplication 应用 Fusion 风格 + 统一 QSS。
+QFrame#PageHeader { background: #101827; border-bottom: 1px solid #24334e; }
+QFrame#PageFooter { background: #101827; border-top: 1px solid #24334e; }
+QLabel#FieldLabel { color: #c8d3e1; font-size: 12px; font-weight: 600; }
+QFrame#Divider { background: #24334e; border: none; max-height: 1px; }
+"""
     try:
         app.setStyle("Fusion")
     except Exception:  # pragma: no cover - 无显示环境时的兜底

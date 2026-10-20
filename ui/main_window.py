@@ -72,6 +72,7 @@ from ui.dialogs import (
 from ui.login_view import LoginView
 from ui.room_list_view import RoomListView
 from ui.room_view import RoomView
+from ui.settings_pages import ConnectionPage, ProfilePage
 from ui.auto_share import AutoShareController
 from ui.hud_async import HudRecognitionResult, HudRecognitionService
 from ui.global_hotkeys import GlobalHotkeyManager
@@ -160,6 +161,9 @@ class MainWindow(QMainWindow):
         self._operator_scan_at = 0.0
         self._operator_recognition_text = "当前识别：-"
         self.settings_dialog = None
+        self.connection_page: ConnectionPage | None = None
+        self.profile_page: ProfilePage | None = None
+        self._page_return_widget = None
         self._last_hotkey_notice = ""
         self._hotkey_failures: dict[str, str] = {}
         # F-c5：历史窗口文案（room_joined / 历史接口可选字段）
@@ -1971,7 +1975,7 @@ class MainWindow(QMainWindow):
 
     # ---------- 设置（含个人资料） ----------
     def _on_profile(self) -> None:
-        self._open_settings(start_tab=4)
+        self._show_profile_page()
 
     def _on_nickname_save(self, dialog: SettingsDialog, nickname: str) -> None:
         self._safe_submit(
@@ -2358,7 +2362,102 @@ class MainWindow(QMainWindow):
             self.room_view.set_status(f"已切换干员：{state.operator or state.operator_id}")
 
     def _on_settings(self) -> None:
-        self._open_settings(start_tab=0)
+        self._show_connection_page()
+
+    def _remember_page_return(self) -> None:
+        current = self.stack.currentWidget()
+        if current is not self.connection_page and current is not self.profile_page:
+            self._page_return_widget = current
+
+    def _return_from_page(self) -> None:
+        target = self._page_return_widget
+        if target is not None and self.stack.indexOf(target) >= 0:
+            self.stack.setCurrentWidget(target)
+            return
+        if self.session.is_logged_in:
+            self._show_rooms()
+        else:
+            self._show_login()
+
+    def _show_connection_page(self) -> None:
+        self._remember_page_return()
+        if self.connection_page is None:
+            page = ConnectionPage(self.config, self)
+            page.back_requested.connect(self._return_from_page)
+            page.test_requested.connect(
+                lambda server_text, ws_text: self._on_test_connection(page, server_text, ws_text)
+            )
+            page.saved.connect(lambda config: self._on_connection_saved(page, config))
+            self.connection_page = page
+            self.stack.addWidget(page)
+        self.connection_page.set_config(self.config)
+        self.stack.setCurrentWidget(self.connection_page)
+
+    def _on_connection_saved(self, page: ConnectionPage, new_config: AppConfig) -> None:
+        old_operator_id = self.config.operator_id
+        try:
+            saved_path = save_config(new_config)
+        except OSError as exc:
+            QMessageBox.warning(self, "保存失败", f"无法写入配置文件：{exc}")
+            return
+        identity_changed = (
+            new_config.server_url != self.config.server_url
+            or new_config.ws_url != self.config.ws_url
+            or new_config.use_mock != self.config.use_mock
+        )
+        operator_changed = new_config.operator_id != old_operator_id
+        self.config = new_config
+        if operator_changed:
+            self._on_operator_changed()
+        self._apply_overlay_config()
+        self._apply_auto_config()
+        self._refresh_status_bar()
+        self.login_view.set_server_text(new_config.server_url, new_config.mode_label)
+        self.room_list_view.set_mode(new_config.use_mock, new_config.server_url)
+        self.session.set_persist_token(new_config.persist_token)
+        if identity_changed:
+            room = self._current_room
+            self._stop_ws(
+                room.code if room is not None else None,
+                save_canvas=room is not None,
+                http_leave_room=room,
+            )
+            self._current_room = None
+            self._clear_room_state()
+            self.session.clear()
+            self._close_api()
+            self.api = self._build_api()
+            self._show_login()
+            self.login_view.show_success(f"配置已保存到 {saved_path}，请重新登录")
+            return
+        self._close_api()
+        self.api = self._build_api()
+        if self.stack.currentWidget() is self.room_view:
+            self._on_leave_room()
+        else:
+            self._return_from_page()
+        self._set_status(f"配置已保存：{saved_path}")
+
+    def _show_profile_page(self) -> None:
+        self._remember_page_return()
+        if self.profile_page is None:
+            page = ProfilePage(parent=self)
+            page.back_requested.connect(self._return_from_page)
+            page.saved.connect(self._return_from_page)
+            page.logout_requested.connect(self._on_logout)
+            page.nickname_save_requested.connect(
+                lambda nickname: self._on_nickname_save(page, nickname)
+            )
+            page.password_change_requested.connect(
+                lambda old_password, new_password: self._on_password_change(
+                    page, old_password, new_password
+                )
+            )
+            self.profile_page = page
+            self.stack.addWidget(page)
+        self.profile_page.set_account(self._account())
+        self.profile_page.set_nickname(self.session.nickname or self.session.username)
+        self.stack.setCurrentWidget(self.profile_page)
 
     def _open_settings(self, start_tab: int = 0) -> None:
         dialog = SettingsDialog(self.config, self, self.operator_catalog, self.operator_config)

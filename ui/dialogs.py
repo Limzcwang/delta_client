@@ -344,12 +344,13 @@ class SettingsDialog(QDialog):
         root.addWidget(version_label)
         root.addSpacing(6)
 
+        # P3 起连接/个人资料迁到独立页；这里保留对象仅为兼容旧测试/调用，不加入 Tab。
+        self.connection_tab = self._build_connection_tab()
+        self.profile_tab = self._build_profile_tab()
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_connection_tab(), "连接")
         self.tabs.addTab(self._build_hud_tab(), "HUD / 采屏")
         self.tabs.addTab(self._build_operator_tab(), "干员")
         self.tabs.addTab(self._build_overlay_tab(), "悬浮窗")
-        self.tabs.addTab(self._build_profile_tab(), "个人资料")
         root.addWidget(self.tabs, stretch=1)
 
         self.error_label = _error_label(root)
