@@ -30,7 +30,7 @@
 | 上报 payload 清洗 | 完成：pct/remaining/charges/max 强制 int+clamp+NaN 过滤，未知槽降级，captured_at 整数校验 |
 - 本地工作副本：`.tmp/client-work`，当前分支 `feat/canvas-tools`。
 - 远端集成分支：`feat/client-chat`（lead 用 patch 应用，不要直接改远端）。
-- 测试：`python -m unittest discover -s tests -v` → **458 用例**（含 40 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑。
+- 测试：`python -m unittest discover -s tests -v` → **489 用例**（含 40 个 PySide6 组件测试；无 PySide6 时跳过），离线可跑。
 - GUI 冒烟脚本在 `.tmp/client-work-smoke/`（不在仓库内）：`smoke.py`（登录/房间/聊天/设置）、`smoke_canvas.py`（画板保存/恢复）、`smoke_canvas_map.py`（底图比例/坐标/透明层/图标工具栏/截图）、`smoke_skill_panel.py`（技能面板三状态/E1 载荷/E3a 干员配置与未知 CD/开关/模拟/移除截图）、`smoke_hud.py`（标定预览/OCR 识别结果面板截图）、`smoke_f.py`（昵称/注册规则/资料/房主管理）、`smoke_username_input.py`（输入过滤/粘贴/光标/IME/注册密码边界）、`smoke_my_rooms.py`（我的房间/退出/关闭/空态）、`smoke_create_room.py`（建房实时校验/失败保留表单/密码 4–32）、`smoke_saved_logins.py`（历史账号/重启带出/删除/失败清密码）、`smoke_kick.py`（右键移出/room_kicked 回大厅）、`smoke_member_menu.py`（多成员/长昵称/行高/右键菜单状态/截图）、`live_*.py`（真实后端联调）。
 - 本机沙箱曾把 PySide6 装到 `.tmp/pydeps` 并用 `PYTHONPATH` 跑 GUI；正常开发直接 `pip install -r requirements.txt`。
 
