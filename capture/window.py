@@ -15,6 +15,11 @@ DEFAULT_TITLE_KEYWORDS = ("三角洲", "Delta Force", "DeltaForce")
 MIN_CLIENT_WIDTH = 800
 MIN_CLIENT_HEIGHT = 600
 _OWN_PROCESS_NAMES = {"python", "pythonw", "deltaclient"}
+_TITLE_EXCLUDED_PROCESSES = {
+    "explorer", "python", "pythonw", "deltaclient", "deepseek harness",
+    "chrome", "msedge", "firefox", "tabbit", "opera", "brave", "vivaldi",
+}
+_GAME_INSTALL_MARKERS = ("deltaforce", "rail_apps", "wegameapps")
 
 
 def _is_own_client(candidate: "WindowCandidate") -> bool:
@@ -82,6 +87,7 @@ class WindowCandidate:
     client_width: int
     client_height: int
     minimized: bool = False
+    process_path: str = ""
 
     @property
     def client_rect(self) -> tuple[int, int, int, int]:
@@ -103,6 +109,7 @@ class WindowInfo:
     client_width: int
     client_height: int
     match_method: str = ""
+    process_path: str = ""
 
     @property
     def client_rect(self) -> tuple[int, int, int, int]:
@@ -121,7 +128,7 @@ class WindowSearchResult:
     match_method: str = ""
 
 
-def _process_name(pid: int) -> str:
+def _process_path(pid: int) -> str:
     handle = _kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
     if not handle:
         return ""
@@ -130,11 +137,15 @@ def _process_name(pid: int) -> str:
         buffer = ctypes.create_unicode_buffer(size.value)
         if not _kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
             return ""
-        return os.path.basename(buffer.value)
+        return str(buffer.value)
     except (OSError, ValueError):
         return ""
     finally:
         _kernel32.CloseHandle(handle)
+
+
+def _process_name(pid: int) -> str:
+    return os.path.basename(_process_path(pid))
 
 
 def _window_title(hwnd: int) -> str:
@@ -175,6 +186,7 @@ def _enumerate_candidates() -> list[WindowCandidate]:
                     pid=int(pid.value),
                     title=title,
                     process_name=_process_name(pid.value),
+                    process_path=_process_path(pid.value),
                     client_left=left,
                     client_top=top,
                     client_width=width,
@@ -205,6 +217,7 @@ def _match_method(
     min_size: tuple[int, int],
     *,
     allow_title: bool = True,
+    title_match_strict: bool = True,
 ) -> str:
     if _is_own_client(candidate):
         return ""
@@ -215,7 +228,21 @@ def _match_method(
         return "process"
     if not allow_title:
         return ""
-    title_lower = candidate.title.lower()
+    exe = normalize_process_name(candidate.process_name)
+    if exe in _TITLE_EXCLUDED_PROCESSES:
+        return ""
+    title = candidate.title.strip()
+    title_lower = title.lower()
+    custom_keywords = tuple(title_keywords) != tuple(DEFAULT_TITLE_KEYWORDS)
+    if title_match_strict and not custom_keywords:
+        exact = title_lower in ("delta force", "delta force client")
+        starts = title.startswith("三角洲行动")
+        if not (exact or starts):
+            return ""
+        path = str(candidate.process_path or "").replace("\\", "/").lower()
+        if not any(marker in path for marker in _GAME_INSTALL_MARKERS):
+            return ""
+        return "title"
     for keyword in title_keywords:
         if keyword and str(keyword).lower() in title_lower:
             return "title"
@@ -227,6 +254,7 @@ def find_game_window(
     *,
     title_keywords: tuple[str, ...] = DEFAULT_TITLE_KEYWORDS,
     min_size: tuple[int, int] = (MIN_CLIENT_WIDTH, MIN_CLIENT_HEIGHT),
+    title_match_strict: bool = True,
     candidates: list[WindowCandidate] | None = None,
 ) -> WindowSearchResult:
     """按进程名（忽略 .exe/大小写）-> 标题关键词兜底，要求可见且客户区足够大。"""
@@ -235,7 +263,10 @@ def find_game_window(
     # 先按进程名匹配（最可靠），再按标题兜底，避免先枚举到同标题的客户端窗口。
     for allow_title in (False, True):
         for candidate in all_candidates:
-            method = _match_method(candidate, process_name, title_keywords, min_size, allow_title=allow_title)
+            method = _match_method(
+                candidate, process_name, title_keywords, min_size,
+                allow_title=allow_title, title_match_strict=title_match_strict,
+            )
             if method:
                 best = (method, candidate)
                 break
@@ -262,11 +293,17 @@ def find_game_window(
         pid=candidate.pid,
         title=candidate.title,
         process_name=candidate.process_name,
+        process_path=candidate.process_path,
         client_left=candidate.client_left,
         client_top=candidate.client_top,
         client_width=candidate.client_width,
         client_height=candidate.client_height,
         match_method=method,
+    )
+    logger.info(
+        "游戏窗口命中：method=%s title=%r exe=%r path=%r pid=%s size=%sx%s",
+        method, candidate.title, candidate.process_name, candidate.process_path,
+        candidate.pid, candidate.client_width, candidate.client_height,
     )
     reason = "通过标题匹配" if method == "title" else "通过进程名匹配"
     if candidate.minimized:

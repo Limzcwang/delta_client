@@ -64,6 +64,28 @@ class LoadConfigTests(unittest.TestCase):
         self.assertEqual(cfg.source, "default")
         self.assertEqual(cfg.effective_ws_url, "wss://deltachat.icu/ws")
 
+    def test_auto_sample_500_roundtrip(self) -> None:
+        for value in (2000, 1000, 500):
+            cfg = AppConfig(auto_sample_ms=value)
+            save_config(cfg, self.config_path)
+            loaded = load_config(path=self.config_path, env={})
+            self.assertEqual(value, loaded.auto_sample_ms)
+        self._write({"auto_sample_ms": 100})
+        loaded = load_config(path=self.config_path, env={})
+        self.assertGreaterEqual(loaded.auto_sample_ms, 200)
+        self._write({"auto_sample_ms": 9999})
+        loaded = load_config(path=self.config_path, env={})
+        self.assertLessEqual(loaded.auto_sample_ms, 5000)
+
+    def test_title_match_strict_default_and_override(self) -> None:
+        cfg = load_config(path=self.config_path, env={})
+        self.assertTrue(cfg.title_match_strict)
+        self.write = self._write
+        self._write({"title_match_strict": False})
+        cfg = load_config(path=self.config_path, env={})
+        self.assertFalse(cfg.title_match_strict)
+        self.assertFalse(cfg.public_dict()["title_match_strict"])
+
     def test_legacy_http_default_migrates_to_https(self) -> None:
         self._write(
             {

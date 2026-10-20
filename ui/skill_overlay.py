@@ -51,7 +51,9 @@ def _widget_visible(widget: Any) -> bool:
 
 
 def _apply_win32_topmost(widget: Any) -> bool:
-    """强制置顶 + WS_EX_NOACTIVATE（Windows）；失败只记录 debug。"""
+    """强制置顶 + WS_EX_NOACTIVATE（Windows）；模态期间绝不抢焦点。"""
+    if QApplication.activeModalWidget() is not None:
+        return False
     if sys.platform != "win32":
         return False
     if not _widget_alive(widget) or not _widget_visible(widget):
@@ -144,8 +146,8 @@ class SkillOverlay(QWidget):
         self.setWindowOpacity(1.0 if enabled else max(0.10, min(1.0, self._base_opacity)))
         if enabled:
             self._drag_axis = None
-        if enabled and self.isVisible():
-            self.raise_()
+        self.update()
+        logger.info("overlay edit_mode=%s visible=%s opacity=%.2f", enabled, self.isVisible(), self.opacity)
         self.edit_mode_changed.emit(enabled)
 
     @property
@@ -318,6 +320,8 @@ class OverlayController:
         self.paused = False
         self.pause_reason = ""
         self._pause_depth = 0
+        self._pause_was_visible = False
+        self._modal_hide_done = False
         self._last_geometry: tuple[tuple[int, int, int, int], tuple[int, int]] | None = None
         self._last_position: tuple[int, int] | None = None
         self._last_follow_reason = ""
@@ -342,12 +346,24 @@ class OverlayController:
             except RuntimeError:
                 pass
         self.attached = False
+        self._pause_was_visible = False
+        self._modal_hide_done = False
+        logger.info("overlay stop")
 
     def pause(self, reason: str = "modal") -> None:
-        """模态对话框/抓帧 hide 前暂停 follow 定时器（可嵌套）。"""
+        """模态对话框/抓帧前暂停 follow；记录可见性并只隐藏一次。"""
         self._pause_depth += 1
+        reason = str(reason)
+        if self._pause_depth == 1:
+            self._pause_was_visible = _widget_visible(self.overlay)
+            if self._pause_was_visible and _widget_alive(self.overlay):
+                try:
+                    self.overlay.hide()
+                except RuntimeError:
+                    pass
+            logger.info("overlay pause reason=%s was_visible=%s", reason, self._pause_was_visible)
         self.paused = True
-        self.pause_reason = str(reason)
+        self.pause_reason = reason
         self._timer.stop()
 
     def resume(self, delay_ms: int = 100) -> None:
@@ -362,11 +378,13 @@ class OverlayController:
             return
         self.paused = False
         self.pause_reason = ""
+        logger.info("overlay resume restore_visible=%s", self._pause_was_visible)
 
         def _resume_follow() -> None:
             if self.enabled and not self.paused:
                 self._timer.start()
                 self.follow(force=True)
+                self._pause_was_visible = False
 
         if delay_ms > 0:
             QTimer.singleShot(int(delay_ms), _resume_follow)
@@ -392,7 +410,23 @@ class OverlayController:
         if QApplication.activeModalWidget() is not None:
             self.last_reason = "模态对话框打开，悬浮窗跟随暂停"
             if _widget_alive(self.overlay):
+                if not self._modal_hide_done:
+                    self._pause_was_visible = _widget_visible(self.overlay)
+                    if self._pause_was_visible:
+                        try:
+                            self.overlay.hide()
+                        except RuntimeError:
+                            pass
+                    self._modal_hide_done = True
+                    logger.info("overlay modal hide reason=follow visible=%s", self._pause_was_visible)
                 self.overlay.set_status(self.last_reason)
+            return
+        self._modal_hide_done = False
+        # 编辑模式：位置由用户拖动决定，不重定位/不重设透明度/不抢 topmost。
+        if self.overlay.edit_mode:
+            self.attached = True
+            self.last_reason = "编辑模式：拖动十字移动"
+            self.overlay.set_status("")
             return
         window = self.window_provider()
         if window is None:
@@ -416,6 +450,7 @@ class OverlayController:
             self._last_position = target
         if not self.overlay.isVisible():
             self.overlay.show()
+            logger.info("overlay show reason=follow")
         self.overlay.set_status("")
         if not self.overlay.edit_mode and (force or not self.attached or geometry_changed):
             if not self.attached:

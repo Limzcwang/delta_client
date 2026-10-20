@@ -69,6 +69,20 @@ class HotkeyManagerTests(unittest.TestCase):
         finally:
             manager.stop()
 
+    def test_register_logs_action_key_and_error_code(self) -> None:
+        manager = GlobalHotkeyManager()
+        try:
+            with mock.patch("ui.global_hotkeys.register_hotkey", return_value=False), self.assertLogs(
+                "ui.global_hotkeys", level="INFO"
+            ) as captured:
+                failures = manager.register_all("F9", "Ctrl+Shift+E")
+            self.assertIn("action=toggle", "\n".join(captured.output))
+            self.assertIn("success=False", "\n".join(captured.output))
+            self.assertIn("错误码", failures["toggle"])
+            self.assertIn("占用", failures["toggle"])
+        finally:
+            manager.stop()
+
     def test_occupied_falls_back_and_reports(self) -> None:
         manager = GlobalHotkeyManager()
         try:

@@ -493,6 +493,13 @@ class SkillPanel(QWidget):
                 pass
         return int(self._clock()) + self._clock_offset_ms
 
+    def pause_updates(self) -> None:
+        self._timer.stop()
+
+    def resume_updates(self) -> None:
+        if not self._timer.isActive():
+            self._timer.start()
+
     def states(self) -> list[SkillState]:
         return list(self._states.values())
 

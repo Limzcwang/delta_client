@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
+import asyncio
 from dataclasses import replace
 from typing import Any, Mapping
 
-from PySide6.QtCore import QEvent, QEventLoop, QTimer
+from PySide6.QtCore import QEvent, QEventLoop, QTimer, Qt
 from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -20,7 +22,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from config import AppConfig, ConfigError, normalize_server_url, normalize_ws_url, save_config
+from config import (
+    AppConfig,
+    ConfigError,
+    connection_candidates,
+    normalize_server_url,
+    normalize_ws_url,
+    save_config,
+)
 from core.backoff import ReconnectBackoff
 from core.clock import ServerClock
 from core.canvas import (
@@ -31,6 +40,7 @@ from core.canvas import (
     parse_canvas_snapshot,
 )
 from core.chat import ChatTimeline
+from core.connection import is_network_failure
 from core.errors import ApiError, ErrorKind, to_user_message
 from core.models import (
     ChatMessage,
@@ -157,6 +167,11 @@ class MainWindow(QMainWindow):
         self._server_clock = ServerClock()
         self._skill_throttle = SkillShareThrottle(max_events=2, window_ms=1000)
         self._skill_share_enabled = False
+        self._last_hotkey_action = ""
+        self._last_hotkey_at = 0.0
+        self._login_candidates: list[str] = []
+        self._login_candidate_index = 0
+        self._login_credentials = ("", "")
         self._room_share_off_sent = False
         self._membership_confirmed = False
         self._last_membership_error = ""
@@ -259,6 +274,13 @@ class MainWindow(QMainWindow):
                 logger.warning("QML 登录页不可用，回退 Widgets：%s", exc)
                 self.qml_login = None
 
+        self._ui_trace = str(os.environ.get("DELTA_UI_TRACE", "")).strip() == "1"
+        self._ui_trace_counts = {"paint": 0, "activation": 0, "state": 0, "style": 0, "show": 0, "hide": 0}
+        self._ui_trace_timer = QTimer(self)
+        self._ui_trace_timer.setInterval(500)
+        self._ui_trace_timer.timeout.connect(self._flush_ui_trace)
+        if self._ui_trace:
+            self._ui_trace_timer.start()
         self.overlay = SkillOverlay()
         self.overlay.set_server_now(self._server_clock.now_ms)
         self.overlay_controller = OverlayController(
@@ -266,9 +288,9 @@ class MainWindow(QMainWindow):
         )
         self.overlay.position_changed.connect(self._on_overlay_moved)
         self._toggle_shortcut = QShortcut(QKeySequence(self.config.shortcut_toggle), self)
-        self._toggle_shortcut.activated.connect(self._toggle_overlay)
+        self._toggle_shortcut.activated.connect(lambda: self._on_global_hotkey("toggle"))
         self._edit_shortcut = QShortcut(QKeySequence(self.config.shortcut_edit), self)
-        self._edit_shortcut.activated.connect(self._toggle_overlay_edit)
+        self._edit_shortcut.activated.connect(lambda: self._on_global_hotkey("edit"))
         self.hotkeys = GlobalHotkeyManager(self)
         self.hotkeys.triggered.connect(self._on_global_hotkey)
         self._hotkey_failures = {}
@@ -501,7 +523,49 @@ class MainWindow(QMainWindow):
     def changeEvent(self, event: Any) -> None:  # noqa: N802 - Qt 覆盖
         if event.type() == QEvent.Type.ActivationChange:
             self._update_lobby_timer()
+            if getattr(self, "_ui_trace", False):
+                self._ui_trace_counts["activation"] += 1
+                logger.debug(
+                    "ui_trace activation active=%s visible=%s minimized=%s geometry=%s",
+                    self.isActiveWindow(), self.isVisible(), self.isMinimized(), self.geometry().getRect(),
+                )
+        elif event.type() == QEvent.Type.WindowStateChange:
+            if getattr(self, "_ui_trace", False):
+                self._ui_trace_counts["state"] += 1
+                logger.debug("ui_trace state active=%s minimized=%s", self.isActiveWindow(), self.isMinimized())
+        elif event.type() == QEvent.Type.StyleChange:
+            if getattr(self, "_ui_trace", False):
+                self._ui_trace_counts["style"] += 1
+                logger.debug("ui_trace style")
         super().changeEvent(event)
+
+    def paintEvent(self, event: Any) -> None:  # noqa: N802 - Qt 覆盖
+        if getattr(self, "_ui_trace", False):
+            self._ui_trace_counts["paint"] += 1
+        super().paintEvent(event)
+
+    def showEvent(self, event: Any) -> None:  # noqa: N802 - Qt 覆盖
+        if getattr(self, "_ui_trace", False):
+            self._ui_trace_counts["show"] += 1
+            logger.debug("ui_trace show active=%s", self.isActiveWindow())
+        super().showEvent(event)
+
+    def hideEvent(self, event: Any) -> None:  # noqa: N802 - Qt 覆盖
+        if getattr(self, "_ui_trace", False):
+            self._ui_trace_counts["hide"] += 1
+            logger.debug("ui_trace hide")
+        super().hideEvent(event)
+
+    def _flush_ui_trace(self) -> None:
+        if not getattr(self, "_ui_trace", False):
+            return
+        if any(self._ui_trace_counts.values()):
+            logger.info("ui_trace 500ms paint=%s activation=%s state=%s style=%s show=%s hide=%s active=%s",
+                        self._ui_trace_counts["paint"], self._ui_trace_counts["activation"],
+                        self._ui_trace_counts["state"], self._ui_trace_counts["style"],
+                        self._ui_trace_counts["show"], self._ui_trace_counts["hide"],
+                        self.isActiveWindow())
+            self._ui_trace_counts.update(paint=0, activation=0, state=0, style=0, show=0, hide=0)
 
     # ---------- 认证 ----------
     def _on_login(self, username: str, password: str) -> None:
@@ -509,11 +573,78 @@ class MainWindow(QMainWindow):
         if self.qml_login is not None:
             self.qml_login.set_busy(True)
         self.login_view.hide_messages()
+        self._login_credentials = (str(username), str(password))
+        self._login_candidates = connection_candidates(self.config.server_url)
+        self._login_candidate_index = 0
+        self._try_login_candidate()
+
+    def _build_api_for(self, server_url: str) -> Any:
+        if self.config.use_mock:
+            return MockApiClient()
+        return ApiClient(
+            server_url,
+            token_provider=lambda: self.session.token,
+            timeout=self.config.request_timeout,
+        )
+
+    def _try_login_candidate(self) -> None:
+        if self._login_candidate_index >= len(self._login_candidates):
+            self._on_login_candidates_failed()
+            return
+        server = self._login_candidates[self._login_candidate_index]
+        try:
+            self.api = self._build_api_for(server)
+        except Exception as exc:  # noqa: BLE001
+            self._on_login_candidate_failure(exc)
+            return
+        username, password = self._login_credentials
         self._safe_submit(
             self.api.login(username, password),
-            lambda result: self._on_login_success(result, username, password),
-            lambda exc: self._on_login_failure(exc, username),
+            lambda result: self._on_login_candidate_success(server, result, username, password),
+            lambda exc: self._on_login_candidate_failure(exc),
         )
+
+    def _on_login_candidate_success(
+        self, server: str, result: LoginResult, username: str, password: str
+    ) -> None:
+        if server != self.config.server_url:
+            new_config = replace(self.config, server_url=server, ws_url=None)
+            try:
+                save_config(new_config)
+            except OSError:
+                pass
+            self.config = new_config
+            self.room_list_view.set_mode(new_config.use_mock, new_config.server_url)
+            self.login_view.set_server_text(new_config.server_url, new_config.mode_label)
+            self._set_status(f"已切换到可用地址：{server}")
+        self._on_login_success(result, username, password)
+
+    def _on_login_candidate_failure(self, exc: BaseException) -> None:
+        kind = getattr(exc, "kind", None)
+        network = kind in (ErrorKind.NETWORK, ErrorKind.TIMEOUT) or isinstance(
+            exc, (asyncio.TimeoutError, ConnectionError, OSError)
+        )
+        if network and self._login_candidate_index + 1 < len(self._login_candidates):
+            self._login_candidate_index += 1
+            self._try_login_candidate()
+            return
+        if network:
+            self._on_login_candidates_failed()
+            return
+        self._on_login_failure(exc, self._login_credentials[0])
+
+    def _on_login_candidates_failed(self) -> None:
+        self.login_view.set_busy(False)
+        if self.qml_login is not None:
+            self.qml_login.set_busy(False)
+            self.qml_login.show_error("无法连接服务器（已尝试 443/8443）")
+        attempted = ", ".join(getattr(self, "_login_candidates", []))
+        text = "无法连接服务器（已尝试 443/8443）"
+        if attempted:
+            text += f"\n已尝试：{attempted}"
+        self.login_view.show_error(text)
+        self._set_status(text)
+
 
     def _on_login_success(
         self, result: LoginResult, username: str = "", password: str = ""
@@ -1617,6 +1748,7 @@ class MainWindow(QMainWindow):
 
             keywords = (self.config.capture_window_title,) if self.config.capture_window_title else None
             kwargs = {"title_keywords": keywords} if keywords else {}
+            kwargs["title_match_strict"] = bool(self.config.title_match_strict)
             return find_game_window(self.config.capture_window_process, **kwargs).window
         except Exception:  # noqa: BLE001
             return None
@@ -1664,17 +1796,56 @@ class MainWindow(QMainWindow):
         self._hotkey_failures = self.hotkeys.register_all(
             str(self.config.shortcut_toggle), str(self.config.shortcut_edit)
         )
+        registered = self.hotkeys.registered_actions
+        # F4：全局成功时禁用应用内 QShortcut，避免同键位双触发；失败才回退启用。
+        self._toggle_shortcut.setEnabled("toggle" not in registered)
+        self._edit_shortcut.setEnabled("edit" not in registered)
+        logger.debug(
+            "hotkey shortcuts enabled toggle=%s edit=%s",
+            self._toggle_shortcut.isEnabled(), self._edit_shortcut.isEnabled(),
+        )
         if self._hotkey_failures:
-            logger.debug("全局快捷键注册失败：%s", self._hotkey_failures)
+            logger.info("全局快捷键注册失败，启用应用内 QShortcut：%s", self._hotkey_failures)
 
     def _on_global_hotkey(self, action: str) -> None:
         # 未登录阶段静默忽略：不提示、不显示、不记错误日志
         if not self.session.is_logged_in:
             return
+        now = time.monotonic()
+        if action == self._last_hotkey_action and now - self._last_hotkey_at < 0.2:
+            logger.info("热键去重 action=%s delta_ms=%.1f", action, (now - self._last_hotkey_at) * 1000)
+            return
+        self._last_hotkey_action = action
+        self._last_hotkey_at = now
+        window = self._find_game_window()
+        logger.info(
+            "全局热键触发 action=%s game_window=%s overlay_enabled=%s edit=%s",
+            action,
+            "None" if window is None else (
+                f"pid={getattr(window, 'pid', '?')},title={getattr(window, 'title', '')!r}"
+            ),
+            self.overlay_controller.enabled,
+            self.overlay.edit_mode,
+        )
         if action == "edit":
             self._toggle_overlay_edit()
         else:
             self._toggle_overlay()
+        self._set_status(f"热键触发：{action}")
+
+    def _on_test_hotkey(self, dialog: SettingsDialog) -> None:
+        if not self.session.is_logged_in:
+            return
+        self._on_global_hotkey("toggle")
+        if self._hotkey_ready():
+            message = "热键触发成功：显示/隐藏悬浮窗"
+        else:
+            message = "热键已收到，但当前无游戏窗口（不会显示悬浮窗）"
+        try:
+            dialog.set_hotkey_status(message)
+        except RuntimeError:
+            pass
+        self._set_status(message)
 
     def _hotkey_ready(self) -> bool:
         if not self.session.is_logged_in:
@@ -1682,29 +1853,42 @@ class MainWindow(QMainWindow):
         return self._find_game_window() is not None
 
     def _toggle_overlay(self) -> None:
-        if self.overlay_controller.enabled or self.overlay.isVisible():
+        visible = bool(self.overlay_controller.enabled and self.overlay.isVisible())
+        if visible:
             self.overlay_controller.stop()
             self.overlay.hide()
+            logger.info("overlay toggle hide enabled=%s", self.overlay_controller.enabled)
+            self._set_status("悬浮窗已隐藏")
             self.room_view.set_status("悬浮窗已隐藏")
             return
         if not self._hotkey_ready():
             self.overlay.hide()
-            self.room_view.set_status("等待游戏窗口后再显示悬浮窗")
+            self._set_status("等待游戏窗口")
+            self.room_view.set_status("等待游戏窗口")
             return
         self.overlay_controller.start()
         self.overlay_controller.follow(force=True)
-        self.room_view.set_status(f"悬浮窗：{self.overlay_controller.last_reason or '等待游戏窗口'}")
+        shown = bool(self.overlay_controller.enabled and self.overlay.isVisible())
+        message = "悬浮窗已显示" if shown else "等待游戏窗口"
+        logger.info("overlay toggle show visible=%s", shown)
+        self._set_status(message)
+        self.room_view.set_status(message)
 
     def _toggle_overlay_edit(self) -> None:
         enabled = not self.overlay.edit_mode
         if enabled and self._find_game_window() is None:
             self.overlay.hide()
+            self._set_status("等待游戏窗口后再进入编辑模式")
             self.room_view.set_status("等待游戏窗口后再进入编辑模式")
             return
         self.overlay.set_edit_mode(enabled)
-        self.room_view.set_status("悬浮窗编辑模式：可拖动，退出后恢复鼠标穿透" if enabled else "悬浮窗已恢复鼠标穿透")
+        message = "悬浮窗编辑模式：可拖动，退出后恢复鼠标穿透" if enabled else "悬浮窗已恢复鼠标穿透"
+        logger.info("overlay edit toggle enabled=%s visible=%s", enabled, self.overlay.isVisible())
+        self._set_status(message)
+        self.room_view.set_status(message)
 
     def _on_overlay_moved(self, x: int, y: int) -> None:
+        logger.info("overlay moved x=%s y=%s", x, y)
         self.overlay_controller.fixed_position = (int(x), int(y))
         self.config = replace(self.config, overlay_x=int(x), overlay_y=int(y))
         try:
@@ -2732,6 +2916,22 @@ class MainWindow(QMainWindow):
         self.profile_page.set_nickname(self.session.nickname or self.session.username)
         self.stack.setCurrentWidget(self.profile_page)
 
+    def _pause_modal_timers(self) -> None:
+        """模态期间暂停会触发主窗口重绘的定时器，关闭后恢复。"""
+        self._lobby_timer.stop()
+        self.room_view.skill_panel.pause_updates()
+        if hasattr(self, "_auto_controller"):
+            self._auto_controller.stop()
+        self._hud_timeout.stop()
+        logger.debug("modal timers paused")
+
+    def _resume_modal_timers(self) -> None:
+        self.room_view.skill_panel.resume_updates()
+        self._update_lobby_timer()
+        if hasattr(self, "_auto_controller"):
+            self._apply_auto_config()
+        logger.debug("modal timers resumed")
+
     def _open_settings(self, start_tab: int = 0) -> None:
         dialog = SettingsDialog(self.config, self, self.operator_catalog, self.operator_config)
         self.settings_dialog = dialog
@@ -2752,28 +2952,50 @@ class MainWindow(QMainWindow):
                 dialog, old_password, new_password
             )
         )
+        dialog.hotkey_test_requested.connect(lambda: self._on_test_hotkey(dialog))
         dialog.set_account(self._account())
         dialog.set_nickname(self.session.nickname or self.session.username)
         dialog.set_overlay_status(self.overlay_controller.last_reason or "未附加")
         if not self.session.is_logged_in:
             dialog.set_hotkey_status("登录后注册")
-        elif self._hotkey_failures:
-            dialog.set_hotkey_status("；".join(self._hotkey_failures.values()))
         else:
-            dialog.set_hotkey_status("已注册")
+            parts = []
+            for action, label in (("toggle", "显示/隐藏"), ("edit", "编辑")):
+                spec = self.hotkeys.spec_for(action)
+                if spec is not None:
+                    parts.append(f"{spec.label} 已注册（{label}）")
+            if self._hotkey_failures:
+                parts.extend(self._hotkey_failures.values())
+                parts.append("全局热键被占用，已回退为应用内快捷键，请更换按键")
+            dialog.set_hotkey_status("；".join(parts) if parts else "未注册")
         dialog.set_server_migrated(self.config.server_migrated)
         dialog.set_operator_recognition_status(self._operator_recognition_text)
-        dialog.set_hotkey_status(
-            "；".join(self._hotkey_failures.values())
-            if self._hotkey_failures
-            else "全局热键已注册（游戏前台可用）"
-        )
         dialog.tabs.setCurrentIndex(max(0, min(int(start_tab), dialog.tabs.count() - 1)))
-        self.overlay_controller.pause("settings")
+        # F3：应用级模态 + 不删除 + 去掉置顶，避免对话框/主窗口重绘抖动。
+        dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+        # 不修改 windowFlags：exec 前重建原生窗口会触发激活/标题栏重绘。
+        logger.debug(
+            "settings before exec active=%s visible=%s minimized=%s geometry=%s overlay_enabled=%s",
+            self.isActiveWindow(), self.isVisible(), self.isMinimized(), self.geometry().getRect(),
+            self.overlay_controller.enabled,
+        )
+        # F1：模态期间彻底停掉 overlay（stop 会 hide + enabled False），结束后按原状态恢复。
+        overlay_was_enabled = bool(self.overlay_controller.enabled)
+        self.overlay_controller.stop()
+        self._pause_modal_timers()
         try:
             accepted = dialog.exec() == QDialog.DialogCode.Accepted
         finally:
-            self.overlay_controller.resume()
+            self._resume_modal_timers()
+            if overlay_was_enabled:
+                self.overlay_controller.start()
+                self.overlay_controller.follow(force=True)
+            logger.debug(
+                "settings after exec active=%s visible=%s minimized=%s geometry=%s overlay_enabled=%s",
+                self.isActiveWindow(), self.isVisible(), self.isMinimized(), self.geometry().getRect(),
+                self.overlay_controller.enabled,
+            )
         self.settings_dialog = None
         if not accepted:
             return
@@ -2845,11 +3067,27 @@ class MainWindow(QMainWindow):
             self._update_test_dialog(dialog, f"配置错误：{exc}", False)
             return
         dialog.set_testing(True)
+        candidates = connection_candidates(server_url)
         self._safe_submit(
-            _run_connection_check(server_url, self.session.token, timeout=8.0),
-            lambda check: self._update_test_dialog(dialog, check.format_text(), check.ok),
+            _run_connection_check_candidates(candidates, self.session.token, timeout=8.0),
+            lambda result: self._finish_test_connection(dialog, result, candidates),
             lambda exc: self._update_test_dialog(dialog, f"测试失败：{to_user_message(exc)}", False),
         )
+
+    @staticmethod
+    def _finish_test_connection(dialog: SettingsDialog, result: Any, candidates: list[str]) -> None:
+        server_url, check = result
+        if server_url is None or check is None:
+            detail = ""
+            if isinstance(check, BaseException):
+                detail = f"\n{to_user_message(check)}"
+            text = (
+                "无法连接服务器（已尝试 443/8443）"
+                f"\n已尝试：{', '.join(candidates)}{detail}"
+            )
+            MainWindow._update_test_dialog(dialog, text, False)
+            return
+        MainWindow._update_test_dialog(dialog, f"{server_url}：{check.format_text()}", check.ok)
 
     @staticmethod
     def _update_test_dialog(dialog: SettingsDialog, text: str, ok: bool) -> None:
@@ -3001,6 +3239,26 @@ class MainWindow(QMainWindow):
                 future.result(timeout=timeout)
         except Exception as exc:  # noqa: BLE001
             logger.debug("关闭 HTTP 连接池失败：%s", exc)
+
+
+async def _run_connection_check_candidates(
+    server_urls: list[str], token: str | None, timeout: float = 8.0
+) -> tuple[str | None, Any]:
+    last: Any = None
+    for server_url in server_urls:
+        try:
+            check = await _run_connection_check(server_url, token, timeout)
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+            continue
+        if check.ok:
+            return server_url, check
+        if is_network_failure(check):
+            last = check
+            continue
+        # 业务错误（401/403/404/500）：TCP 可达，停止并展示该结果
+        return server_url, check
+    return None, last
 
 
 async def _run_connection_check(server_url: str, token: str | None, timeout: float = 8.0) -> Any:

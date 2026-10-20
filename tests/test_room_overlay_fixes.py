@@ -8,11 +8,18 @@ from types import SimpleNamespace
 from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+try:
+    import numpy as _np  # noqa: F401
+    HAS_NUMPY = True
+except Exception:  # noqa: BLE001
+    HAS_NUMPY = False
 os.environ.setdefault("QT_QPA_FONTDIR", r"C:\Windows\Fonts")
 
 try:
-    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtCore import QEvent, QObject, QPoint, QTimer, Qt
     from PySide6.QtGui import QMouseEvent
+    from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication, QDialog
 
     from config import AppConfig
@@ -70,13 +77,25 @@ class _FakeSettingsDialog:
         self.tabs = SimpleNamespace(setCurrentIndex=lambda _i: None, count=lambda: 3)
         for name in (
             "config_check_requested", "operator_recognition_requested", "test_requested",
-            "nickname_save_requested", "password_change_requested",
+            "nickname_save_requested", "password_change_requested", "hotkey_test_requested",
         ):
             setattr(self, name, _Signals())
         self._is_accepted = True
 
     def __getattr__(self, name):
         return lambda *args, **kwargs: None
+
+    def setWindowModality(self, *_args):
+        pass
+
+    def setAttribute(self, *_args):
+        pass
+
+    def windowFlags(self):
+        return Qt.WindowType.Dialog
+
+    def setWindowFlags(self, *_args):
+        pass
 
     def exec(self):
         return QDialog.DialogCode.Accepted
@@ -128,6 +147,109 @@ class RoomOverlayFixTests(unittest.TestCase):
         finally:
             self._close(window)
 
+    @unittest.skipUnless(HAS_NUMPY, "完整 Qt/原生窗口测试需要 build venv")
+    def test_modal_open_does_not_spam_main_window_paint(self) -> None:
+        window = self._window()
+        counts = {"paint": 0, "activation": 0, "state": 0}
+
+        class Filter(QObject):
+            def eventFilter(self, obj, event):
+                if obj is window:
+                    if event.type() == QEvent.Type.Paint:
+                        counts["paint"] += 1
+                    elif event.type() == QEvent.Type.ActivationChange:
+                        counts["activation"] += 1
+                    elif event.type() == QEvent.Type.WindowStateChange:
+                        counts["state"] += 1
+                return False
+
+        class SlowDialog(_FakeSettingsDialog):
+            def exec(self):
+                QTest.qWait(700)
+                return QDialog.DialogCode.Rejected
+
+        filt = Filter()
+        window.installEventFilter(filt)
+        try:
+            window.show()
+            self.app.processEvents()
+            with mock.patch("ui.main_window.SettingsDialog", lambda *a, **k: SlowDialog(window.config)):
+                window._open_settings()
+            QTest.qWait(150)
+            self.assertLess(counts["paint"], 60)
+            self.assertLess(counts["activation"], 4)
+        finally:
+            window.removeEventFilter(filt)
+            self._close(window)
+
+    def test_global_hotkey_success_disables_shortcuts(self) -> None:
+        window = self._window()
+        try:
+            window.hotkeys._registered = {"toggle": 1, "edit": 2}
+            window.hotkeys._failed = {}
+            with mock.patch.object(window.hotkeys, "register_all", return_value={}):
+                window._register_hotkeys()
+            self.assertFalse(window._toggle_shortcut.isEnabled())
+            self.assertFalse(window._edit_shortcut.isEnabled())
+            window.hotkeys._registered = {}
+            window.hotkeys._failed = {"toggle": "占用"}
+            with mock.patch.object(window.hotkeys, "register_all", return_value={"toggle": "占用"}):
+                window._register_hotkeys()
+            self.assertTrue(window._toggle_shortcut.isEnabled())
+            self.assertTrue(window._edit_shortcut.isEnabled())
+        finally:
+            self._close(window)
+
+    def test_hotkey_toggle_and_200ms_dedupe(self) -> None:
+        window = self._window()
+        try:
+            window._hotkey_ready = lambda: True
+            window._find_game_window = lambda: SimpleNamespace(pid=1, title="三角洲行动", client_rect=(0, 0, 1600, 900), is_minimized=False)
+            window._on_global_hotkey("toggle")
+            self.assertTrue(window.overlay_controller.enabled)
+            self.assertIn("已显示", window.room_view.status_label.text())
+            window._on_global_hotkey("toggle")  # <200ms 双触发去重
+            self.assertTrue(window.overlay_controller.enabled)
+            QTest.qWait(220)
+            window._on_global_hotkey("toggle")
+            self.assertFalse(window.overlay_controller.enabled)
+            self.assertIn("已隐藏", window.room_view.status_label.text())
+        finally:
+            self._close(window)
+
+    def test_edit_mode_no_hide_show_and_drag(self) -> None:
+        overlay = SkillOverlay()
+        try:
+            overlay.show()
+            overlay.set_opacity(0.30)
+            with mock.patch.object(overlay, "hide", wraps=overlay.hide) as hide, mock.patch.object(
+                overlay, "show", wraps=overlay.show
+            ) as show:
+                overlay.set_edit_mode(True)
+                hide.assert_not_called()
+                show.assert_not_called()
+            self.assertTrue(overlay.edit_mode)
+            self.assertAlmostEqual(1.0, overlay.opacity, delta=0.01)
+            handle = overlay.drag_handle_rect().center()
+            press = QMouseEvent(QMouseEvent.Type.MouseButtonPress, handle, handle, Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+            overlay.mousePressEvent(press)
+            start = (overlay.x(), overlay.y())
+            point = QPoint(handle.x() + 25, handle.y() + 18)
+            move = QMouseEvent(QMouseEvent.Type.MouseMove, point, point, Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+            overlay.mouseMoveEvent(move)
+            self.assertNotEqual(start, (overlay.x(), overlay.y()))
+            positions = []
+            overlay.position_changed.connect(lambda x, y: positions.append((x, y)))
+            release = QMouseEvent(QMouseEvent.Type.MouseButtonRelease, point, point, Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier)
+            overlay.mouseReleaseEvent(release)
+            self.assertTrue(positions)
+            overlay.set_edit_mode(False)
+            self.assertAlmostEqual(0.30, overlay.opacity, delta=0.02)
+        finally:
+            overlay.close()
+            overlay.deleteLater()
+            self.app.processEvents()
+
     def test_room_joined_hides_self_and_sends_off(self) -> None:
         window = self._window()
         try:
@@ -172,6 +294,22 @@ class RoomOverlayFixTests(unittest.TestCase):
             window._ws = fake
             window._on_ws_message(1, {"type": "room_joined", "room": {"id": "b", "code": "BBBBB", "name": "B"}})
             self.assertEqual(2, fake.off_count)
+        finally:
+            self._close(window)
+
+    def test_test_hotkey_no_game_message(self) -> None:
+        window = self._window()
+        try:
+            messages = []
+            statuses = []
+            class Dialog:
+                def set_hotkey_status(self, text):
+                    messages.append(text)
+            window._hotkey_ready = lambda: False
+            window._set_status = lambda text: statuses.append(text)
+            window._on_test_hotkey(Dialog())
+            self.assertTrue(any("无游戏窗口" in text for text in messages))
+            self.assertTrue(statuses)
         finally:
             self._close(window)
 

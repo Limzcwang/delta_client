@@ -34,13 +34,17 @@ from core.protocol import ws_url_for
 from state.paths import APP_NAME
 
 DEFAULT_SERVER_URL = "https://deltachat.icu"
+FALLBACK_SERVER_URL = "https://deltachat.icu:8443"
 LEGACY_DEFAULT_SERVER_URL = "http://114.132.161.169:8000"
 LEGACY_WS_URL = "ws://114.132.161.169:8000/ws"
 LEGACY_HTTPS_SERVER_URL = "https://deltachat.icu:8443"
 LEGACY_HTTPS_WS_URL = "wss://deltachat.icu:8443/ws"
+AUTO_SAMPLE_MS_ALLOWED = (2000, 1000, 500)
+AUTO_SAMPLE_MS_MIN = 200
+AUTO_SAMPLE_MS_MAX = 5000
 DEFAULT_TIMEOUT = 15.0
 CONFIG_FILENAME = ".delta_client.json"
-APP_VERSION = "0.2.3"
+APP_VERSION = "0.2.7"
 __version__ = APP_VERSION
 CONFIG_ENV = "DELTA_CLIENT_CONFIG"
 
@@ -107,6 +111,21 @@ def normalize_ws_url(raw: Any) -> str:
     return _normalize_url(text, ("ws", "wss"), "WebSocket 地址")
 
 
+def connection_candidates(server_url: Any) -> list[str]:
+    """连接候选：用户/当前地址优先，其次 443 默认与 8443 兼容；去重且保持顺序。"""
+    candidates: list[str] = []
+    for raw in (server_url, FALLBACK_SERVER_URL):
+        if not raw:
+            continue
+        try:
+            value = normalize_server_url(raw)
+        except ConfigError:
+            continue
+        if value not in candidates:
+            candidates.append(value)
+    return candidates
+
+
 def config_path_from_env(env: Mapping[str, str] | None = None) -> Path:
     """配置文件路径：``DELTA_CLIENT_CONFIG`` 优先，否则 ``%APPDATA%\\DeltaClient\\config.json``。"""
     source = os.environ if env is None else env
@@ -145,6 +164,7 @@ class AppConfig:
     auto_sample_ms: int = 2000
     capture_window_process: str = "DeltaForceClient-Win64-Shipping"
     capture_window_title: str = ""
+    title_match_strict: bool = True
     auto_operator_enabled: bool = True
     operator_recognition_threshold: float = 0.65
     hud_debug_export: bool = False
@@ -181,6 +201,7 @@ class AppConfig:
             "auto_sample_ms": self.auto_sample_ms,
             "capture_window_process": self.capture_window_process,
             "capture_window_title": self.capture_window_title,
+            "title_match_strict": self.title_match_strict,
             "auto_operator_enabled": self.auto_operator_enabled,
             "operator_recognition_threshold": self.operator_recognition_threshold,
             "hud_debug_export": self.hud_debug_export,
@@ -315,12 +336,13 @@ def load_config(
         auto_sample_ms = int(file_data.get("auto_sample_ms", 2000))
     except (TypeError, ValueError):
         auto_sample_ms = 2000
-    if auto_sample_ms not in (1000, 2000, 3000):
-        auto_sample_ms = 2000
+    if auto_sample_ms not in AUTO_SAMPLE_MS_ALLOWED:
+        auto_sample_ms = min(AUTO_SAMPLE_MS_MAX, max(AUTO_SAMPLE_MS_MIN, auto_sample_ms))
     capture_window_process = str(
         file_data.get("capture_window_process") or "DeltaForceClient-Win64-Shipping"
     ).strip()
     capture_window_title = str(file_data.get("capture_window_title") or "").strip()
+    title_match_strict = parse_bool(file_data.get("title_match_strict"), True)
     auto_operator_enabled = parse_bool(file_data.get("auto_operator_enabled"), True)
     hud_debug_export = parse_bool(file_data.get("hud_debug_export"), False)
     try:
@@ -355,6 +377,7 @@ def load_config(
         auto_sample_ms=auto_sample_ms,
         capture_window_process=capture_window_process,
         capture_window_title=capture_window_title,
+        title_match_strict=title_match_strict,
         auto_operator_enabled=auto_operator_enabled,
         operator_recognition_threshold=operator_recognition_threshold,
         hud_debug_export=hud_debug_export,

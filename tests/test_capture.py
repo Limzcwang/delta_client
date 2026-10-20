@@ -157,6 +157,7 @@ class WindowMatchingTests(unittest.TestCase):
             "pid": 33220,
             "title": "三角洲行动",
             "process_name": "DeltaForceClient-Win64-Shipping.exe",
+            "process_path": r"C:\Games\DeltaForce\DeltaForceClient-Win64-Shipping.exe",
             "client_left": 0,
             "client_top": 0,
             "client_width": 2560,
@@ -174,10 +175,54 @@ class WindowMatchingTests(unittest.TestCase):
 
     def test_title_fallback_when_process_unavailable(self) -> None:
         result = find_game_window(
-            candidates=[self._candidate(pid=9, title="Delta Force Client", process_name="")]
+            candidates=[
+                self._candidate(
+                    pid=9, title="Delta Force Client", process_name="",
+                    process_path=r"C:\Games\DeltaForce\game.exe",
+                )
+            ]
         )
         self.assertIsNotNone(result.window)
         self.assertEqual("title", result.match_method)
+
+    def test_strict_title_rejects_harness_tool(self) -> None:
+        harness = self._candidate(
+            pid=77, title="三角洲工具 — DeepSeek Harness", process_name="DeepSeek Harness.exe",
+            process_path=r"C:\Program Files\DeepSeek Harness\app.exe",
+        )
+        self.assertIsNone(find_game_window(candidates=[harness]).window)
+        game = self._candidate(
+            pid=33220, title="三角洲行动  ", process_name="",
+            process_path=r"D:\WeGameApps\DeltaForce\game.exe",
+        )
+        result = find_game_window(candidates=[game])
+        self.assertIsNotNone(result.window)
+        self.assertEqual("title", result.match_method)
+
+    def test_blacklisted_title_exe_rejected(self) -> None:
+        explorer = self._candidate(
+            pid=88, title="三角洲行动", process_name="explorer.exe",
+            process_path=r"C:\Windows\explorer.exe",
+        )
+        self.assertIsNone(find_game_window(candidates=[explorer]).window)
+        chrome = self._candidate(
+            pid=89, title="三角洲行动", process_name="chrome.exe",
+            process_path=r"C:\Program Files\Chrome\chrome.exe",
+        )
+        self.assertIsNone(find_game_window(candidates=[chrome]).window)
+
+    def test_process_match_priority_over_title(self) -> None:
+        title_game = self._candidate(
+            pid=111, title="三角洲行动", process_name="",
+            process_path=r"D:\rail_apps\DeltaForce\game.exe",
+        )
+        process_game = self._candidate(
+            pid=222, title="Anything", process_name="DeltaForceClient-Win64-Shipping.exe",
+            process_path=r"D:\rail_apps\DeltaForce\DeltaForceClient-Win64-Shipping.exe",
+        )
+        result = find_game_window(candidates=[title_game, process_game])
+        self.assertEqual(222, result.window.pid)
+        self.assertEqual("process", result.match_method)
 
     def test_title_keyword_and_size_filter(self) -> None:
         small = self._candidate(title="三角洲行动", client_width=640, client_height=480)

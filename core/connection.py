@@ -112,10 +112,17 @@ class ConnectionCheck:
         return "\n".join(lines)
 
 
+def is_network_failure(check: ConnectionCheck) -> bool:
+    """仅网络层不可达（timeout/network/unexpected）视为候选失败；401/403/404 视为可达。"""
+    probes = (check.health, check.rooms)
+    return any((not probe.ok) and probe.category in ("timeout", "network", "unexpected") for probe in probes)
+
+
 __all__ = [
     "CATEGORY_LABELS",
     "ConnectionCheck",
     "ProbeResult",
     "probe_from_error",
     "probe_ok",
+    "is_network_failure",
 ]

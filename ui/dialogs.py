@@ -19,13 +19,21 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QScrollArea,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from config import APP_VERSION, AppConfig, ConfigError, normalize_server_url, normalize_ws_url
+from config import (
+    APP_VERSION,
+    AUTO_SAMPLE_MS_ALLOWED,
+    AppConfig,
+    ConfigError,
+    normalize_server_url,
+    normalize_ws_url,
+)
 from core.models import Room
 from core.operators import OperatorCatalog, load_operator_catalog
 from state.saved_logins import SavedLoginInfo
@@ -309,6 +317,7 @@ class SettingsDialog(QDialog):
     password_change_requested = Signal(str, str)  # (旧密码, 新密码)
     config_check_requested = Signal()
     operator_recognition_requested = Signal()
+    hotkey_test_requested = Signal()
 
     def __init__(
         self,
@@ -329,32 +338,52 @@ class SettingsDialog(QDialog):
         self._build()
 
     def _build(self) -> None:
+        self.setWindowTitle("技能设置")
+        self.setMinimumSize(640, 560)
+        self.setFixedSize(640, 560)
         root = QVBoxLayout(self)
-        root.setContentsMargins(26, 22, 26, 20)
-        root.setSpacing(10)
-        heading = QLabel("设置")
+        root.setContentsMargins(20, 16, 20, 16)
+        root.setSpacing(8)
+        header = QHBoxLayout()
+        heading = QLabel("技能设置")
         heading.setObjectName("PageTitle")
-        sub = QLabel("连接配置保存到 %APPDATA%\\DeltaClient\\config.json；个人资料修改成功后保持登录")
-        sub.setObjectName("PageSubtitle")
-        sub.setWordWrap(True)
-        root.addWidget(heading)
-        root.addWidget(sub)
+        header.addWidget(heading)
         version_label = QLabel(f"版本 v{APP_VERSION}")
         version_label.setObjectName("Hint")
-        root.addWidget(version_label)
-        root.addSpacing(6)
+        header.addWidget(version_label)
+        header.addStretch(1)
+        self.close_button = QPushButton("✕")
+        self.close_button.setObjectName("Text")
+        self.close_button.setFixedWidth(28)
+        self.close_button.clicked.connect(self.reject)
+        header.addWidget(self.close_button)
+        root.addLayout(header)
+        sub = QLabel("所有设置仅保存到本机；保存后回到房间，不离开当前房间。")
+        sub.setObjectName("Hint")
+        sub.setWordWrap(True)
+        root.addWidget(sub)
+        root.addSpacing(4)
 
         # P3 起连接/个人资料迁到独立页；这里保留对象仅为兼容旧测试/调用，不加入 Tab。
         self.connection_tab = self._build_connection_tab()
         self.profile_tab = self._build_profile_tab()
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_hud_tab(), "HUD / 采屏")
-        self.tabs.addTab(self._build_operator_tab(), "干员")
-        self.tabs.addTab(self._build_overlay_tab(), "悬浮窗")
+        # 每个 Tab 页内部各自滚动，绝不把 QTabWidget 塞进 QScrollArea（会触发布局/重绘循环）。
+        self.tabs.addTab(self._scroll_page(self._build_hud_tab()), "HUD / 采屏")
+        self.tabs.addTab(self._scroll_page(self._build_operator_tab()), "干员")
+        self.tabs.addTab(self._scroll_page(self._build_overlay_tab()), "悬浮窗")
         root.addWidget(self.tabs, stretch=1)
 
         self.error_label = _error_label(root)
         _add_buttons(self, root, "保存")
+
+    @staticmethod
+    def _scroll_page(page: QWidget) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setWidget(page)
+        return scroll
 
     def _build_connection_tab(self) -> QWidget:
         page = QWidget()
@@ -424,7 +453,7 @@ class SettingsDialog(QDialog):
         interval_row = QHBoxLayout()
         interval_row.addWidget(QLabel("采样间隔"))
         self.auto_interval_combo = QComboBox()
-        for value in (1000, 2000, 3000):
+        for value in AUTO_SAMPLE_MS_ALLOWED:
             self.auto_interval_combo.addItem(f"{value} ms", value)
         index = self.auto_interval_combo.findData(int(self._config.auto_sample_ms))
         self.auto_interval_combo.setCurrentIndex(max(0, index))
@@ -783,6 +812,9 @@ class SettingsDialog(QDialog):
         self.hotkey_status_label.setObjectName("Hint")
         self.hotkey_status_label.setWordWrap(True)
         layout.addWidget(self.hotkey_status_label)
+        self.test_hotkey_button = QPushButton("测试热键")
+        self.test_hotkey_button.clicked.connect(self.hotkey_test_requested.emit)
+        layout.addWidget(self.test_hotkey_button)
 
         reset_row = QHBoxLayout()
         self.overlay_reset_button = QPushButton("重置悬浮窗位置")
