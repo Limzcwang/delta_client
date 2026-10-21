@@ -417,28 +417,38 @@ class SkillPanel(QWidget):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
         header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(8)
+        header.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.match_reset_button = QPushButton("重置对局")
         self.match_reset_button.setObjectName("Ghost")
         self.match_reset_button.setFixedHeight(30)
+        self.match_reset_button.setStyleSheet("QPushButton { min-height:28px; max-height:28px; padding:0 14px; font-size:12px; }")
         self.match_reset_button.clicked.connect(self.match_reset_requested.emit)
-        header.addWidget(self.match_reset_button)
+        header.addWidget(self.match_reset_button, 0, Qt.AlignmentFlag.AlignVCenter)
         self.match_state_label = QLabel("对局未进行")
         self.match_state_label.setObjectName("MatchState")
-        self.match_state_label.setFixedHeight(26)
+        self.match_state_label.setFixedHeight(30)
+        self.match_state_label.setMinimumWidth(96)
+        self.match_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.match_state_label.setStyleSheet(
             "QLabel#MatchState { color:#f5a800; background:rgba(245,168,0,0.10);"
-            " border:1px solid rgba(245,168,0,0.50); border-radius:13px; padding:0 10px; font-size:11px; }"
+            " border:1px solid rgba(245,168,0,0.50); border-radius:15px; padding:0 10px; font-size:11px; }"
         )
         self.match_state_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        header.addWidget(self.match_state_label)
+        header.addWidget(self.match_state_label, 0, Qt.AlignmentFlag.AlignVCenter)
         header.addStretch(1)
         self.share_check = SwitchRow("共享我的技能", "", False)
         self.share_check.hide()
         self.share_toggle_button = QPushButton("开启技能共享")
         self.share_toggle_button.setObjectName("ShareToggle")
         self.share_toggle_button.setFixedHeight(30)
+        self.share_toggle_button.setStyleSheet(
+            "QPushButton#ShareToggle { min-height:30px; max-height:30px; padding:0 14px; font-size:12px;"
+            " background:#2ea36b; color:#f0fff7; border:none; border-radius:6px; }"
+        )
         self.share_toggle_button.clicked.connect(self._on_share_button)
-        header.addWidget(self.share_toggle_button)
+        header.addWidget(self.share_toggle_button, 0, Qt.AlignmentFlag.AlignVCenter)
         self.simulate_button = QPushButton("模拟我的技能")
         self.simulate_button.setObjectName("Link")
         self.simulate_button.clicked.connect(self.simulate_requested.emit)
@@ -451,8 +461,9 @@ class SkillPanel(QWidget):
         self.settings_button = QPushButton("设置")
         self.settings_button.setObjectName("Ghost")
         self.settings_button.setFixedHeight(30)
+        self.settings_button.setStyleSheet("QPushButton { min-height:28px; max-height:28px; padding:0 14px; font-size:12px; }")
         self.settings_button.clicked.connect(self.settings_requested.emit)
-        header.addWidget(self.settings_button)
+        header.addWidget(self.settings_button, 0, Qt.AlignmentFlag.AlignVCenter)
         root.addLayout(header)
 
         self.scroll = QScrollArea()
@@ -486,16 +497,16 @@ class SkillPanel(QWidget):
         return self.share_check.isChecked()
 
     def set_match_state(self, label: str, running: bool, reset_disabled: bool = False) -> None:
-        self.match_state_label.setText(("✓ " if running else "✗ ") + str(label))
+        self.match_state_label.setText(("✓ " if running else "× ") + str(label))
         if running:
             self.match_state_label.setStyleSheet(
                 "QLabel#MatchState { color:#5fc98e; background:rgba(95,201,142,0.10);"
-                " border:1px solid rgba(95,201,142,0.50); border-radius:13px; padding:0 10px; font-size:11px; }"
+                " border:1px solid rgba(95,201,142,0.50); border-radius:15px; padding:0 10px; font-size:11px; }"
             )
         else:
             self.match_state_label.setStyleSheet(
                 "QLabel#MatchState { color:#f5a800; background:rgba(245,168,0,0.10);"
-                " border:1px solid rgba(245,168,0,0.50); border-radius:13px; padding:0 10px; font-size:11px; }"
+                " border:1px solid rgba(245,168,0,0.50); border-radius:15px; padding:0 10px; font-size:11px; }"
             )
         self.match_reset_button.setEnabled(not reset_disabled)
 
@@ -513,10 +524,10 @@ class SkillPanel(QWidget):
         self.share_check.blockSignals(False)
         self.share_toggle_button.setText("结束技能共享" if enabled else "开启技能共享")
         self.share_toggle_button.setStyleSheet(
-            "QPushButton#ShareToggle { background:#c2453a; color:#ffffff; border:none; border-radius:6px; padding:0 14px; font-size:12px; }"
+            "QPushButton#ShareToggle { background:#c2453a; color:#ffffff; border:none; border-radius:6px; padding:0 14px; font-size:12px; min-height:30px; max-height:30px; }"
             "QPushButton#ShareToggle:hover { background:#d65044; }"
             if enabled else
-            "QPushButton#ShareToggle { background:#2ea36b; color:#f0fff7; border:none; border-radius:6px; padding:0 14px; font-size:12px; }"
+            "QPushButton#ShareToggle { background:#2ea36b; color:#f0fff7; border:none; border-radius:6px; padding:0 14px; font-size:12px; min-height:30px; max-height:30px; }"
             "QPushButton#ShareToggle:hover { background:#37b87c; }"
         )
 
