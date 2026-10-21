@@ -41,6 +41,7 @@ from core.canvas import (
 )
 from core.chat import ChatTimeline
 from core.connection import is_network_failure
+from core.match_flow import MatchPhase, MatchStateMachine
 from core.errors import ApiError, ErrorKind, to_user_message
 from core.models import (
     ChatMessage,
@@ -300,6 +301,11 @@ class MainWindow(QMainWindow):
             hud_service=self._hud_service,
             context_provider=self._auto_recognition_context,
         )
+        self.match_flow = MatchStateMachine(interval_ms=int(self.config.match_interval_ms))
+        self.match_timer = QTimer(self)
+        self.match_timer.setInterval(int(self.config.match_interval_ms))
+        self.match_timer.timeout.connect(self._match_tick)
+        self.room_view.skill_panel.match_reset_requested.connect(self._on_match_reset)
         self._auto_controller.payload_ready.connect(self._on_auto_payload)
         self._auto_controller.status_changed.connect(self._on_auto_status)
         self._auto_controller.operator_detected.connect(self._on_auto_operator_detected)
@@ -345,7 +351,6 @@ class MainWindow(QMainWindow):
         self.room_view.skill_panel.sharing_toggled.connect(self._on_skill_sharing_toggled)
         self.room_view.skill_panel.simulate_requested.connect(self._on_simulate_skill)
         self.room_view.skill_panel.capture_requested.connect(self._on_hud_capture)
-        self._setup_tray()
         self.room_view.canvas.stroke_finished.connect(self._on_canvas_strokes)
         self.room_view.canvas.clear_requested.connect(self._on_canvas_clear_requested)
 
@@ -1056,6 +1061,11 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(self.room_view)
         self.room_view.focus_chat_input()
         self._system_message(f"已进入 {room.display_name}（{room.code}）")
+        if hasattr(self, "match_flow"):
+            self.match_flow.set_sharing(False)
+            self.match_flow.set_context(logged_in=self.session.is_logged_in, in_room=True)
+            self.match_timer.stop()
+            self._sync_match_ui()
         self._start_ws(room)
         if hasattr(self, "_auto_controller"):
             self._apply_auto_config()
@@ -2246,10 +2256,68 @@ class MainWindow(QMainWindow):
         if not self._submit_hud_task(frame, self._finish_hud_capture):
             set_current_step("running")
 
+    def _on_match_reset(self) -> None:
+        self.match_flow.reset()
+        if self.match_flow.phase == MatchPhase.RUNNING:
+            self.match_timer.start()
+        else:
+            self.match_timer.stop()
+        self._sync_match_ui(reset_disabled=True)
+        QTimer.singleShot(500, lambda: self._sync_match_ui(reset_disabled=False))
+
+    def _sync_match_ui(self, reset_disabled: bool = False) -> None:
+        try:
+            label = self.match_flow.label()
+            self.room_view.skill_panel.set_match_state(
+                label, self.match_flow.phase == MatchPhase.RUNNING, reset_disabled
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _match_tick(self) -> None:
+        try:
+            if not self.session.is_logged_in or self._current_room is None:
+                self.match_timer.stop(); return
+            if not self.match_flow.shared:
+                self.match_timer.stop(); return
+            if self.match_flow.phase == MatchPhase.IDLE:
+                if self._find_game_window() is None:
+                    return
+                # 简化开始判定：OCR 不可用时按自动识别开关等待；重置按钮可手动开始
+                if self.match_flow.auto_start:
+                    frame, _err = self._capture_hud_frame()
+                    hit = False
+                    if frame is not None:
+                        try:
+                            from core.hud_ocr import HudOcr
+                            texts = [line.text for line in HudOcr().read_lines(frame.image[: max(40, frame.height // 4)])]
+                            from core.match_flow import parse_countdown
+                            hit = any(parse_countdown(t) for t in texts)
+                        except Exception:  # noqa: BLE001
+                            hit = False
+                    self.match_flow.observe_start(hit)
+                    self._sync_match_ui()
+            elif self.match_flow.phase == MatchPhase.RUNNING:
+                # 识别链路由现有 auto controller 承担；这里仅维持状态与窗口关闭急停
+                if self._find_game_window() is None:
+                    self.match_flow.window_closed(); self.match_timer.stop(); self._sync_match_ui()
+        except Exception:  # noqa: BLE001
+            logger.debug("match tick failed", exc_info=True)
+
     def _on_skill_sharing_toggled(self, enabled: bool) -> None:
         self._skill_share_enabled = bool(enabled)
         if hasattr(self, "_auto_controller"):
             self._apply_auto_config()
+        if hasattr(self, "match_flow"):
+            self.match_flow.set_sharing(bool(enabled))
+            self.match_flow.set_context(logged_in=self.session.is_logged_in, in_room=self._current_room is not None)
+            self.match_flow.auto_start = bool(self.config.match_auto_start)
+            self.match_flow.update_interval(int(self.config.match_interval_ms))
+            if enabled:
+                self.match_timer.start(int(self.config.match_interval_ms))
+            else:
+                self.match_timer.stop()
+            self._sync_match_ui()
         if not enabled:
             # 无论 WS 是否连通，都先本地移除自己，避免卡片残留。
             self._remove_own_skill_state()
@@ -2955,28 +3023,6 @@ class MainWindow(QMainWindow):
             self.room_view.overlay_edit_button.setText("完成编辑" if self.overlay.edit_mode else "编辑悬浮窗")
         except RuntimeError:
             pass
-        if hasattr(self, "tray_toggle_action"):
-            self.tray_toggle_action.setText("隐藏悬浮窗" if self._overlay_visible else "显示悬浮窗")
-        if hasattr(self, "tray_edit_action"):
-            self.tray_edit_action.setText("完成编辑" if self.overlay.edit_mode else "编辑悬浮窗")
-
-    def _setup_tray(self) -> None:
-        try:
-            from PySide6.QtWidgets import QMenu, QSystemTrayIcon
-            self.tray = QSystemTrayIcon(self.windowIcon(), self)
-            self.tray.setToolTip("Delta Client")
-            menu = QMenu(self)
-            self.tray_toggle_action = menu.addAction("显示/隐藏悬浮窗")
-            self.tray_toggle_action.triggered.connect(self._toggle_overlay)
-            self.tray_edit_action = menu.addAction("编辑悬浮窗")
-            self.tray_edit_action.triggered.connect(self._toggle_overlay_edit)
-            menu.addSeparator()
-            menu.addAction("退出").triggered.connect(self.close)
-            self.tray.setContextMenu(menu)
-            self.tray.show()
-            self._sync_overlay_buttons()
-        except Exception as exc:  # noqa: BLE001
-            logger.info("系统托盘不可用：%s", exc)
 
     def _open_settings(self, start_tab: int = 0) -> None:
         dialog = SettingsDialog(self.config, self, self.operator_catalog, self.operator_config)

@@ -44,84 +44,26 @@ class SettingsOperatorTests(unittest.TestCase):
         self.dialogs.append(dialog)
         return dialog
 
-    def test_dropdown_has_16_operators_and_selects_saved(self) -> None:
-        dialog = self._dialog("weilong")
-        self.assertEqual(3, dialog.tabs.count())
-        self.assertEqual(17, dialog.operator_combo.count())
-        self.assertEqual("weilong", dialog.operator_combo.currentData())
-        self.assertIn("威龙", dialog.operator_combo.currentText())
-        self.assertIn("虎蹲炮", dialog.operator_detail_label.text())
-        from PySide6.QtWidgets import QLabel
-
-        self.assertTrue(
-            any("版本 v0.2.10" in label.text() for label in dialog.findChildren(QLabel))
-        )
-
     def test_hud_tab_has_calibration_detection_and_auto_operator(self) -> None:
         dialog = self._dialog("weilong")
         labels = [dialog.tabs.tabText(index) for index in range(dialog.tabs.count())]
-        self.assertEqual(["HUD / 采屏", "干员", "悬浮窗"], labels)
+        self.assertEqual(["采集", "悬浮窗"], labels)
         self.assertIs(dialog.tabs.widget(0).widget(), dialog.calibration_button.parent())
-        self.assertIsNotNone(dialog.calibration_button)
-        self.assertIsNotNone(dialog.detect_window_button)
         self.assertTrue(dialog.auto_operator_check.isChecked())
-        self.assertAlmostEqual(0.65, dialog.operator_threshold_spin.value())
+        self.assertTrue(dialog.match_auto_check.isChecked())
         from PySide6.QtWidgets import QLabel
         self.assertTrue(dialog.overlay_auto_show_check.isChecked())
         self.assertTrue(any("反作弊" in label.text() for label in dialog.findChildren(QLabel)))
-        self.assertFalse(dialog.hud_debug_check.isChecked())
-        self.assertEqual(140, dialog.brightness_spin.value())
-        self.assertIn("亮度阈值", dialog.hud_profile_label.text())
-        self.assertIn("skill_bar", dialog.hud_profile_label.text())
-        self.assertIn("avatar_roi", dialog.hud_profile_label.text())
-        dialog.hud_debug_check.setChecked(True)
-        dialog.brightness_spin.setValue(155)
-        dialog.auto_operator_check.setChecked(False)
-        dialog.operator_threshold_spin.setValue(0.83)
         dialog.accept()
         result = dialog.config_result()
-        self.assertFalse(result.auto_operator_enabled)
-        self.assertTrue(result.hud_debug_export)
-        self.assertAlmostEqual(0.83, result.operator_recognition_threshold)
-        self.assertEqual(155, result.hud_profile["brightness_threshold"])
-
-    def test_config_center_labels_and_check_button(self) -> None:
-        from types import SimpleNamespace
-
-        manager = SimpleNamespace(
-            state=SimpleNamespace(version="v3", source_label="服务器", updated_at="2026-10-20")
-        )
-        dialog = SettingsDialog(
-            AppConfig(server_migrated=False),
-            catalog=self.catalog,
-            config_manager=manager,
-        )
-        self.dialogs.append(dialog)
-        self.assertIn("v3", dialog.config_version_label.text())
-        self.assertIn("服务器", dialog.config_source_label.text())
-        self.assertIn("2026-10-20", dialog.config_updated_label.text())
-        events: list[bool] = []
-        dialog.config_check_requested.connect(lambda: events.append(True))
-        dialog.check_config_button.click()
-        self.assertEqual([True], events)
-        dialog.set_config_check_result("已是最新", ok=True)
-        self.assertIn("已是最新", dialog.config_check_result.text())
+        self.assertTrue(result.match_auto_start)
+        self.assertEqual(2000, result.match_interval_ms)
 
     def test_server_migration_hint(self) -> None:
         dialog = self._dialog("honglang")
         self.assertTrue(dialog.server_migrated_label.isHidden())
         dialog.set_server_migrated(True)
         self.assertFalse(dialog.server_migrated_label.isHidden())
-
-    def test_switch_and_result_operator_id(self) -> None:
-        dialog = self._dialog("honglang")
-        index = dialog.operator_combo.findData("muyangren")
-        self.assertGreaterEqual(index, 0)
-        dialog.operator_combo.setCurrentIndex(index)
-        self.assertEqual("muyangren", dialog.operator_combo.currentData())
-        self.assertIn("CD未知", dialog.operator_detail_label.text())
-        dialog.accept()
-        self.assertEqual("muyangren", dialog.config_result().operator_id)
 
     def test_tab_switch_no_resize_or_paint_storm(self) -> None:
         from PySide6.QtCore import QEvent, QObject
@@ -168,7 +110,7 @@ class SettingsOperatorTests(unittest.TestCase):
 
     def test_overlay_settings_persist(self) -> None:
         dialog = self._dialog("honglang")
-        self.assertFalse(dialog.overlay_enabled_check.isChecked())
+        self.assertTrue(dialog.overlay_enabled_check.isChecked())
         dialog.overlay_enabled_check.setChecked(True)
         dialog.overlay_auto_show_check.setChecked(True)
         dialog.overlay_opacity_spin.setValue(55)
@@ -196,24 +138,4 @@ class SettingsOperatorTests(unittest.TestCase):
         dialog = self._dialog("weilong")
         dialog.set_operator_recognition_status("当前识别：红狼（置信度 0.83）")
         self.assertIn("红狼", dialog.operator_recognition_label.text())
-
-    def test_invalid_saved_falls_back_and_persists(self) -> None:
-        dialog = self._dialog("no-such-operator")
-        self.assertEqual("honglang", dialog.operator_combo.currentData())
-        dialog.accept()
-        result = dialog.config_result()
-        self.assertEqual("honglang", result.operator_id)
-        with tempfile.TemporaryDirectory() as tmp:
-            target = Path(tmp) / "config.json"
-            save_config(result, target)
-            reloaded = load_config(path=target, env={})
-            self.assertEqual("honglang", reloaded.operator_id)
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
-
-
 

@@ -156,7 +156,7 @@ class SkillPanelTests(unittest.TestCase):
         events: list[bool] = []
         panel.sharing_toggled.connect(events.append)
         self.assertFalse(panel.sharing_enabled)
-        panel.share_check.setChecked(True)
+        panel.share_toggle_button.click()
         self.assertEqual([True], events)
         panel.set_sharing(False)
         self.assertFalse(panel.sharing_enabled)
@@ -299,12 +299,12 @@ class SkillPanelTests(unittest.TestCase):
         slot = panel._rows["2"].slot_widgets[SLOT_ULTIMATE]
         slot.resize(120, 104)
         name, middle, bottom = slot.name_rect(), slot.middle_rect(), slot.bottom_rect()
-        self.assertEqual(104, slot.height())
+        self.assertEqual(110, slot.height())
         self.assertFalse(name.intersects(middle))
         self.assertFalse(middle.intersects(bottom))
         self.assertLessEqual(name.bottom(), middle.top())
-        self.assertGreaterEqual(bottom.top() - middle.bottom(), 6)
-        self.assertLessEqual(bottom.bottom(), 102)
+        self.assertGreaterEqual(bottom.top() - middle.bottom(), 8)
+        self.assertLessEqual(bottom.bottom(), 108)
 
     def test_charge_uses_count_instead_of_ring(self) -> None:
         panel = self._panel()
@@ -352,7 +352,7 @@ class SkillPanelTests(unittest.TestCase):
         self.assertEqual(Qt.ScrollBarPolicy.ScrollBarAsNeeded, panel.scroll.verticalScrollBarPolicy())
         self.assertEqual(10, panel.list_layout.spacing())
         for row in panel._rows.values():
-            self.assertEqual(150, row.height())
+            self.assertEqual(166, row.height())
         bar = panel.scroll.verticalScrollBar()
         self.assertTrue(bar.isVisible())
         self.assertEqual(8, bar.width())

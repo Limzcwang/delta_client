@@ -337,14 +337,14 @@ class SettingsDialog(QDialog):
         self._build()
 
     def _build(self) -> None:
-        self.setWindowTitle("技能设置")
+        self.setWindowTitle("设置")
         self.setMinimumSize(640, 560)
         self.setFixedSize(640, 560)
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 16, 20, 16)
         root.setSpacing(8)
         header = QHBoxLayout()
-        heading = QLabel("技能设置")
+        heading = QLabel("设置")
         heading.setObjectName("PageTitle")
         header.addWidget(heading)
         version_label = QLabel(f"版本 v{APP_VERSION}")
@@ -368,8 +368,7 @@ class SettingsDialog(QDialog):
         self.profile_tab = self._build_profile_tab()
         self.tabs = QTabWidget()
         # 每个 Tab 页内部各自滚动，绝不把 QTabWidget 塞进 QScrollArea（会触发布局/重绘循环）。
-        self.tabs.addTab(self._scroll_page(self._build_hud_tab()), "HUD / 采屏")
-        self.tabs.addTab(self._scroll_page(self._build_operator_tab()), "干员")
+        self.tabs.addTab(self._scroll_page(self._build_hud_tab()), "采集")
         self.tabs.addTab(self._scroll_page(self._build_overlay_tab()), "悬浮窗")
         root.addWidget(self.tabs, stretch=1)
 
@@ -442,6 +441,17 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(4, 10, 4, 4)
         layout.setSpacing(8)
+
+        self.match_auto_check = SwitchRow("自动识别对局", "开启后 OCR 自动判断开始；关闭则等待【重置对局】")
+        self.match_auto_check.setChecked(self._config.match_auto_start)
+        layout.addWidget(self.match_auto_check)
+        match_row = QHBoxLayout(); match_row.addWidget(QLabel("识别间隔"))
+        self.match_interval_combo = QComboBox()
+        for value in (2000, 1000, 500):
+            self.match_interval_combo.addItem(f"{value} ms", value)
+        idx = self.match_interval_combo.findData(int(self._config.match_interval_ms))
+        self.match_interval_combo.setCurrentIndex(max(0, idx))
+        match_row.addWidget(self.match_interval_combo); match_row.addStretch(1); layout.addLayout(match_row)
 
         self.auto_capture_check = SwitchRow("允许截图采集", "仅内存，不落盘/不上传")
         self.auto_capture_check.setChecked(self._config.auto_capture_enabled)
@@ -1035,7 +1045,7 @@ class SettingsDialog(QDialog):
             ws_url=ws_url,
             use_mock=self.mock_check.isChecked(),
             persist_token=self.save_token_check.isChecked(),
-            operator_id=str(self.operator_combo.currentData() or ""),
+            operator_id=self._config.operator_id,
             hud_profile=self._hud_profile or None,
             overlay_enabled=self.overlay_enabled_check.isChecked(),
             overlay_auto_show=self.overlay_auto_show_check.isChecked(),
@@ -1043,6 +1053,8 @@ class SettingsDialog(QDialog):
             overlay_scale=float(self.overlay_scale_spin.value()),
             overlay_x=None if self._overlay_position_reset else self._config.overlay_x,
             overlay_y=None if self._overlay_position_reset else self._config.overlay_y,
+            match_auto_start=self.match_auto_check.isChecked(),
+            match_interval_ms=int(self.match_interval_combo.currentData() or 2000),
             auto_capture_enabled=self.auto_capture_check.isChecked(),
             auto_loop_enabled=self.auto_loop_check.isChecked(),
             auto_sample_ms=int(self.auto_interval_combo.currentData() or 2000),

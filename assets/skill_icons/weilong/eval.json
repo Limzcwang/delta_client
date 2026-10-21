@@ -1,0 +1,392 @@
+[
+  {
+    "case": "043122_047",
+    "avatar": 0.707,
+    "icon": 0.951,
+    "combined": 1.23
+  },
+  {
+    "case": "043217_856",
+    "avatar": 0.701,
+    "icon": 0.951,
+    "combined": 1.224
+  },
+  {
+    "case": "043219_857",
+    "avatar": 0.703,
+    "icon": 0.948,
+    "combined": 1.225
+  },
+  {
+    "case": "043221_869",
+    "avatar": 0.706,
+    "icon": 0.955,
+    "combined": 1.231
+  },
+  {
+    "case": "043223_845",
+    "avatar": 0.833,
+    "icon": 0.939,
+    "combined": 1.35
+  },
+  {
+    "case": "043225_862",
+    "avatar": 0.834,
+    "icon": 0.952,
+    "combined": 1.357
+  },
+  {
+    "case": "043227_854",
+    "avatar": 0.833,
+    "icon": 0.958,
+    "combined": 1.36
+  },
+  {
+    "case": "043229_860",
+    "avatar": 0.826,
+    "icon": 0.954,
+    "combined": 1.35
+  },
+  {
+    "case": "043231_850",
+    "avatar": 0.829,
+    "icon": 0.953,
+    "combined": 1.353
+  },
+  {
+    "case": "043233_874",
+    "avatar": 0.835,
+    "icon": 0.86,
+    "combined": 1.308
+  },
+  {
+    "case": "043235_850",
+    "avatar": 0.796,
+    "icon": 0.675,
+    "combined": 1.167
+  },
+  {
+    "case": "043237_847",
+    "avatar": 0.807,
+    "icon": 0.767,
+    "combined": 1.229
+  },
+  {
+    "case": "043239_914",
+    "avatar": 0.667,
+    "icon": 0.801,
+    "combined": 1.107
+  },
+  {
+    "case": "043241_874",
+    "avatar": 0.618,
+    "icon": 0.687,
+    "combined": 0.996
+  },
+  {
+    "case": "043249_839",
+    "avatar": 0.775,
+    "icon": 0.914,
+    "combined": 1.278
+  },
+  {
+    "case": "043259_854",
+    "avatar": 0.769,
+    "icon": 0.762,
+    "combined": 1.188
+  },
+  {
+    "case": "043301_850",
+    "avatar": 0.648,
+    "icon": 0.548,
+    "combined": 0.949
+  },
+  {
+    "case": "043303_854",
+    "avatar": 0.779,
+    "icon": 0.913,
+    "combined": 1.281
+  },
+  {
+    "case": "043307_851",
+    "avatar": 0.799,
+    "icon": 0.655,
+    "combined": 1.159
+  },
+  {
+    "case": "043311_878",
+    "avatar": 0.689,
+    "icon": 0.583,
+    "combined": 1.01
+  },
+  {
+    "case": "043313_877",
+    "avatar": 0.795,
+    "icon": 0.958,
+    "combined": 1.322
+  },
+  {
+    "case": "043315_891",
+    "avatar": 0.795,
+    "icon": 0.945,
+    "combined": 1.314
+  },
+  {
+    "case": "043317_877",
+    "avatar": 0.56,
+    "icon": 0.936,
+    "combined": 1.075
+  },
+  {
+    "case": "043321_896",
+    "avatar": 0.764,
+    "icon": 0.74,
+    "combined": 1.171
+  },
+  {
+    "case": "043323_899",
+    "avatar": 0.684,
+    "icon": 0.769,
+    "combined": 1.107
+  },
+  {
+    "case": "043325_882",
+    "avatar": 0.76,
+    "icon": 0.928,
+    "combined": 1.271
+  },
+  {
+    "case": "043329_900",
+    "avatar": 0.775,
+    "icon": 0.89,
+    "combined": 1.265
+  },
+  {
+    "case": "043337_897",
+    "avatar": 0.704,
+    "icon": 0.641,
+    "combined": 1.057
+  },
+  {
+    "case": "043345_882",
+    "avatar": 0.83,
+    "icon": 0.851,
+    "combined": 1.298
+  },
+  {
+    "case": "043351_882",
+    "avatar": 0.838,
+    "icon": 0.737,
+    "combined": 1.243
+  },
+  {
+    "case": "043353_893",
+    "avatar": 0.826,
+    "icon": 0.68,
+    "combined": 1.2
+  },
+  {
+    "case": "043355_916",
+    "avatar": 0.762,
+    "icon": 0.763,
+    "combined": 1.182
+  },
+  {
+    "case": "043357_861",
+    "avatar": 0.747,
+    "icon": 0.762,
+    "combined": 1.166
+  },
+  {
+    "case": "043942_046",
+    "avatar": 0.829,
+    "icon": 0.85,
+    "combined": 1.296
+  },
+  {
+    "case": "043944_044",
+    "avatar": 0.667,
+    "icon": 0.928,
+    "combined": 1.177
+  },
+  {
+    "case": "043946_087",
+    "avatar": 0.858,
+    "icon": 0.966,
+    "combined": 1.389
+  },
+  {
+    "case": "043948_041",
+    "avatar": 0.859,
+    "icon": 0.958,
+    "combined": 1.386
+  },
+  {
+    "case": "043952_055",
+    "avatar": 0.699,
+    "icon": 0.952,
+    "combined": 1.222
+  },
+  {
+    "case": "043954_038",
+    "avatar": 0.849,
+    "icon": 0.96,
+    "combined": 1.377
+  },
+  {
+    "case": "043956_081",
+    "avatar": 0.861,
+    "icon": 0.925,
+    "combined": 1.369
+  },
+  {
+    "case": "044000_041",
+    "avatar": 0.857,
+    "icon": 0.901,
+    "combined": 1.353
+  },
+  {
+    "case": "044002_050",
+    "avatar": 0.853,
+    "icon": 0.934,
+    "combined": 1.367
+  },
+  {
+    "case": "044004_065",
+    "avatar": 0.833,
+    "icon": 0.868,
+    "combined": 1.31
+  },
+  {
+    "case": "044012_127",
+    "avatar": 0.857,
+    "icon": 0.614,
+    "combined": 1.195
+  },
+  {
+    "case": "044014_126",
+    "avatar": 0.85,
+    "icon": 0.948,
+    "combined": 1.372
+  },
+  {
+    "case": "044018_099",
+    "avatar": 0.812,
+    "icon": 0.947,
+    "combined": 1.333
+  },
+  {
+    "case": "044020_111",
+    "avatar": 0.808,
+    "icon": 0.943,
+    "combined": 1.327
+  },
+  {
+    "case": "044022_128",
+    "avatar": 0.823,
+    "icon": 0.874,
+    "combined": 1.303
+  },
+  {
+    "case": "044024_103",
+    "avatar": 0.811,
+    "icon": 0.951,
+    "combined": 1.334
+  },
+  {
+    "case": "044028_061",
+    "avatar": 0.8,
+    "icon": 0.953,
+    "combined": 1.325
+  },
+  {
+    "case": "044030_079",
+    "avatar": 0.803,
+    "icon": 0.956,
+    "combined": 1.329
+  },
+  {
+    "case": "044032_083",
+    "avatar": 0.802,
+    "icon": 0.964,
+    "combined": 1.332
+  },
+  {
+    "case": "044034_089",
+    "avatar": 0.797,
+    "icon": 0.955,
+    "combined": 1.322
+  },
+  {
+    "case": "044036_050",
+    "avatar": 0.797,
+    "icon": 0.957,
+    "combined": 1.323
+  },
+  {
+    "case": "044038_076",
+    "avatar": 0.85,
+    "icon": 0.953,
+    "combined": 1.375
+  },
+  {
+    "case": "044040_059",
+    "avatar": 0.798,
+    "icon": 0.954,
+    "combined": 1.323
+  },
+  {
+    "case": "044042_098",
+    "avatar": 0.8,
+    "icon": 0.968,
+    "combined": 1.333
+  },
+  {
+    "case": "044050_138",
+    "avatar": 0.801,
+    "icon": 0.935,
+    "combined": 1.316
+  },
+  {
+    "case": "044052_076",
+    "avatar": 0.797,
+    "icon": 0.899,
+    "combined": 1.292
+  },
+  {
+    "case": "044054_093",
+    "avatar": 0.807,
+    "icon": 0.927,
+    "combined": 1.317
+  },
+  {
+    "case": "044056_100",
+    "avatar": 0.798,
+    "icon": 0.91,
+    "combined": 1.298
+  },
+  {
+    "case": "044100_082",
+    "avatar": 0.815,
+    "icon": 0.945,
+    "combined": 1.335
+  },
+  {
+    "case": "044102_099",
+    "avatar": 0.799,
+    "icon": 0.94,
+    "combined": 1.316
+  },
+  {
+    "case": "044104_090",
+    "avatar": 0.796,
+    "icon": 0.959,
+    "combined": 1.324
+  },
+  {
+    "case": "044106_134",
+    "avatar": 0.799,
+    "icon": 0.936,
+    "combined": 1.314
+  }
+]

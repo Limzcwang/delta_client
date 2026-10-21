@@ -114,7 +114,7 @@ class RoomOverlayFixTests(unittest.TestCase):
     def _window(self):
         session = Session(persist_token=False)
         session.set_login("token", {"id": "12", "username": "DeltaQA01"})
-        window = MainWindow(AppConfig(use_mock=True, persist_token=False, overlay_auto_show=False), session)
+        window = MainWindow(AppConfig(use_mock=True, persist_token=False, overlay_auto_show=False, overlay_enabled=False), session)
         window._current_room = Room(id="1", code="ABC123", name="test")
         window._room_password = None
         window._membership_confirmed = True
@@ -223,20 +223,6 @@ class RoomOverlayFixTests(unittest.TestCase):
             window._resolve_game_window = lambda **k: SimpleNamespace(window=fake, candidates=[], reason="ok")
             window._tick_auto_overlay()
             self.assertTrue(window.overlay_controller.enabled)  # 重新进入游戏重置
-        finally:
-            self._close(window)
-
-    def test_tray_menu_actions_trigger_overlay(self) -> None:
-        window = self._window()
-        try:
-            if not hasattr(window, "tray_toggle_action"):
-                self.skipTest("系统托盘不可用")
-            calls = []
-            window._toggle_overlay = lambda: calls.append("toggle")
-            window._toggle_overlay_edit = lambda: calls.append("edit")
-            window.tray_toggle_action.trigger()
-            window.tray_edit_action.trigger()
-            self.assertEqual(["toggle", "edit"], calls)
         finally:
             self._close(window)
 
