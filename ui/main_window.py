@@ -2431,7 +2431,8 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(int(self.config.match_interval_ms), self._match_end_continue)
 
     def _finish_match(self) -> None:
-        self._match_end_pending = False; self._match_end_window = None
+        # 先停任务（timer/异步/识别）再改状态/UI；任何结束路径都走这里。
+        self._stop_match_tasks()
         try:
             self._remove_own_skill_state(); self._send_skill_off()
         except Exception:  # noqa: BLE001
@@ -2450,6 +2451,7 @@ class MainWindow(QMainWindow):
                 self._auto_controller.stop()
         except Exception:  # noqa: BLE001
             pass
+
     def _on_skill_sharing_toggled(self, enabled: bool) -> None:
         self._skill_share_enabled = bool(enabled)
         if hasattr(self, "_auto_controller"):

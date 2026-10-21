@@ -24,6 +24,7 @@ try:
     from PySide6.QtWidgets import QApplication, QDialog
 
     from config import AppConfig
+    from core.match_flow import MatchPhase
     from core.models import Member, Room
     from core.skills import SkillState
     from state.session import Session
