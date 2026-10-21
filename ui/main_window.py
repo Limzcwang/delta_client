@@ -6,6 +6,7 @@ import logging
 import os
 import time
 import asyncio
+import concurrent.futures
 from dataclasses import replace
 from typing import Any, Mapping
 
@@ -305,6 +306,10 @@ class MainWindow(QMainWindow):
         self.match_timer = QTimer(self)
         self.match_timer.setInterval(int(self.config.match_interval_ms))
         self.match_timer.timeout.connect(self._match_tick)
+        self._match_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self._match_generation = 0
+        self._match_end_window = None
+        self._match_end_pending = False
         self.room_view.skill_panel.match_reset_requested.connect(self._on_match_reset)
         self._auto_controller.payload_ready.connect(self._on_auto_payload)
         self._auto_controller.status_changed.connect(self._on_auto_status)
@@ -1049,6 +1054,7 @@ class MainWindow(QMainWindow):
         self.room_view.skill_panel.set_clock_offset(0)
         self.room_view.set_room(room)
         self.room_view.set_user(self._username(), self._user_id())
+        self.room_view.skill_panel.set_self_user_id(self._user_id())
         self.room_view.clear_chat()
         self.room_view.canvas.reset()
         self._canvas_rev = 0
@@ -1798,6 +1804,12 @@ class MainWindow(QMainWindow):
         return (int(size.width()), int(size.height()))
 
     def _apply_overlay_config(self) -> None:
+        if hasattr(self, "match_flow"):
+            self.match_flow.auto_start = bool(self.config.match_auto_start)
+            self.match_flow.update_interval(int(self.config.match_interval_ms))
+            self.match_timer.setInterval(int(self.config.match_interval_ms))
+            if self.match_flow.phase == MatchPhase.RUNNING:
+                self.match_timer.start(int(self.config.match_interval_ms))
         self.overlay.set_opacity(self.config.overlay_opacity / 100.0)
         self.overlay.set_scale(self.config.overlay_scale)
         if self.config.overlay_x is not None and self.config.overlay_y is not None:
@@ -2257,11 +2269,14 @@ class MainWindow(QMainWindow):
             set_current_step("running")
 
     def _on_match_reset(self) -> None:
+        was_running = self.match_flow.phase == MatchPhase.RUNNING
         self.match_flow.reset()
         if self.match_flow.phase == MatchPhase.RUNNING:
-            self.match_timer.start()
+            self._start_match_running()
         else:
-            self.match_timer.stop()
+            if was_running:
+                self._finish_match()
+            self._stop_match_tasks()
         self._sync_match_ui(reset_disabled=True)
         QTimer.singleShot(500, lambda: self._sync_match_ui(reset_disabled=False))
 
@@ -2276,34 +2291,167 @@ class MainWindow(QMainWindow):
 
     def _match_tick(self) -> None:
         try:
-            if not self.session.is_logged_in or self._current_room is None:
+            if not self.session.is_logged_in or self._current_room is None or not self.match_flow.shared:
                 self.match_timer.stop(); return
-            if not self.match_flow.shared:
-                self.match_timer.stop(); return
+            if self._find_game_window() is None:
+                self.match_flow.window_closed(); self._stop_match_tasks(); self._sync_match_ui(); return
             if self.match_flow.phase == MatchPhase.IDLE:
-                if self._find_game_window() is None:
+                if not self.match_flow.auto_start:
                     return
-                # 简化开始判定：OCR 不可用时按自动识别开关等待；重置按钮可手动开始
-                if self.match_flow.auto_start:
-                    frame, _err = self._capture_hud_frame()
-                    hit = False
-                    if frame is not None:
-                        try:
-                            from core.hud_ocr import HudOcr
-                            texts = [line.text for line in HudOcr().read_lines(frame.image[: max(40, frame.height // 4)])]
-                            from core.match_flow import parse_countdown
-                            hit = any(parse_countdown(t) for t in texts)
-                        except Exception:  # noqa: BLE001
-                            hit = False
-                    self.match_flow.observe_start(hit)
-                    self._sync_match_ui()
+                frame, _err = self._capture_hud_frame()
+                if frame is None:
+                    return
+                generation = self._match_generation
+                future = self._match_executor.submit(self._match_read_start, frame.image)
+                future.add_done_callback(lambda f: self._match_post(generation, lambda: self._on_match_start_result(f)))
             elif self.match_flow.phase == MatchPhase.RUNNING:
-                # 识别链路由现有 auto controller 承担；这里仅维持状态与窗口关闭急停
-                if self._find_game_window() is None:
-                    self.match_flow.window_closed(); self.match_timer.stop(); self._sync_match_ui()
+                frame, _err = self._capture_hud_frame()
+                if frame is None:
+                    self._schedule_match_end()
+                    return
+                generation = self._match_generation
+                from core.hud_profile import HudProfile
+                profile = HudProfile.from_dict(self.config.hud_profile or {})
+                if frame.width and frame.height:
+                    profile = profile.scaled(frame.width, frame.height)
+                future = self._match_executor.submit(
+                    self._match_recognize, frame.image, self.operator_catalog, profile
+                )
+                future.add_done_callback(lambda f: self._match_post(generation, lambda: self._on_match_recognize(frame, f)))
+                if self._match_end_pending:
+                    self._match_end_continue()
         except Exception:  # noqa: BLE001
             logger.debug("match tick failed", exc_info=True)
 
+    @staticmethod
+    def _match_read_start(image):
+        from core.match_ocr import read_start_hit
+        return read_start_hit(image)
+
+    @staticmethod
+    def _match_recognize(image, catalog, profile):
+        from core.match_ocr import recognize_joint
+        return recognize_joint(image, catalog, profile)
+
+    @staticmethod
+    def _match_read_settlement(image):
+        from core.match_ocr import read_settlement_hit
+        return read_settlement_hit(image)
+
+    def _match_post(self, generation: int, callback) -> None:
+        if generation != self._match_generation:
+            return
+        try:
+            self.bridge.post(callback)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _on_match_start_result(self, future) -> None:
+        try:
+            hit = bool(future.result())
+        except Exception:  # noqa: BLE001
+            hit = False
+        result = self.match_flow.observe_start(hit)
+        self._sync_match_ui()
+        if result == "hit":
+            self._start_match_running()
+
+    def _on_match_recognize(self, frame, future) -> None:
+        try:
+            result = future.result() or {}
+        except Exception:  # noqa: BLE001
+            result = {}
+        now = time.monotonic()
+        if not self.match_flow.locked_operator:
+            score = float(result.get("score") or 0.0)
+            operator_id = str(result.get("operator_id") or "")
+            if operator_id and score >= 0.75:
+                self.match_flow.lock_operator(operator_id, score)
+            elif now - getattr(self, "_match_running_since", now) >= 15.0:
+                self.match_flow.lock_operator(operator_id, 0.0 if not operator_id else score)
+        if not result.get("avatar") and not result.get("skills"):
+            self._schedule_match_end()
+        else:
+            self._match_end_pending = False
+
+    def _start_match_running(self) -> None:
+        self._match_running_since = time.monotonic()
+        self.auto_controller_start_for_match()
+        if self.match_flow.phase == MatchPhase.RUNNING:
+            self.match_timer.start(int(self.config.match_interval_ms))
+
+    def auto_controller_start_for_match(self) -> None:
+        try:
+            self._apply_auto_config()
+            if self.match_flow.phase == MatchPhase.RUNNING and self._current_room is not None:
+                self._auto_controller.start()
+        except Exception:  # noqa: BLE001
+            logger.debug("match auto controller start failed", exc_info=True)
+
+    def _schedule_match_end(self) -> None:
+        if self._match_end_pending:
+            return
+        self._match_end_pending = True
+        generation = self.match_flow.begin_end()
+        self._match_end_window = None
+        logger.info("match end async scheduled generation=%s", generation)
+        QTimer.singleShot(3000, lambda: self._start_match_end_scan(generation))
+
+    def _start_match_end_scan(self, generation: int) -> None:
+        if generation != self.match_flow.async_generation or self.match_flow.phase != MatchPhase.RUNNING:
+            return
+        from core.match_flow import HitWindow
+        self._match_end_window = HitWindow(int(self.config.match_interval_ms))
+        self._match_end_continue()
+
+    def _match_end_continue(self) -> None:
+        if not self._match_end_pending or self.match_flow.phase != MatchPhase.RUNNING:
+            return
+        if self._find_game_window() is None:
+            self.match_flow.window_closed(); self._stop_match_tasks(); self._sync_match_ui(); return
+        frame, _err = self._capture_hud_frame()
+        if frame is None:
+            self._match_end_observe(False); return
+        generation = self._match_generation
+        future = self._match_executor.submit(self._match_read_settlement, frame.image)
+        future.add_done_callback(lambda f: self._match_post(generation, lambda: self._on_match_end_result(f)))
+
+    def _on_match_end_result(self, future) -> None:
+        try:
+            hit = bool(future.result())
+        except Exception:  # noqa: BLE001
+            hit = False
+        self._match_end_observe(hit)
+
+    def _match_end_observe(self, hit: bool) -> None:
+        result = self.match_flow.observe_end(hit)
+        if result == "hit":
+            self._finish_match()
+        elif result == "abort":
+            self._match_end_pending = False; self._match_end_window = None
+        elif result == "continue":
+            QTimer.singleShot(int(self.config.match_interval_ms), self._match_end_continue)
+
+    def _finish_match(self) -> None:
+        self._match_end_pending = False; self._match_end_window = None
+        try:
+            self._remove_own_skill_state(); self._send_skill_off()
+        except Exception:  # noqa: BLE001
+            pass
+        self.match_flow.terminate()
+        self._sync_match_ui()
+        logger.info("match ended by settlement OCR")
+
+    def _stop_match_tasks(self) -> None:
+        self._match_generation += 1
+        self._match_end_pending = False
+        self._match_end_window = None
+        try:
+            self.match_timer.stop()
+            if hasattr(self, "_auto_controller"):
+                self._auto_controller.stop()
+        except Exception:  # noqa: BLE001
+            pass
     def _on_skill_sharing_toggled(self, enabled: bool) -> None:
         self._skill_share_enabled = bool(enabled)
         if hasattr(self, "_auto_controller"):
@@ -2316,7 +2464,7 @@ class MainWindow(QMainWindow):
             if enabled:
                 self.match_timer.start(int(self.config.match_interval_ms))
             else:
-                self.match_timer.stop()
+                self._stop_match_tasks()
             self._sync_match_ui()
         if not enabled:
             # 无论 WS 是否连通，都先本地移除自己，避免卡片残留。

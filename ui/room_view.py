@@ -295,6 +295,8 @@ class RoomView(QWidget):
         self._username = display_name
         if user_id:
             self._user_id = str(user_id)
+            if hasattr(self, "skill_panel"):
+                self.skill_panel.set_self_user_id(self._user_id)
         if self._members:
             self._render_members()
         self._refresh_owner_controls()

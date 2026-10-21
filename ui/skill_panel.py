@@ -56,6 +56,7 @@ class SkillSlotWidget(QWidget):
     def __init__(self, kind: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.kind = kind
+        self.hide_remaining = False
         self.slot = SkillSlot(kind=kind)
         self.captured_at = 0
         self.server_now = 0
@@ -125,6 +126,8 @@ class SkillSlotWidget(QWidget):
                 main = "—"
         if state == SKILL_READY:
             return title, main, "就绪"
+        if self.hide_remaining:
+            return title, main, ("充能中" if self.kind != SLOT_ULTIMATE else "冷却中")
         return title, main, format_countdown(self.remaining_now())
 
     def paintEvent(self, event) -> None:  # noqa: N802
@@ -261,6 +264,7 @@ class SkillRow(QFrame):
         self.operator_def = operator
         self._avatar_key = ""
         self._avatar_source = ""
+        self.self_user_id = ""
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 8)
         root.setSpacing(6)
@@ -331,7 +335,9 @@ class SkillRow(QFrame):
         unshared = state.is_unshared(server_now)
         self.status_label.setText("未共享" if unshared else "● 已共享")
         self.status_label.setStyleSheet("color: #ffd071;" if unshared else "color: #5fc98e;")
+        hide_remaining = bool(self.self_user_id and str(state.user_id) == str(self.self_user_id))
         for kind, widget in self.slot_widgets.items():
+            widget.hide_remaining = hide_remaining
             meta = operator.skill(_SLOT_INDEX[kind]) if operator is not None else None
             widget.set_data(
                 state.slot(kind),
@@ -397,6 +403,7 @@ class SkillPanel(QWidget):
         self._pulse = False
         self._catalog = catalog if catalog is not None else OperatorCatalog()
         self._server_now_provider = None
+        self._self_user_id = ""
         # 可注入时钟（测试冻结时间）；默认使用本机时间
         self._clock = clock or (lambda: int(time.time() * 1000))
         self._build()
@@ -441,7 +448,7 @@ class SkillPanel(QWidget):
         self.capture_button.setToolTip("截取游戏窗口并识别技能栏（E3b）")
         self.capture_button.clicked.connect(self.capture_requested.emit)
         self.capture_button.hide()
-        self.settings_button = QPushButton("技能设置")
+        self.settings_button = QPushButton("设置")
         self.settings_button.setObjectName("Ghost")
         self.settings_button.setFixedHeight(30)
         self.settings_button.clicked.connect(self.settings_requested.emit)
@@ -512,6 +519,12 @@ class SkillPanel(QWidget):
             "QPushButton#ShareToggle { background:#2ea36b; color:#f0fff7; border:none; border-radius:6px; padding:0 14px; font-size:12px; }"
             "QPushButton#ShareToggle:hover { background:#37b87c; }"
         )
+
+    def set_self_user_id(self, user_id: str) -> None:
+        self._self_user_id = str(user_id or "")
+        for row in self._rows.values():
+            row.self_user_id = self._self_user_id
+            row.update_state(row.state, self.server_now_ms(), self._pulse)
 
     def set_operator_catalog(self, catalog: OperatorCatalog) -> None:
         self._catalog = catalog if catalog is not None else OperatorCatalog()
@@ -591,6 +604,7 @@ class SkillPanel(QWidget):
             server_now=self.server_now_ms(),
             operator=operator,
         )
+        row.self_user_id = self._self_user_id
         self._rows[state.user_id] = row
         self.list_layout.insertWidget(self.list_layout.count() - 1, row)
 
