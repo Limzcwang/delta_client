@@ -123,11 +123,13 @@ class CleaningTests(unittest.TestCase):
         valid, reason = validate_payload(payload)
         self.assertTrue(valid, reason)
         for item in payload:
-            self.assertIsInstance(item["remaining_ms"], int)
-            self.assertTrue(0 <= item["remaining_ms"] <= MAX_REMAINING_MS)
-            self.assertNotIn(None, item.values())
+            remaining = item["remaining_ms"]
+            if remaining is not None:
+                self.assertIsInstance(remaining, int)
+                self.assertTrue(0 <= remaining <= MAX_REMAINING_MS)
+            self.assertNotIn(None, {k: v for k, v in item.items() if k != "remaining_ms"}.values())
         self.assertEqual("unknown", payload[1]["state"])
-        self.assertEqual(0, payload[1]["remaining_ms"])
+        self.assertIsNone(payload[1]["remaining_ms"])
         self.assertEqual("ready", payload[2]["state"])
         self.assertEqual(1, payload[2]["max_charges"])
         self.assertEqual(0, payload[2]["charges"])
@@ -207,3 +209,13 @@ class ValidationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class UnknownNullTests(unittest.TestCase):
+    def test_unknown_remaining_null(self):
+        from core.skills import SkillState
+        from core.skill_payload import serialize_skill_state
+        import json
+        state=SkillState.from_ws({"user_id":"1","captured_at":1,"skills":{"ultimate":{"state":"unknown"},"ability":{"state":"unknown"},"throwable":{"state":"unknown"}}})
+        payload=serialize_skill_state(state)
+        self.assertTrue(all(item["remaining_ms"] is None for item in payload))
+        self.assertIn('"remaining_ms": null', json.dumps(payload))

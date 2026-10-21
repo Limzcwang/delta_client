@@ -6,6 +6,7 @@ import logging
 import os
 import time
 import asyncio
+import concurrent.futures
 from dataclasses import replace
 from typing import Any, Mapping
 
@@ -41,6 +42,7 @@ from core.canvas import (
 )
 from core.chat import ChatTimeline
 from core.connection import is_network_failure
+from core.match_flow import MatchPhase, MatchStateMachine
 from core.errors import ApiError, ErrorKind, to_user_message
 from core.models import (
     ChatMessage,
@@ -300,6 +302,15 @@ class MainWindow(QMainWindow):
             hud_service=self._hud_service,
             context_provider=self._auto_recognition_context,
         )
+        self.match_flow = MatchStateMachine(interval_ms=int(self.config.match_interval_ms))
+        self.match_timer = QTimer(self)
+        self.match_timer.setInterval(int(self.config.match_interval_ms))
+        self.match_timer.timeout.connect(self._match_tick)
+        self._match_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self._match_generation = 0
+        self._match_end_window = None
+        self._match_end_pending = False
+        self.room_view.skill_panel.match_reset_requested.connect(self._on_match_reset)
         self._auto_controller.payload_ready.connect(self._on_auto_payload)
         self._auto_controller.status_changed.connect(self._on_auto_status)
         self._auto_controller.operator_detected.connect(self._on_auto_operator_detected)
@@ -345,7 +356,6 @@ class MainWindow(QMainWindow):
         self.room_view.skill_panel.sharing_toggled.connect(self._on_skill_sharing_toggled)
         self.room_view.skill_panel.simulate_requested.connect(self._on_simulate_skill)
         self.room_view.skill_panel.capture_requested.connect(self._on_hud_capture)
-        self._setup_tray()
         self.room_view.canvas.stroke_finished.connect(self._on_canvas_strokes)
         self.room_view.canvas.clear_requested.connect(self._on_canvas_clear_requested)
 
@@ -377,9 +387,10 @@ class MainWindow(QMainWindow):
         self.statusBar().clearMessage()
 
     def _refresh_status_bar(self) -> None:
-        self._server_label.setText(
-            f"服务器：{self.config.server_url}  ·  模式：{self.config.mode_label}"
-        )
+        server_text = f"服务器：{self.config.server_url}  ·  模式：{self.config.mode_label}"
+        self._server_label.setText(server_text)
+        if hasattr(self, "room_list_view"):
+            self.room_list_view.set_server_status(server_text)
 
     def _safe_submit(self, coro: Any, on_success=None, on_error=None) -> Any:
         try:
@@ -770,7 +781,7 @@ class MainWindow(QMainWindow):
     def _update_my_rooms_tab(self, count: int | None = None) -> None:
         rooms = self.room_list_view.my_rooms.rooms
         total = len(rooms) if count is None else int(count)
-        title = f"我的房间 ({total})" if total else "我的房间"
+        title = f"我的房间 ({total})"
         self.room_list_view.tabs.setTabText(1, title)
 
     def _refresh_rooms(self, manual: bool = True) -> None:
@@ -1043,6 +1054,7 @@ class MainWindow(QMainWindow):
         self.room_view.skill_panel.set_clock_offset(0)
         self.room_view.set_room(room)
         self.room_view.set_user(self._username(), self._user_id())
+        self.room_view.skill_panel.set_self_user_id(self._user_id())
         self.room_view.clear_chat()
         self.room_view.canvas.reset()
         self._canvas_rev = 0
@@ -1055,6 +1067,11 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(self.room_view)
         self.room_view.focus_chat_input()
         self._system_message(f"已进入 {room.display_name}（{room.code}）")
+        if hasattr(self, "match_flow"):
+            self.match_flow.set_sharing(False)
+            self.match_flow.set_context(logged_in=self.session.is_logged_in, in_room=True)
+            self.match_timer.stop()
+            self._sync_match_ui()
         self._start_ws(room)
         if hasattr(self, "_auto_controller"):
             self._apply_auto_config()
@@ -1521,7 +1538,6 @@ class MainWindow(QMainWindow):
                     message = f"服务器返回异常状态 {status}"
                 self._apply_operator_catalog()
                 if dialog is not None:
-                    dialog.refresh_operator_catalog(manager.catalog)
                     dialog.refresh_operator_config_info(manager)
                     dialog.set_config_check_result(message, ok=(status in (200, 304)))
                 if status == 200 and not silent:
@@ -1722,7 +1738,6 @@ class MainWindow(QMainWindow):
                 self._send_skill_state(state)
         self._update_operator_recognition_status(operator, score)
         if hasattr(self, "settings_dialog") and self.settings_dialog is not None:
-            self.settings_dialog.refresh_operator_catalog(self.operator_catalog)
             self.settings_dialog.set_operator_recognition_status(
                 f"当前识别：{operator.display_name}（置信度 {score:.2f}）"
             )
@@ -1787,6 +1802,12 @@ class MainWindow(QMainWindow):
         return (int(size.width()), int(size.height()))
 
     def _apply_overlay_config(self) -> None:
+        if hasattr(self, "match_flow"):
+            self.match_flow.auto_start = bool(self.config.match_auto_start)
+            self.match_flow.update_interval(int(self.config.match_interval_ms))
+            self.match_timer.setInterval(int(self.config.match_interval_ms))
+            if self.match_flow.phase == MatchPhase.RUNNING:
+                self.match_timer.start(int(self.config.match_interval_ms))
         self.overlay.set_opacity(self.config.overlay_opacity / 100.0)
         self.overlay.set_scale(self.config.overlay_scale)
         if self.config.overlay_x is not None and self.config.overlay_y is not None:
@@ -1845,13 +1866,26 @@ class MainWindow(QMainWindow):
         if not self.session.is_logged_in:
             return
         enabled = not self.overlay.edit_mode
-        if enabled and self._find_game_window() is None:
-            self.overlay.hide()
-            self._set_status("等待游戏窗口后再进入编辑模式")
-            self.room_view.set_status("等待游戏窗口后再进入编辑模式")
-            return
-        self.overlay.set_edit_mode(enabled)
-        message = "悬浮窗编辑模式：可拖动，退出后恢复鼠标穿透" if enabled else "悬浮窗已恢复鼠标穿透"
+        if enabled:
+            has_game = self._find_game_window() is not None
+            # E2：无游戏窗口也允许进入编辑预览，不直接隐藏。
+            if not self.overlay.isVisible():
+                if self.config.overlay_x is not None and self.config.overlay_y is not None:
+                    self.overlay.move(int(self.config.overlay_x), int(self.config.overlay_y))
+                else:
+                    screen_w, screen_h = self._screen_size()
+                    self.overlay.move(max(20, screen_w - self.overlay.width() - 40), max(20, screen_h // 4))
+                self.overlay.show()
+            self.overlay.set_edit_mode(True)
+            message = "悬浮窗编辑模式：可拖动，退出后恢复鼠标穿透" if has_game else "预览模式，未检测到游戏窗口"
+        else:
+            self.overlay.set_edit_mode(False)
+            if self._find_game_window() is None:
+                self.overlay.hide()
+                self._overlay_visible = False
+                message = "已退出编辑（无游戏窗口，悬浮窗已隐藏）"
+            else:
+                message = "悬浮窗已恢复鼠标穿透"
         logger.info("overlay edit toggle enabled=%s visible=%s", enabled, self.overlay.isVisible())
         self._set_status(message)
         self.room_view.set_status(message)
@@ -1971,8 +2005,8 @@ class MainWindow(QMainWindow):
         """重新识别前把当前 UI 阈值/开关落盘，避免被默认值覆盖。"""
         self.config = replace(
             self.config,
-            auto_operator_enabled=dialog.current_auto_operator_enabled(),
-            operator_recognition_threshold=dialog.current_operator_threshold(),
+            auto_operator_enabled=self.config.auto_operator_enabled,
+            operator_recognition_threshold=self.config.operator_recognition_threshold,
         )
         try:
             save_config(self.config)
@@ -2232,10 +2266,206 @@ class MainWindow(QMainWindow):
         if not self._submit_hud_task(frame, self._finish_hud_capture):
             set_current_step("running")
 
+    def _on_match_reset(self) -> None:
+        was_running = self.match_flow.phase == MatchPhase.RUNNING
+        self.match_flow.reset()
+        if self.match_flow.phase == MatchPhase.RUNNING:
+            self._start_match_running()
+        else:
+            if was_running:
+                self._finish_match()
+            self._stop_match_tasks()
+        self._sync_match_ui(reset_disabled=True)
+        QTimer.singleShot(500, lambda: self._sync_match_ui(reset_disabled=False))
+
+    def _sync_match_ui(self, reset_disabled: bool = False) -> None:
+        try:
+            label = self.match_flow.label()
+            self.room_view.skill_panel.set_match_state(
+                label, self.match_flow.phase == MatchPhase.RUNNING, reset_disabled
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _match_tick(self) -> None:
+        try:
+            if not self.session.is_logged_in or self._current_room is None or not self.match_flow.shared:
+                self.match_timer.stop(); return
+            if self._find_game_window() is None:
+                self.match_flow.window_closed(); self._stop_match_tasks(); self._sync_match_ui(); return
+            if self.match_flow.phase == MatchPhase.IDLE:
+                if not self.match_flow.auto_start:
+                    return
+                frame, _err = self._capture_hud_frame()
+                if frame is None:
+                    return
+                generation = self._match_generation
+                future = self._match_executor.submit(self._match_read_start, frame.image)
+                future.add_done_callback(lambda f: self._match_post(generation, lambda: self._on_match_start_result(f)))
+            elif self.match_flow.phase == MatchPhase.RUNNING:
+                frame, _err = self._capture_hud_frame()
+                if frame is None:
+                    self._schedule_match_end()
+                    return
+                generation = self._match_generation
+                from core.hud_profile import HudProfile
+                profile = HudProfile.from_dict(self.config.hud_profile or {})
+                if frame.width and frame.height:
+                    profile = profile.scaled(frame.width, frame.height)
+                future = self._match_executor.submit(
+                    self._match_recognize, frame.image, self.operator_catalog, profile
+                )
+                future.add_done_callback(lambda f: self._match_post(generation, lambda: self._on_match_recognize(frame, f)))
+                if self._match_end_pending:
+                    self._match_end_continue()
+        except Exception:  # noqa: BLE001
+            logger.debug("match tick failed", exc_info=True)
+
+    @staticmethod
+    def _match_read_start(image):
+        from core.match_ocr import read_start_hit
+        return read_start_hit(image)
+
+    @staticmethod
+    def _match_recognize(image, catalog, profile):
+        from core.match_ocr import recognize_joint
+        return recognize_joint(image, catalog, profile)
+
+    @staticmethod
+    def _match_read_settlement(image):
+        from core.match_ocr import read_settlement_hit
+        return read_settlement_hit(image)
+
+    def _match_post(self, generation: int, callback) -> None:
+        if generation != self._match_generation:
+            return
+        try:
+            self.bridge.post(callback)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _on_match_start_result(self, future) -> None:
+        try:
+            hit = bool(future.result())
+        except Exception:  # noqa: BLE001
+            hit = False
+        result = self.match_flow.observe_start(hit)
+        self._sync_match_ui()
+        if result == "hit":
+            self._start_match_running()
+
+    def _on_match_recognize(self, frame, future) -> None:
+        try:
+            result = future.result() or {}
+        except Exception:  # noqa: BLE001
+            result = {}
+        now = time.monotonic()
+        if not self.match_flow.locked_operator:
+            score = float(result.get("score") or 0.0)
+            operator_id = str(result.get("operator_id") or "")
+            if operator_id and score >= 0.75:
+                self.match_flow.lock_operator(operator_id, score)
+            elif now - getattr(self, "_match_running_since", now) >= 15.0:
+                self.match_flow.lock_operator(operator_id, 0.0 if not operator_id else score)
+        if not result.get("avatar") and not result.get("skills"):
+            self._schedule_match_end()
+        else:
+            self._match_end_pending = False
+
+    def _start_match_running(self) -> None:
+        self._match_running_since = time.monotonic()
+        self.auto_controller_start_for_match()
+        if self.match_flow.phase == MatchPhase.RUNNING:
+            self.match_timer.start(int(self.config.match_interval_ms))
+
+    def auto_controller_start_for_match(self) -> None:
+        try:
+            self._apply_auto_config()
+            if self.match_flow.phase == MatchPhase.RUNNING and self._current_room is not None:
+                self._auto_controller.start()
+        except Exception:  # noqa: BLE001
+            logger.debug("match auto controller start failed", exc_info=True)
+
+    def _schedule_match_end(self) -> None:
+        if self._match_end_pending:
+            return
+        self._match_end_pending = True
+        generation = self.match_flow.begin_end()
+        self._match_end_window = None
+        logger.info("match end async scheduled generation=%s", generation)
+        QTimer.singleShot(3000, lambda: self._start_match_end_scan(generation))
+
+    def _start_match_end_scan(self, generation: int) -> None:
+        if generation != self.match_flow.async_generation or self.match_flow.phase != MatchPhase.RUNNING:
+            return
+        from core.match_flow import HitWindow
+        self._match_end_window = HitWindow(int(self.config.match_interval_ms))
+        self._match_end_continue()
+
+    def _match_end_continue(self) -> None:
+        if not self._match_end_pending or self.match_flow.phase != MatchPhase.RUNNING:
+            return
+        if self._find_game_window() is None:
+            self.match_flow.window_closed(); self._stop_match_tasks(); self._sync_match_ui(); return
+        frame, _err = self._capture_hud_frame()
+        if frame is None:
+            self._match_end_observe(False); return
+        generation = self._match_generation
+        future = self._match_executor.submit(self._match_read_settlement, frame.image)
+        future.add_done_callback(lambda f: self._match_post(generation, lambda: self._on_match_end_result(f)))
+
+    def _on_match_end_result(self, future) -> None:
+        try:
+            hit = bool(future.result())
+        except Exception:  # noqa: BLE001
+            hit = False
+        self._match_end_observe(hit)
+
+    def _match_end_observe(self, hit: bool) -> None:
+        result = self.match_flow.observe_end(hit)
+        if result == "hit":
+            self._finish_match()
+        elif result == "abort":
+            self._match_end_pending = False; self._match_end_window = None
+        elif result == "continue":
+            QTimer.singleShot(int(self.config.match_interval_ms), self._match_end_continue)
+
+    def _finish_match(self) -> None:
+        # 先停任务（timer/异步/识别）再改状态/UI；任何结束路径都走这里。
+        self._stop_match_tasks()
+        try:
+            self._remove_own_skill_state(); self._send_skill_off()
+        except Exception:  # noqa: BLE001
+            pass
+        self.match_flow.terminate()
+        self._sync_match_ui()
+        logger.info("match ended by settlement OCR")
+
+    def _stop_match_tasks(self) -> None:
+        self._match_generation += 1
+        self._match_end_pending = False
+        self._match_end_window = None
+        try:
+            self.match_timer.stop()
+            if hasattr(self, "_auto_controller"):
+                self._auto_controller.stop()
+        except Exception:  # noqa: BLE001
+            pass
+
     def _on_skill_sharing_toggled(self, enabled: bool) -> None:
         self._skill_share_enabled = bool(enabled)
         if hasattr(self, "_auto_controller"):
             self._apply_auto_config()
+        if hasattr(self, "match_flow"):
+            self.match_flow.set_sharing(bool(enabled))
+            self.match_flow.set_context(logged_in=self.session.is_logged_in, in_room=self._current_room is not None)
+            self.match_flow.auto_start = bool(self.config.match_auto_start)
+            self.match_flow.update_interval(int(self.config.match_interval_ms))
+            if enabled:
+                self.match_timer.start(int(self.config.match_interval_ms))
+            else:
+                self._stop_match_tasks()
+            self._sync_match_ui()
         if not enabled:
             # 无论 WS 是否连通，都先本地移除自己，避免卡片残留。
             self._remove_own_skill_state()
@@ -2941,37 +3171,12 @@ class MainWindow(QMainWindow):
             self.room_view.overlay_edit_button.setText("完成编辑" if self.overlay.edit_mode else "编辑悬浮窗")
         except RuntimeError:
             pass
-        if hasattr(self, "tray_toggle_action"):
-            self.tray_toggle_action.setText("隐藏悬浮窗" if self._overlay_visible else "显示悬浮窗")
-        if hasattr(self, "tray_edit_action"):
-            self.tray_edit_action.setText("完成编辑" if self.overlay.edit_mode else "编辑悬浮窗")
-
-    def _setup_tray(self) -> None:
-        try:
-            from PySide6.QtWidgets import QMenu, QSystemTrayIcon
-            self.tray = QSystemTrayIcon(self.windowIcon(), self)
-            self.tray.setToolTip("Delta Client")
-            menu = QMenu(self)
-            self.tray_toggle_action = menu.addAction("显示/隐藏悬浮窗")
-            self.tray_toggle_action.triggered.connect(self._toggle_overlay)
-            self.tray_edit_action = menu.addAction("编辑悬浮窗")
-            self.tray_edit_action.triggered.connect(self._toggle_overlay_edit)
-            menu.addSeparator()
-            menu.addAction("退出").triggered.connect(self.close)
-            self.tray.setContextMenu(menu)
-            self.tray.show()
-            self._sync_overlay_buttons()
-        except Exception as exc:  # noqa: BLE001
-            logger.info("系统托盘不可用：%s", exc)
 
     def _open_settings(self, start_tab: int = 0) -> None:
         dialog = SettingsDialog(self.config, self, self.operator_catalog, self.operator_config)
         self.settings_dialog = dialog
         dialog.config_check_requested.connect(
             lambda: self._refresh_operator_config(silent=False, dialog=dialog)
-        )
-        dialog.operator_recognition_requested.connect(
-            lambda: self._on_manual_operator_recognition(dialog)
         )
         dialog.test_requested.connect(
             lambda server_text, ws_text: self._on_test_connection(dialog, server_text, ws_text)

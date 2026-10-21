@@ -52,18 +52,27 @@ class OverlayTests(unittest.TestCase):
         self.app.processEvents()
 
     def test_default_transparent_and_opacity(self) -> None:
-        self.assertTrue(self.overlay.windowFlags() & Qt.WindowType.WindowTransparentForInput)
+        self.assertFalse(self.overlay.windowFlags() & Qt.WindowType.WindowTransparentForInput)
+        self.assertTrue(self.overlay._click_through)
         self.assertAlmostEqual(0.30, self.overlay.opacity, delta=0.05)
         self.assertAlmostEqual(0.30, self.overlay._base_opacity)
         self.overlay.set_opacity(0.55)
         self.assertAlmostEqual(0.55, self.overlay.opacity, delta=0.05)
 
     def test_edit_mode_toggles_input(self) -> None:
+        flags_before = self.overlay.windowFlags()
         self.overlay.set_edit_mode(True)
-        self.assertFalse(self.overlay.windowFlags() & Qt.WindowType.WindowTransparentForInput)
+        # E1：不重建原生窗口，Qt flags 保持不变，穿透由原生样式/属性切换。
+        self.assertEqual(flags_before, self.overlay.windowFlags())
+        self.assertFalse(self.overlay._click_through)
+        self.assertFalse(bool(self.overlay.windowFlags() & Qt.WindowType.WindowTransparentForInput))
+        self.assertFalse(self.overlay.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents))
+        from ui.skill_overlay import WS_EX_TRANSPARENT, _native_exstyle
+        self.assertFalse(bool(_native_exstyle(self.overlay) & WS_EX_TRANSPARENT))
         self.assertAlmostEqual(1.0, self.overlay.opacity, delta=0.05)
         self.overlay.set_edit_mode(False)
-        self.assertTrue(self.overlay.windowFlags() & Qt.WindowType.WindowTransparentForInput)
+        self.assertTrue(self.overlay._click_through)
+        self.assertEqual(flags_before, self.overlay.windowFlags())
 
     def test_follow_and_no_game(self) -> None:
         window = [FakeWindow()]
@@ -225,8 +234,10 @@ class OverlayTests(unittest.TestCase):
             Qt.KeyboardModifier.NoModifier,
         )
         self.overlay.mousePressEvent(press)
+        self.assertEqual(Qt.CursorShape.ClosedHandCursor, self.overlay.cursor().shape())
         self.overlay.mouseMoveEvent(move)
         self.overlay.mouseReleaseEvent(release)
+        self.assertEqual(Qt.CursorShape.OpenHandCursor, self.overlay.cursor().shape())
         self.assertEqual(1, len(positions))
 
 

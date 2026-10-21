@@ -56,28 +56,29 @@ class SkillSlotWidget(QWidget):
     def __init__(self, kind: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.kind = kind
+        self.hide_remaining = False
         self.slot = SkillSlot(kind=kind)
         self.captured_at = 0
         self.server_now = 0
         self.pulse = False
         self.skill_name = ""
         self.cd_known = True
-        self.setMinimumSize(82, 104)
-        self.setFixedHeight(104)
+        self.setMinimumSize(82, 110)
+        self.setFixedHeight(110)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setToolTip(SLOT_LABELS.get(kind, kind))
 
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt 覆盖
-        return QSize(96, 104)
+        return QSize(96, 110)
 
     def name_rect(self) -> QRectF:
         return QRectF(8, 4, max(1, self.width() - 16), 20)
 
     def middle_rect(self) -> QRectF:
-        return QRectF((self.width() - 54) / 2, 28, 54, 54)
+        return QRectF((self.width() - 48) / 2, 30, 48, 48)
 
     def bottom_rect(self) -> QRectF:
-        return QRectF(8, 88, max(1, self.width() - 16), 14)
+        return QRectF(8, 92, max(1, self.width() - 16), 14)
 
     def set_data(
         self,
@@ -113,7 +114,7 @@ class SkillSlotWidget(QWidget):
             return title, "CD未知", "CD未知"
         state = self.effective_state()
         if state == SKILL_UNKNOWN:
-            return title, "?", "未共享"
+            return title, "—", "未共享"
         if self.kind == SLOT_ULTIMATE:
             main = format_percent(self.slot.percent)
         else:
@@ -125,6 +126,8 @@ class SkillSlotWidget(QWidget):
                 main = "—"
         if state == SKILL_READY:
             return title, main, "就绪"
+        if self.hide_remaining:
+            return title, main, ("充能中" if self.kind != SLOT_ULTIMATE else "冷却中")
         return title, main, format_countdown(self.remaining_now())
 
     def paintEvent(self, event) -> None:  # noqa: N802
@@ -153,11 +156,11 @@ class SkillSlotWidget(QWidget):
         center = middle.center()
         use_ring = self.kind == SLOT_ULTIMATE and self.cd_known and state != SKILL_UNKNOWN
         if use_ring:
-            ring = QRectF(center.x() - 27, center.y() - 27, 54, 54)
+            ring = QRectF(center.x() - 24, center.y() - 24, 48, 48)
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(QPen(QColor(59, 130, 196, 64), 5))
+            painter.setPen(QPen(QColor(59, 130, 196, 64), 4))
             painter.drawEllipse(ring)
-            painter.setPen(QPen(QColor("#3b82c4"), 5))
+            painter.setPen(QPen(QColor("#3b82c4"), 4))
             painter.drawArc(ring, 90 * 16, -int(3.6 * self.slot.percent * 16))
             pct_font = QFont(self.font())
             pct_font.setPixelSize(13)
@@ -170,11 +173,11 @@ class SkillSlotWidget(QWidget):
             center_font.setPixelSize(14)
             painter.setFont(center_font)
             painter.setPen(QPen(QColor("#71808f")))
-            painter.drawText(middle, Qt.AlignmentFlag.AlignCenter, "?")
+            painter.drawText(middle, Qt.AlignmentFlag.AlignCenter, "—")
         else:
             # 充能/就绪：大号计数（例如 1/2），20px bold
             count_font = QFont(self.font())
-            count_font.setPixelSize(20)
+            count_font.setPixelSize(18)
             count_font.setBold(True)
             painter.setFont(count_font)
             painter.setPen(QPen(QColor("#7fb3e0")))
@@ -255,12 +258,13 @@ class SkillRow(QFrame):
     ) -> None:
         super().__init__(parent)
         self.setObjectName("Card")
-        self.setFixedHeight(180)
+        self.setFixedHeight(166)
         self.user_id = state.user_id
         self.state = state
         self.operator_def = operator
         self._avatar_key = ""
         self._avatar_source = ""
+        self.self_user_id = ""
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 8)
         root.setSpacing(6)
@@ -331,7 +335,9 @@ class SkillRow(QFrame):
         unshared = state.is_unshared(server_now)
         self.status_label.setText("未共享" if unshared else "● 已共享")
         self.status_label.setStyleSheet("color: #ffd071;" if unshared else "color: #5fc98e;")
+        hide_remaining = bool(self.self_user_id and str(state.user_id) == str(self.self_user_id))
         for kind, widget in self.slot_widgets.items():
+            widget.hide_remaining = hide_remaining
             meta = operator.skill(_SLOT_INDEX[kind]) if operator is not None else None
             widget.set_data(
                 state.slot(kind),
@@ -380,6 +386,8 @@ class SkillPanel(QWidget):
     simulate_requested = Signal()
     capture_requested = Signal()
     settings_requested = Signal()
+    match_reset_requested = Signal()
+    match_reset_clicked = Signal()
 
     def __init__(
         self,
@@ -395,6 +403,7 @@ class SkillPanel(QWidget):
         self._pulse = False
         self._catalog = catalog if catalog is not None else OperatorCatalog()
         self._server_now_provider = None
+        self._self_user_id = ""
         # 可注入时钟（测试冻结时间）；默认使用本机时间
         self._clock = clock or (lambda: int(time.time() * 1000))
         self._build()
@@ -408,15 +417,38 @@ class SkillPanel(QWidget):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
         header = QHBoxLayout()
-        title = QLabel("技能共享 (E2)")
-        title.setObjectName("SectionTitle")
-        header.addWidget(title)
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(8)
+        header.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        self.match_reset_button = QPushButton("重置对局")
+        self.match_reset_button.setObjectName("Ghost")
+        self.match_reset_button.setFixedHeight(30)
+        self.match_reset_button.setStyleSheet("QPushButton { min-height:28px; max-height:28px; padding:0 14px; font-size:12px; }")
+        self.match_reset_button.clicked.connect(self.match_reset_requested.emit)
+        header.addWidget(self.match_reset_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.match_state_label = QLabel("对局未进行")
+        self.match_state_label.setObjectName("MatchState")
+        self.match_state_label.setFixedHeight(30)
+        self.match_state_label.setMinimumWidth(96)
+        self.match_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.match_state_label.setStyleSheet(
+            "QLabel#MatchState { color:#f5a800; background:rgba(245,168,0,0.10);"
+            " border:1px solid rgba(245,168,0,0.50); border-radius:15px; padding:0 10px; font-size:11px; }"
+        )
+        self.match_state_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        header.addWidget(self.match_state_label, 0, Qt.AlignmentFlag.AlignVCenter)
         header.addStretch(1)
         self.share_check = SwitchRow("共享我的技能", "", False)
-        self.share_check.title_label.setStyleSheet("color: #f5a800; font-weight: 700;")
-        self.share_check.setFixedWidth(150)
-        self.share_check.toggled.connect(self._on_share_toggled)
-        header.addWidget(self.share_check)
+        self.share_check.hide()
+        self.share_toggle_button = QPushButton("开启技能共享")
+        self.share_toggle_button.setObjectName("ShareToggle")
+        self.share_toggle_button.setFixedHeight(30)
+        self.share_toggle_button.setStyleSheet(
+            "QPushButton#ShareToggle { min-height:30px; max-height:30px; padding:0 14px; font-size:12px;"
+            " background:#2ea36b; color:#f0fff7; border:none; border-radius:6px; }"
+        )
+        self.share_toggle_button.clicked.connect(self._on_share_button)
+        header.addWidget(self.share_toggle_button, 0, Qt.AlignmentFlag.AlignVCenter)
         self.simulate_button = QPushButton("模拟我的技能")
         self.simulate_button.setObjectName("Link")
         self.simulate_button.clicked.connect(self.simulate_requested.emit)
@@ -426,16 +458,13 @@ class SkillPanel(QWidget):
         self.capture_button.setToolTip("截取游戏窗口并识别技能栏（E3b）")
         self.capture_button.clicked.connect(self.capture_requested.emit)
         self.capture_button.hide()
-        self.settings_button = QPushButton("技能设置")
+        self.settings_button = QPushButton("设置")
         self.settings_button.setObjectName("Ghost")
+        self.settings_button.setFixedHeight(30)
+        self.settings_button.setStyleSheet("QPushButton { min-height:28px; max-height:28px; padding:0 14px; font-size:12px; }")
         self.settings_button.clicked.connect(self.settings_requested.emit)
-        header.addWidget(self.settings_button)
+        header.addWidget(self.settings_button, 0, Qt.AlignmentFlag.AlignVCenter)
         root.addLayout(header)
-
-        hint = QLabel("默认关闭；开启后 2 次/秒限频上报 · 左大招 / 中技能 / 右投掷物 · 30 分钟未更新=未共享")
-        hint.setObjectName("Hint")
-        hint.setWordWrap(True)
-        root.addWidget(hint)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -467,10 +496,46 @@ class SkillPanel(QWidget):
     def sharing_enabled(self) -> bool:
         return self.share_check.isChecked()
 
+    def set_match_state(self, label: str, running: bool, reset_disabled: bool = False) -> None:
+        self.match_state_label.setText(("✓ " if running else "× ") + str(label))
+        if running:
+            self.match_state_label.setStyleSheet(
+                "QLabel#MatchState { color:#5fc98e; background:rgba(95,201,142,0.10);"
+                " border:1px solid rgba(95,201,142,0.50); border-radius:15px; padding:0 10px; font-size:11px; }"
+            )
+        else:
+            self.match_state_label.setStyleSheet(
+                "QLabel#MatchState { color:#f5a800; background:rgba(245,168,0,0.10);"
+                " border:1px solid rgba(245,168,0,0.50); border-radius:15px; padding:0 10px; font-size:11px; }"
+            )
+        self.match_reset_button.setEnabled(not reset_disabled)
+
+    def _on_share_button(self) -> None:
+        enabled = not self.share_check.isChecked()
+        self.share_check.blockSignals(True)
+        self.share_check.setChecked(enabled)
+        self.share_check.blockSignals(False)
+        self.set_sharing(enabled)
+        self.sharing_toggled.emit(enabled)
+
     def set_sharing(self, enabled: bool) -> None:
         self.share_check.blockSignals(True)
         self.share_check.setChecked(bool(enabled))
         self.share_check.blockSignals(False)
+        self.share_toggle_button.setText("结束技能共享" if enabled else "开启技能共享")
+        self.share_toggle_button.setStyleSheet(
+            "QPushButton#ShareToggle { background:#c2453a; color:#ffffff; border:none; border-radius:6px; padding:0 14px; font-size:12px; min-height:30px; max-height:30px; }"
+            "QPushButton#ShareToggle:hover { background:#d65044; }"
+            if enabled else
+            "QPushButton#ShareToggle { background:#2ea36b; color:#f0fff7; border:none; border-radius:6px; padding:0 14px; font-size:12px; min-height:30px; max-height:30px; }"
+            "QPushButton#ShareToggle:hover { background:#37b87c; }"
+        )
+
+    def set_self_user_id(self, user_id: str) -> None:
+        self._self_user_id = str(user_id or "")
+        for row in self._rows.values():
+            row.self_user_id = self._self_user_id
+            row.update_state(row.state, self.server_now_ms(), self._pulse)
 
     def set_operator_catalog(self, catalog: OperatorCatalog) -> None:
         self._catalog = catalog if catalog is not None else OperatorCatalog()
@@ -550,6 +615,7 @@ class SkillPanel(QWidget):
             server_now=self.server_now_ms(),
             operator=operator,
         )
+        row.self_user_id = self._self_user_id
         self._rows[state.user_id] = row
         self.list_layout.insertWidget(self.list_layout.count() - 1, row)
 

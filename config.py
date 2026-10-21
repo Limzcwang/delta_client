@@ -44,7 +44,7 @@ AUTO_SAMPLE_MS_MIN = 200
 AUTO_SAMPLE_MS_MAX = 5000
 DEFAULT_TIMEOUT = 15.0
 CONFIG_FILENAME = ".delta_client.json"
-APP_VERSION = "0.2.8"
+APP_VERSION = "0.2.11"
 __version__ = APP_VERSION
 CONFIG_ENV = "DELTA_CLIENT_CONFIG"
 
@@ -152,7 +152,7 @@ class AppConfig:
     operator_id: str = ""
     hud_profile: dict[str, Any] | None = None
     server_migrated: bool = False
-    overlay_enabled: bool = False
+    overlay_enabled: bool = True
     overlay_auto_show: bool = True
     overlay_opacity: int = 30
     overlay_scale: float = 1.0
@@ -164,6 +164,8 @@ class AppConfig:
     capture_window_process: str = "DeltaForceClient-Win64-Shipping"
     capture_window_title: str = ""
     title_match_strict: bool = True
+    match_auto_start: bool = True
+    match_interval_ms: int = 2000
     auto_operator_enabled: bool = True
     operator_recognition_threshold: float = 0.65
     hud_debug_export: bool = False
@@ -200,6 +202,8 @@ class AppConfig:
             "capture_window_process": self.capture_window_process,
             "capture_window_title": self.capture_window_title,
             "title_match_strict": self.title_match_strict,
+            "match_auto_start": self.match_auto_start,
+            "match_interval_ms": self.match_interval_ms,
             "auto_operator_enabled": self.auto_operator_enabled,
             "operator_recognition_threshold": self.operator_recognition_threshold,
             "hud_debug_export": self.hud_debug_export,
@@ -313,7 +317,7 @@ def load_config(
     hud_profile = file_data.get("hud_profile")
     if not isinstance(hud_profile, dict):
         hud_profile = None
-    overlay_enabled = parse_bool(file_data.get("overlay_enabled"), False)
+    overlay_enabled = parse_bool(file_data.get("overlay_enabled"), True)
     overlay_auto_show = parse_bool(file_data.get("overlay_auto_show"), True)
     try:
         overlay_opacity = min(100, max(10, int(file_data.get("overlay_opacity", 30))))
@@ -340,6 +344,13 @@ def load_config(
     ).strip()
     capture_window_title = str(file_data.get("capture_window_title") or "").strip()
     title_match_strict = parse_bool(file_data.get("title_match_strict"), True)
+    match_auto_start = parse_bool(file_data.get("match_auto_start"), True)
+    try:
+        match_interval_ms = int(file_data.get("match_interval_ms", 2000))
+    except (TypeError, ValueError):
+        match_interval_ms = 2000
+    if match_interval_ms not in (500, 1000, 2000):
+        match_interval_ms = 2000
     auto_operator_enabled = parse_bool(file_data.get("auto_operator_enabled"), True)
     hud_debug_export = parse_bool(file_data.get("hud_debug_export"), False)
     try:
@@ -374,6 +385,8 @@ def load_config(
         capture_window_process=capture_window_process,
         capture_window_title=capture_window_title,
         title_match_strict=title_match_strict,
+        match_auto_start=match_auto_start,
+        match_interval_ms=match_interval_ms,
         auto_operator_enabled=auto_operator_enabled,
         operator_recognition_threshold=operator_recognition_threshold,
         hud_debug_export=hud_debug_export,

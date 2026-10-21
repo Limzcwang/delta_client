@@ -204,7 +204,7 @@ class LoginView(QWidget):
         self.server_label = QLabel("服务器：-")
         self.server_label.setObjectName("Hint")
         self.server_label.setWordWrap(True)
-        card_layout.addWidget(self.server_label)
+        self.server_label.hide()  # 服务器/模式统一放主窗口状态栏，页面内不重复展示
 
         outer.addWidget(card, alignment=Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         outer.addStretch(1)

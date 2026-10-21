@@ -114,6 +114,23 @@ class _LobbyTabs(QWidget):
         return self._stack.widget(index)
 
 
+_ROOM_TYPES = ("常规", "机密", "绝密")
+
+
+def room_type_label(room: Room) -> str:
+    """从接口字段/房间名提取设计稿房间类型；无可识别类型返回空串。"""
+    raw = getattr(room, "raw", {}) or {}
+    for key in ("mode", "room_mode", "type", "room_type", "difficulty", "game_mode"):
+        value = str(raw.get(key) or "").strip()
+        if value in _ROOM_TYPES:
+            return value
+    name = str(getattr(room, "name", "") or "")
+    for value in _ROOM_TYPES:
+        if value in name:
+            return value
+    return ""
+
+
 class RoomListView(QWidget):
     refresh_requested = Signal()
     create_requested = Signal()
@@ -230,7 +247,8 @@ class RoomListView(QWidget):
         root.addWidget(self.tabs, stretch=0)
         root.addStretch(1)
 
-        # 状态由主窗口 statusBar 统一展示；保留字段兼容旧逻辑
+        # 底部状态统一由 MainWindow.statusBar 展示，页面内不重复。
+
         self.status_label = QLabel("尚未加载房间")
         self.status_label.setObjectName("Muted")
         self.status_label.hide()
@@ -315,6 +333,12 @@ class RoomListView(QWidget):
         self.status_label.setText(str(text))
         self.status_label.setStyleSheet("color: #ff9b8f;" if error else "")
 
+    def set_login_status(self, text: str) -> None:
+        """兼容旧调用：状态统一由主窗口状态栏展示。"""
+
+    def set_server_status(self, text: str) -> None:
+        """兼容旧调用：状态统一由主窗口状态栏展示。"""
+
     def selected_code(self) -> str:
         row = self.table.currentRow()
         if 0 <= row < len(self._rooms):
@@ -344,7 +368,7 @@ class RoomListView(QWidget):
     def _write_row(self, row: int, room: Room) -> None:
         values = [
             room.code or "-",
-            room.display_name,
+            (room.display_name + (f" · {room_type_label(room)}" if room_type_label(room) else "")),
             str(room.member_count),
             "私有" if room.has_password else "公开",
         ]

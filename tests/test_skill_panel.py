@@ -86,7 +86,7 @@ class SkillPanelTests(unittest.TestCase):
         throwable = row.slot_widgets[SLOT_THROWABLE]
         self.assertEqual(("大招", "100%", "就绪"), ultimate.text_lines())
         self.assertEqual(("技能", "1/2", "0:30"), ability.text_lines())
-        self.assertEqual(("投掷物", "?", "未共享"), throwable.text_lines())
+        self.assertEqual(("投掷物", "—", "未共享"), throwable.text_lines())
 
         row.update_state(state(), state().captured_at + 10_000, pulse=False)
         self.assertEqual(("技能", "1/2", "0:20"), ability.text_lines())
@@ -156,7 +156,7 @@ class SkillPanelTests(unittest.TestCase):
         events: list[bool] = []
         panel.sharing_toggled.connect(events.append)
         self.assertFalse(panel.sharing_enabled)
-        panel.share_check.setChecked(True)
+        panel.share_toggle_button.click()
         self.assertEqual([True], events)
         panel.set_sharing(False)
         self.assertFalse(panel.sharing_enabled)
@@ -214,6 +214,14 @@ class SkillPanelTests(unittest.TestCase):
         self.assertFalse(throwable.cd_known)
         self.assertFalse(throwable.slot.percent)
         self.assertNotIn("0:", throwable.text_lines()[2])
+
+    def test_operator_avatar_resolved_from_name(self) -> None:
+        catalog = load_operator_catalog()
+        panel = self._panel(catalog=catalog)
+        panel.set_states([state(operator_id="", operator="红狼")])
+        row = panel._rows["2"]
+        self.assertEqual("operator", row._avatar_source)
+        self.assertEqual("红狼", row.operator_label.text())
 
     def test_existing_avatar_file_loads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -291,12 +299,12 @@ class SkillPanelTests(unittest.TestCase):
         slot = panel._rows["2"].slot_widgets[SLOT_ULTIMATE]
         slot.resize(120, 104)
         name, middle, bottom = slot.name_rect(), slot.middle_rect(), slot.bottom_rect()
-        self.assertEqual(104, slot.height())
+        self.assertEqual(110, slot.height())
         self.assertFalse(name.intersects(middle))
         self.assertFalse(middle.intersects(bottom))
         self.assertLessEqual(name.bottom(), middle.top())
-        self.assertGreaterEqual(bottom.top() - middle.bottom(), 6)
-        self.assertLessEqual(bottom.bottom(), 102)
+        self.assertGreaterEqual(bottom.top() - middle.bottom(), 8)
+        self.assertLessEqual(bottom.bottom(), 108)
 
     def test_charge_uses_count_instead_of_ring(self) -> None:
         panel = self._panel()
@@ -344,7 +352,7 @@ class SkillPanelTests(unittest.TestCase):
         self.assertEqual(Qt.ScrollBarPolicy.ScrollBarAsNeeded, panel.scroll.verticalScrollBarPolicy())
         self.assertEqual(10, panel.list_layout.spacing())
         for row in panel._rows.values():
-            self.assertEqual(180, row.height())
+            self.assertEqual(166, row.height())
         bar = panel.scroll.verticalScrollBar()
         self.assertTrue(bar.isVisible())
         self.assertEqual(8, bar.width())

@@ -113,7 +113,7 @@ class WsFatalSessionTests(unittest.TestCase):
             valid, reason = validate_payload(fake_ws.payload)
             self.assertTrue(valid, reason)
             for item in fake_ws.payload:
-                self.assertIsInstance(item["remaining_ms"], int)
+                self.assertTrue(item["remaining_ms"] is None or isinstance(item["remaining_ms"], int))
         finally:
             window.bridge.stop()
             window.close()
