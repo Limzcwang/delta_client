@@ -23,4 +23,9 @@ class T(unittest.TestCase):
   m.set_sharing(False); self.assertEqual(MatchPhase.OFF,m.phase)
  def test_machine_async_stale(self):
   m=MatchStateMachine(); m.set_context(logged_in=True,in_room=True); m.set_sharing(True); m.reset(); g=m.begin_end(); self.assertEqual("continue",m.observe_end(False,generation=g)); g2=m.begin_end(); self.assertEqual("stale",m.observe_end(True,generation=g)); self.assertEqual("continue",m.observe_end(False,generation=g2))
+ def test_terminate_idempotent(self):
+  m=MatchStateMachine(); m.terminate(); m.terminate(); self.assertEqual(MatchPhase.OFF,m.phase)
+  m.set_context(logged_in=True,in_room=True); m.set_sharing(True); m.reset(); m.terminate(); m.terminate(); self.assertEqual(MatchPhase.IDLE,m.phase)
+ def test_terminate_after_end(self):
+  m=MatchStateMachine(); m.set_context(logged_in=True,in_room=True); m.set_sharing(True); m.reset(); g=m.begin_end(); self.assertEqual("continue",m.observe_end(False,generation=g)); m.terminate(); self.assertEqual(MatchPhase.IDLE,m.phase); self.assertFalse(m.async_pending)
 if __name__=="__main__": unittest.main()

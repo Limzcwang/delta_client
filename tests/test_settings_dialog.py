@@ -44,16 +44,14 @@ class SettingsOperatorTests(unittest.TestCase):
         self.dialogs.append(dialog)
         return dialog
 
-    def test_hud_tab_has_calibration_detection_and_auto_operator(self) -> None:
+    def test_hud_tab_only_match_and_diagnostics(self) -> None:
         dialog = self._dialog("weilong")
         labels = [dialog.tabs.tabText(index) for index in range(dialog.tabs.count())]
         self.assertEqual(["采集", "悬浮窗"], labels)
-        self.assertIs(dialog.tabs.widget(0).widget(), dialog.calibration_button.parent())
-        self.assertTrue(dialog.auto_operator_check.isChecked())
         self.assertTrue(dialog.match_auto_check.isChecked())
-        from PySide6.QtWidgets import QLabel
-        self.assertTrue(dialog.overlay_auto_show_check.isChecked())
-        self.assertTrue(any("反作弊" in label.text() for label in dialog.findChildren(QLabel)))
+        self.assertEqual(2000, dialog.match_interval_combo.currentData())
+        for name in ("auto_capture_check", "auto_loop_check", "operator_threshold_spin", "operator_combo", "calibration_button", "refresh_frame_button", "brightness_spin"):
+            self.assertFalse(hasattr(dialog, name), name)
         dialog.accept()
         result = dialog.config_result()
         self.assertTrue(result.match_auto_start)
@@ -106,20 +104,18 @@ class SettingsOperatorTests(unittest.TestCase):
         self.assertFalse(hasattr(dialog, "shortcut_toggle_edit"))
         self.assertFalse(hasattr(dialog, "shortcut_edit_edit"))
         self.assertFalse(hasattr(dialog, "test_hotkey_button"))
-        self.assertIn("反作弊", dialog.hotkey_status_label.text())
+        self.assertFalse(hasattr(dialog, "hotkey_status_label"))
 
     def test_overlay_settings_persist(self) -> None:
         dialog = self._dialog("honglang")
         self.assertTrue(dialog.overlay_enabled_check.isChecked())
         dialog.overlay_enabled_check.setChecked(True)
-        dialog.overlay_auto_show_check.setChecked(True)
         dialog.overlay_opacity_spin.setValue(55)
         dialog.overlay_scale_spin.setValue(1.2)
         dialog._overlay_position_reset = True
         dialog.accept()
         result = dialog.config_result()
         self.assertTrue(result.overlay_enabled)
-        self.assertTrue(result.overlay_auto_show)
         self.assertEqual(55, result.overlay_opacity)
         self.assertAlmostEqual(1.2, result.overlay_scale)
         self.assertIsNone(result.overlay_x)
@@ -133,9 +129,4 @@ class SettingsOperatorTests(unittest.TestCase):
         result = dialog.config_result()
         self.assertEqual("DeltaForceClient-Win64-Shipping.exe", result.capture_window_process)
         self.assertEqual("三角洲行动", result.capture_window_title)
-
-    def test_operator_recognition_status(self) -> None:
-        dialog = self._dialog("weilong")
-        dialog.set_operator_recognition_status("当前识别：红狼（置信度 0.83）")
-        self.assertIn("红狼", dialog.operator_recognition_label.text())
 

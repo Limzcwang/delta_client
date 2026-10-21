@@ -112,6 +112,11 @@ class MatchStateMachine:
         elif result == "abort":
             self.async_pending = False; self.end_window = None
         return result
+    def terminate(self) -> None:
+        """统一停止入口；幂等，未启动/重复调用均安全。"""
+        self.phase = MatchPhase.IDLE if (self.shared and self.logged_in and self.in_room) else MatchPhase.OFF
+        self._clear_tasks()
+
     def window_closed(self) -> None:
         if self.phase == MatchPhase.RUNNING:
             self.phase = MatchPhase.IDLE; self._clear_tasks()

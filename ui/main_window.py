@@ -1538,7 +1538,6 @@ class MainWindow(QMainWindow):
                     message = f"服务器返回异常状态 {status}"
                 self._apply_operator_catalog()
                 if dialog is not None:
-                    dialog.refresh_operator_catalog(manager.catalog)
                     dialog.refresh_operator_config_info(manager)
                     dialog.set_config_check_result(message, ok=(status in (200, 304)))
                 if status == 200 and not silent:
@@ -1739,7 +1738,6 @@ class MainWindow(QMainWindow):
                 self._send_skill_state(state)
         self._update_operator_recognition_status(operator, score)
         if hasattr(self, "settings_dialog") and self.settings_dialog is not None:
-            self.settings_dialog.refresh_operator_catalog(self.operator_catalog)
             self.settings_dialog.set_operator_recognition_status(
                 f"当前识别：{operator.display_name}（置信度 {score:.2f}）"
             )
@@ -2007,8 +2005,8 @@ class MainWindow(QMainWindow):
         """重新识别前把当前 UI 阈值/开关落盘，避免被默认值覆盖。"""
         self.config = replace(
             self.config,
-            auto_operator_enabled=dialog.current_auto_operator_enabled(),
-            operator_recognition_threshold=dialog.current_operator_threshold(),
+            auto_operator_enabled=self.config.auto_operator_enabled,
+            operator_recognition_threshold=self.config.operator_recognition_threshold,
         )
         try:
             save_config(self.config)
@@ -3177,9 +3175,6 @@ class MainWindow(QMainWindow):
         self.settings_dialog = dialog
         dialog.config_check_requested.connect(
             lambda: self._refresh_operator_config(silent=False, dialog=dialog)
-        )
-        dialog.operator_recognition_requested.connect(
-            lambda: self._on_manual_operator_recognition(dialog)
         )
         dialog.test_requested.connect(
             lambda server_text, ws_text: self._on_test_connection(dialog, server_text, ws_text)
