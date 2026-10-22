@@ -464,7 +464,12 @@ class SkillPanel(QWidget):
         self.settings_button.setStyleSheet("QPushButton { min-height:28px; max-height:28px; padding:0 14px; font-size:12px; }")
         self.settings_button.clicked.connect(self.settings_requested.emit)
         header.addWidget(self.settings_button, 0, Qt.AlignmentFlag.AlignVCenter)
-        root.addLayout(header)
+        self.header_widget = QWidget()
+        self.header_widget.setObjectName("SkillHeader")
+        self.header_widget.setFixedHeight(30)
+        self.header_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.header_widget.setLayout(header)
+        root.addWidget(self.header_widget, 0)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)

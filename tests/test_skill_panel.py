@@ -343,6 +343,17 @@ class SkillPanelTests(unittest.TestCase):
             panel.close()
             panel.deleteLater()
 
+    def test_header_top_same_empty_and_with_cards(self) -> None:
+        panel = self._panel()
+        panel.resize(520, 520)
+        panel.show()
+        self.app.processEvents()
+        empty_top = panel.header_widget.geometry().top()
+        panel.set_states([state("2")])
+        self.app.processEvents()
+        self.assertEqual(empty_top, panel.header_widget.geometry().top())
+        self.assertEqual(30, panel.header_widget.height())
+
     def test_multi_member_scroll_and_card_height(self) -> None:
         panel = self._panel()
         panel.resize(520, 520)
