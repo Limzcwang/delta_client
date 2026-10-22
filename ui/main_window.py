@@ -2476,12 +2476,15 @@ class MainWindow(QMainWindow):
             self.room_view.skill_panel.set_sharing(False)
             self._skill_share_enabled = False
             return
+        self.room_view.skill_panel.set_sharing(True)
+        # 0.2.11：共享开启不再伪造任何技能数据；只等待真实识别结果。
         if self._self_skill_state is None:
-            self._self_skill_state = self._build_simulated_skill()
-            self._skills.update(self._self_skill_state)
-            self.room_view.skill_panel.upsert(self._self_skill_state)
+            self.room_view.set_status("共享已开启，等待对局数据")
+            return
+        self._skills.update(self._self_skill_state)
+        self.room_view.skill_panel.upsert(self._self_skill_state)
         self._send_skill_state(self._self_skill_state)
-        self.room_view.set_status("技能共享已开启（本地限频 2 次/秒）")
+        self.room_view.set_status("技能共享已开启（等待真实识别数据）")
 
     def _remove_own_skill_state(self) -> None:
         uid = self._user_id()
@@ -2996,15 +2999,9 @@ class MainWindow(QMainWindow):
         self._hud_service.reset_tracker()
         if self._current_room is None:
             return
-        state = self._build_simulated_skill()
-        self._self_skill_state = state
-        self._skills.update(state)
-        self.room_view.skill_panel.upsert(state)
-        self._sync_overlay_states()
-        if self._skill_share_enabled:
-            self._send_skill_state(state)
-        else:
-            self.room_view.set_status(f"已切换干员：{state.operator or state.operator_id}")
+        # 0.2.11：切换干员不再生成模拟技能，等待真实识别结果。
+        self._remove_own_skill_state()
+        self.room_view.set_status("已切换干员，等待真实识别数据")
 
     def _on_settings(self) -> None:
         if self.ui_mode == "qml" and self.qml_conn is not None:
