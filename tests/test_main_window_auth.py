@@ -185,5 +185,19 @@ class WsFatalSessionTests(unittest.TestCase):
         finally:
             window.bridge.stop(); window.close(); window.deleteLater(); self.app.processEvents()
 
+    def test_error_paths_write_diag_events(self) -> None:
+        session = Session(persist_token=False); session.set_login("token", {"id":"12","username":"DeltaQA01"})
+        window = MainWindow(AppConfig(use_mock=True, persist_token=False, server_migrated=False), session)
+        try:
+            window._on_login_failure(RuntimeError("bad login"), "")
+            window._on_register_failure(RuntimeError("bad register"))
+            window._on_join_failed(RuntimeError("bad join"), "ABC123", 0)
+            window._on_room_action_failed(RuntimeError("bad action"))
+            window._on_ws_run_failed(RuntimeError("ws down"))
+            codes = {e["payload"].get("code") for e in window.diagnostics.events if e["kind"] == "event"}
+            self.assertTrue({"LOGIN_FAILED","REGISTER_FAILED","JOIN_FAILED","ROOM_ACTION_FAILED","WS_RUN_FAILED"} <= codes, codes)
+        finally:
+            window.bridge.stop(); window.close(); window.deleteLater(); self.app.processEvents()
+
 if __name__ == "__main__":
     unittest.main()

@@ -694,6 +694,8 @@ class MainWindow(QMainWindow):
             self.qml_login.set_busy(False)
             self.qml_login.show_error(to_user_message(exc))
         message = to_user_message(exc)
+        self._diag_event("error", {"code": "LOGIN_FAILED", "message": message[:300]})
+        logger.warning("login failed: %s", message)
         if (
             username
             and isinstance(exc, ApiError)
@@ -926,9 +928,8 @@ class MainWindow(QMainWindow):
             self._handle_auth_expired(exc)
             return
         self.room_list_view.my_rooms.set_room_busy(mine.key, False)
-        self.room_list_view.set_status(
-            f"{action}「{mine.display_name}」失败：{to_user_message(exc)}", error=True
-        )
+        self._diag_event("error", {"code": "ROOM_ACTION_FAILED", "message": to_user_message(exc)[:300]})
+        logger.warning("room action failed: %s", to_user_message(exc))
 
     @staticmethod
     def _room_matches_my_room(room: Room, mine: MyRoom) -> bool:
@@ -1018,14 +1019,12 @@ class MainWindow(QMainWindow):
         if isinstance(exc, ApiError) and exc.is_auth_error:
             self._handle_auth_expired(exc)
             return
-        self._diag_event("error", {"code": "JOIN_FAILED", "message": to_user_message(exc)[:300]})
 
     def _on_room_action_failed(self, exc: BaseException) -> None:
         self._diag_event("error", {"code": "ROOM_ACTION_FAILED", "message": to_user_message(exc)[:300]})
         if isinstance(exc, ApiError) and exc.is_auth_error:
             self._handle_auth_expired(exc)
             return
-        self._diag_event("error", {"code": "ROOM_ACTION_FAILED", "message": to_user_message(exc)[:300]})
 
     def _on_logout(self) -> None:
         room = self._current_room
