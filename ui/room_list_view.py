@@ -330,8 +330,10 @@ class RoomListView(QWidget):
         self.create_button.setEnabled(not loading)
 
     def set_status(self, text: str, error: bool = False) -> None:
+        if error:
+            return
         self.status_label.setText(str(text))
-        self.status_label.setStyleSheet("color: #ff9b8f;" if error else "")
+        self.status_label.setStyleSheet("")
 
     def set_login_status(self, text: str) -> None:
         """兼容旧调用：状态统一由主窗口状态栏展示。"""

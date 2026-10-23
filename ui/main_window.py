@@ -427,7 +427,8 @@ class MainWindow(QMainWindow):
         self.login_view.focus_first()
         self._auto_fill_saved_login()
         if message:
-            self.login_view.show_error(message)
+            self._diag_event("error", {"code": "LOGIN_FAILED", "message": message[:300]})
+        logger.warning("login failed: %s", message)
         if self.qml_login is not None:
             self.qml_login.set_server_text(self.config.server_url, self.config.mode_label)
             self.qml_login.set_busy(False)
@@ -660,8 +661,8 @@ class MainWindow(QMainWindow):
         text = "无法连接服务器（已尝试 443/8443）"
         if attempted:
             text += f"\n已尝试：{attempted}"
-        self.login_view.show_error(text)
-        self._set_status(text)
+        self._diag_event("error", {"code": "LOGIN_CONNECT_FAILED", "message": text[:300]})
+        logger.warning("login connect failed: %s", text)
 
 
     def _on_login_success(
@@ -737,7 +738,8 @@ class MainWindow(QMainWindow):
 
     def _on_register_failure(self, exc: BaseException) -> None:
         self.login_view.set_busy(False)
-        self.login_view.show_error(to_user_message(exc))
+        self._diag_event("error", {"code": "REGISTER_FAILED", "message": to_user_message(exc)[:300]})
+        logger.warning("register failed: %s", to_user_message(exc))
         if self.qml_login is not None:
             self.qml_login.set_busy(False)
             self.qml_login.show_error(to_user_message(exc))
@@ -1007,6 +1009,7 @@ class MainWindow(QMainWindow):
         self._enter_room(room, password=password)
 
     def _on_join_failed(self, exc: BaseException, code: str, attempt: int) -> None:
+        self._diag_event("error", {"code": "JOIN_FAILED", "message": to_user_message(exc)[:300]})
         if isinstance(exc, ApiError) and exc.needs_room_password and attempt < 2:
             self.room_list_view.set_status(exc.user_message, error=True)
             password_focus = exc.kind == ErrorKind.ROOM_PASSWORD_INVALID
@@ -1015,13 +1018,14 @@ class MainWindow(QMainWindow):
         if isinstance(exc, ApiError) and exc.is_auth_error:
             self._handle_auth_expired(exc)
             return
-        self.room_list_view.set_status(to_user_message(exc), error=True)
+        self._diag_event("error", {"code": "JOIN_FAILED", "message": to_user_message(exc)[:300]})
 
     def _on_room_action_failed(self, exc: BaseException) -> None:
+        self._diag_event("error", {"code": "ROOM_ACTION_FAILED", "message": to_user_message(exc)[:300]})
         if isinstance(exc, ApiError) and exc.is_auth_error:
             self._handle_auth_expired(exc)
             return
-        self.room_list_view.set_status(to_user_message(exc), error=True)
+        self._diag_event("error", {"code": "ROOM_ACTION_FAILED", "message": to_user_message(exc)[:300]})
 
     def _on_logout(self) -> None:
         room = self._current_room
@@ -1256,8 +1260,10 @@ class MainWindow(QMainWindow):
             self.room_view.set_status(f"成员同步失败：{to_user_message(exc)}", error=True)
 
     def _on_ws_run_failed(self, exc: BaseException) -> None:
-        self.room_view.set_connection_state("error", to_user_message(exc))
-        self._system_message(f"实时连接失败：{to_user_message(exc)}")
+        message = to_user_message(exc)
+        self._diag_event("error", {"code": "WS_RUN_FAILED", "message": message[:300]})
+        logger.warning("ws run failed: %s", message)
+        self.room_view.set_connection_state("error", message)
         if self._current_room is not None:
             self._refresh_members_http(self._current_room, fallback=True)
 

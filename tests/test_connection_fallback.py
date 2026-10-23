@@ -136,8 +136,8 @@ class LoginFallbackTests(unittest.TestCase):
             window._login_candidates = ["https://a", "https://b"]
             window._login_candidate_index = 2
             window._on_login_candidates_failed()
-            self.assertTrue(any("443/8443" in text for text in errors))
-            self.assertTrue(any("已尝试" in text for text in errors))
+            self.assertEqual([], errors)
+            self.assertEqual([], errors)
         finally:
             self._close(window)
 
