@@ -157,7 +157,7 @@ class OperatorRecognitionTests(unittest.TestCase):
         finally:
             self._close(window)
 
-    def test_share_off_then_on_restores_own_card(self) -> None:
+    def test_share_toggle_on_does_not_invent_fake_card(self) -> None:
         window = self._window()
         try:
             window._skills.update(window._self_skill_state)
@@ -166,9 +166,9 @@ class OperatorRecognitionTests(unittest.TestCase):
             window._on_skill_sharing_toggled(False)
             self.assertNotIn("12", window.room_view.skill_panel._rows)
             window._on_skill_sharing_toggled(True)
-            self.assertIn("12", window.room_view.skill_panel._rows)
-            self.assertIsNotNone(window._skills.get("12"))
-            self.assertIsNotNone(window._self_skill_state)
+            self.assertNotIn("12", window.room_view.skill_panel._rows)
+            self.assertIsNone(window._self_skill_state)
+            self.assertIn("等待", window.room_view.status_label.text())
         finally:
             self._close(window)
 

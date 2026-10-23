@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import time
 import asyncio
 import concurrent.futures
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from config import (
+    APP_VERSION,
     AppConfig,
     ConfigError,
     connection_candidates,
@@ -42,6 +44,7 @@ from core.canvas import (
 )
 from core.chat import ChatTimeline
 from core.connection import is_network_failure
+from core.diagnostics import DiagnosticsBuffer
 from core.match_flow import MatchPhase, MatchStateMachine
 from core.errors import ApiError, ErrorKind, to_user_message
 from core.models import (
@@ -316,6 +319,8 @@ class MainWindow(QMainWindow):
         self._auto_controller.operator_detected.connect(self._on_auto_operator_detected)
         self._apply_auto_config()
 
+        self.diagnostics = DiagnosticsBuffer(APP_VERSION)
+        self.diagnostics.record("env", {"client_version": APP_VERSION, "os": sys.platform, "resolution": list(self._screen_size())})
         self._status_text = QLabel("未登录")
         self._status_text.setObjectName("Muted")
         self.statusBar().addWidget(self._status_text, 1)
@@ -1418,6 +1423,10 @@ class MainWindow(QMainWindow):
             if isinstance(user, Mapping):
                 member = Member.from_api(user)
                 self.room_view.remove_member(member)
+                if member.id:
+                    self._skills.remove(str(member.id))
+                    self.room_view.skill_panel.remove(str(member.id))
+                    self._sync_overlay_states()
                 reason = str(message.get("reason") or "")
                 reason_text = {
                     "left": "离开",
@@ -2271,6 +2280,7 @@ class MainWindow(QMainWindow):
         self.match_flow.reset()
         if self.match_flow.phase == MatchPhase.RUNNING:
             self._start_match_running()
+            self._send_match_state("running")
         else:
             if was_running:
                 self._finish_match()
@@ -2353,6 +2363,7 @@ class MainWindow(QMainWindow):
         self._sync_match_ui()
         if result == "hit":
             self._start_match_running()
+            self._send_match_state("running")
 
     def _on_match_recognize(self, frame, future) -> None:
         try:
@@ -2437,6 +2448,8 @@ class MainWindow(QMainWindow):
             self._remove_own_skill_state(); self._send_skill_off()
         except Exception:  # noqa: BLE001
             pass
+        self._send_match_state("idle")
+        self._diag_event("match_end")
         self.match_flow.terminate()
         self._sync_match_ui()
         logger.info("match ended by settlement OCR")
@@ -2453,6 +2466,7 @@ class MainWindow(QMainWindow):
             pass
 
     def _on_skill_sharing_toggled(self, enabled: bool) -> None:
+        self._diag_event("share_on" if enabled else "share_off")
         self._skill_share_enabled = bool(enabled)
         if hasattr(self, "_auto_controller"):
             self._apply_auto_config()
@@ -2467,6 +2481,7 @@ class MainWindow(QMainWindow):
                 self._stop_match_tasks()
             self._sync_match_ui()
         if not enabled:
+            self._diag_flush()
             # 无论 WS 是否连通，都先本地移除自己，避免卡片残留。
             self._remove_own_skill_state()
             self._send_skill_off()
@@ -2476,12 +2491,13 @@ class MainWindow(QMainWindow):
             self.room_view.skill_panel.set_sharing(False)
             self._skill_share_enabled = False
             return
-        if self._self_skill_state is None:
-            self._self_skill_state = self._build_simulated_skill()
-            self._skills.update(self._self_skill_state)
-            self.room_view.skill_panel.upsert(self._self_skill_state)
-        self._send_skill_state(self._self_skill_state)
-        self.room_view.set_status("技能共享已开启（本地限频 2 次/秒）")
+        self.room_view.skill_panel.set_sharing(True)
+        # 只上报对局状态（无技能数据），不伪造技能内容。
+        if self._self_skill_state is not None and self._self_skill_state.match_state == "running":
+            self._send_skill_state(self._self_skill_state)
+        else:
+            self._send_match_state("idle")
+        self.room_view.set_status("技能共享已开启（等待对局数据）")
 
     def _remove_own_skill_state(self) -> None:
         uid = self._user_id()
@@ -2509,6 +2525,8 @@ class MainWindow(QMainWindow):
             self.room_view.set_status("技能上报失败：captured_at 非法", error=True)
             return
         state = replace(state, captured_at=captured_at)
+        if any(str(getattr(state.slot(kind), "state", "unknown")) != "unknown" for kind in ("ultimate", "ability", "throwable")):
+            state = replace(state, match_state="running")
         self._self_skill_state = state
         self._skills.update(state)
         self.room_view.skill_panel.upsert(state)
@@ -2527,8 +2545,38 @@ class MainWindow(QMainWindow):
                 state.operator_id,
                 state.operator,
                 state.squad_number,
+                state.match_state,
             )
         )
+
+    def _send_match_state(self, match_state: str) -> None:
+        room = self._current_room
+        if room is None or not self._skill_share_enabled:
+            return
+        state = SkillState(
+            user_id=self._user_id(),
+            nickname=self._username(),
+            captured_at=self._server_now_ms(),
+            match_state="running" if match_state == "running" else "idle",
+            slots={},
+        )
+        self._send_skill_state(state)
+
+    def _diag_event(self, name: str, extra: dict | None = None) -> None:
+        try:
+            payload = {"event": str(name), "ts": int(time.time() * 1000)}
+            if extra:
+                payload.update(extra)
+            self.diagnostics.record("event", payload)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _diag_flush(self) -> None:
+        try:
+            coro = self.diagnostics.upload(self.config.server_url, self.session.token)
+            self.bridge.submit(coro, None, lambda exc: logger.debug("diagnostics flush failed: %s", exc))
+        except Exception:  # noqa: BLE001
+            pass
 
     def _send_skill_off(self) -> None:
         room = self._current_room
@@ -2996,15 +3044,9 @@ class MainWindow(QMainWindow):
         self._hud_service.reset_tracker()
         if self._current_room is None:
             return
-        state = self._build_simulated_skill()
-        self._self_skill_state = state
-        self._skills.update(state)
-        self.room_view.skill_panel.upsert(state)
-        self._sync_overlay_states()
-        if self._skill_share_enabled:
-            self._send_skill_state(state)
-        else:
-            self.room_view.set_status(f"已切换干员：{state.operator or state.operator_id}")
+        # 0.2.11：切换干员不再生成模拟技能，等待真实识别结果。
+        self._remove_own_skill_state()
+        self.room_view.set_status("已切换干员，等待真实识别数据")
 
     def _on_settings(self) -> None:
         if self.ui_mode == "qml" and self.qml_conn is not None:

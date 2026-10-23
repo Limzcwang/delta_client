@@ -289,24 +289,31 @@ class SkillRow(QFrame):
         names.setSpacing(1)
         self.name_label = QLabel(state.display_name)
         self.name_label.setObjectName("SkillName")
-        self.operator_label = QLabel(state.operator or "干员未共享")
+        self.operator_label = QLabel(state.operator or "—")
         self.operator_label.setObjectName("Hint")
         names.addWidget(self.name_label)
         names.addWidget(self.operator_label)
         header.addLayout(names, stretch=1)
         self.status_label = QLabel()
-        self.status_label.setObjectName("Hint")
+        self.status_label.setObjectName("MatchState")
+        self.status_label.setFixedHeight(22)
         header.addWidget(self.status_label)
-        root.addLayout(header)
 
-        slots = QHBoxLayout()
+        self.slots_widget = QWidget()
+        slots = QHBoxLayout(self.slots_widget)
+        slots.setContentsMargins(0, 0, 0, 0)
         slots.setSpacing(6)
         self.slot_widgets: dict[str, SkillSlotWidget] = {}
         for kind in _SLOT_ORDER:
             widget = SkillSlotWidget(kind)
             self.slot_widgets[kind] = widget
             slots.addWidget(widget, stretch=1)
-        root.addLayout(slots)
+        self.unrecognized_label = QLabel("无法识别")
+        self.unrecognized_label.setObjectName("Hint")
+        self.unrecognized_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        root.addLayout(header)
+        root.addWidget(self.slots_widget)
+        root.addWidget(self.unrecognized_label)
         self.update_state(
             state,
             int(server_now) if server_now is not None else int(time.time() * 1000),
@@ -329,12 +336,24 @@ class SkillRow(QFrame):
         self._apply_avatar(state)
         operator = self.operator_def
         self.operator_label.setText(
-            (operator.display_name if operator is not None else (state.operator or "干员未共享"))
+            (operator.display_name if operator is not None else (state.operator or "—"))
         )
         self._apply_squad_number(state.squad_number)
-        unshared = state.is_unshared(server_now)
-        self.status_label.setText("未共享" if unshared else "● 已共享")
-        self.status_label.setStyleSheet("color: #ffd071;" if unshared else "color: #5fc98e;")
+        has_data = any(
+            str(getattr(state.slot(kind), "state", "unknown")) != "unknown"
+            for kind in _SLOT_ORDER
+        )
+        running = bool(has_data or state.match_state == "running")
+        self.status_label.setText(("✓ 对局进行中" if running else "✗ 对局未进行"))
+        self.status_label.setStyleSheet(
+            "QLabel#MatchState { color:#5fc98e; background:rgba(95,201,142,0.10);"
+            " border:1px solid rgba(95,201,142,0.50); border-radius:11px; padding:0 8px; font-size:10px; }"
+            if running else
+            "QLabel#MatchState { color:#f5a800; background:rgba(245,168,0,0.10);"
+            " border:1px solid rgba(245,168,0,0.50); border-radius:11px; padding:0 8px; font-size:10px; }"
+        )
+        self.slots_widget.setVisible(has_data)
+        self.unrecognized_label.setVisible(not has_data)
         hide_remaining = bool(self.self_user_id and str(state.user_id) == str(self.self_user_id))
         for kind, widget in self.slot_widgets.items():
             widget.hide_remaining = hide_remaining
@@ -464,7 +483,12 @@ class SkillPanel(QWidget):
         self.settings_button.setStyleSheet("QPushButton { min-height:28px; max-height:28px; padding:0 14px; font-size:12px; }")
         self.settings_button.clicked.connect(self.settings_requested.emit)
         header.addWidget(self.settings_button, 0, Qt.AlignmentFlag.AlignVCenter)
-        root.addLayout(header)
+        self.header_widget = QWidget()
+        self.header_widget.setObjectName("SkillHeader")
+        self.header_widget.setFixedHeight(30)
+        self.header_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.header_widget.setLayout(header)
+        root.addWidget(self.header_widget, 0)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -497,7 +521,7 @@ class SkillPanel(QWidget):
         return self.share_check.isChecked()
 
     def set_match_state(self, label: str, running: bool, reset_disabled: bool = False) -> None:
-        self.match_state_label.setText(("✓ " if running else "× ") + str(label))
+        self.match_state_label.setText(("✓ " if running else "✗ ") + str(label))
         if running:
             self.match_state_label.setStyleSheet(
                 "QLabel#MatchState { color:#5fc98e; background:rgba(95,201,142,0.10);"

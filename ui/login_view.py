@@ -80,6 +80,14 @@ class LoginView(QWidget):
         notice = QLabel("仅桌面端 · 不收集屏幕内容\n截屏与识别全部在本机完成")
         notice.setObjectName("Hint")
         notice.setWordWrap(True)
+        self.diag_notice = QLabel(
+            "仅采集用于排查识别问题的技术日志（窗口/OCR/识别结果），\n"
+            "不含聊天、截图或账号密码；保留 7 天。"
+        )
+        self.diag_notice.setObjectName("Hint")
+        self.diag_notice.setWordWrap(True)
+        self.diag_notice.setMaximumWidth(360)
+        self.diag_notice.setStyleSheet("QLabel { color:#7a8aa3; font-size:11px; }")
 
         layout.addStretch(1)
         layout.addWidget(title)
@@ -88,6 +96,7 @@ class LoginView(QWidget):
         layout.addWidget(features)
         layout.addStretch(2)
         layout.addWidget(notice)
+        layout.addWidget(self.diag_notice)
         return panel
 
     def _build_form_panel(self) -> QWidget:

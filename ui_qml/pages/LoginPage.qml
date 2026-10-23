@@ -245,6 +245,21 @@ Item {
         }
     }
 
+    Text {
+        anchors.left: parent.left
+        anchors.bottom: parent.bottom
+        anchors.leftMargin: 16
+        anchors.bottomMargin: 12
+        width: Math.min(360, parent.width - 32)
+        text: "仅采集用于排查识别问题的技术日志（窗口/OCR/识别结果），\n不含聊天、截图或账号密码；保留 7 天。"
+        color: "#7a8aa3"
+        font.family: Theme.fontFamily
+        font.pixelSize: 11
+        lineHeight: 1.5
+        wrapMode: Text.WordWrap
+        z: 10
+    }
+
     Popup {
         id: clearConfirm
         parent: Overlay.overlay
