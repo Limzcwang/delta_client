@@ -61,7 +61,7 @@ def _unknown(index: int) -> dict[str, Any]:
     return {
         "slot": index,
         "state": SKILL_UNKNOWN,
-        "remaining_ms": None,
+        "remaining_ms": 0,
         "charges": 0,
         "max_charges": 1,
     }
@@ -83,7 +83,7 @@ def sanitize_slot(index: int, slot: Any) -> dict[str, Any]:
         item: dict[str, Any] = {
             "slot": index,
             "state": state,
-            "remaining_ms": remaining,
+            "remaining_ms": int(remaining or 0),
             "charges": 1,
             "max_charges": 1,
         }
@@ -107,7 +107,7 @@ def sanitize_slot(index: int, slot: Any) -> dict[str, Any]:
     item = {
         "slot": index,
         "state": state,
-        "remaining_ms": remaining,
+        "remaining_ms": int(remaining or 0),
         "charges": charges,
         "max_charges": max_charges,
     }
@@ -136,11 +136,8 @@ def _validate_slot(item: Any) -> tuple[bool, str]:
     if state not in SKILL_STATES:
         return False, "state 非法"
     remaining = item.get("remaining_ms", 0)
-    if remaining is not None and (
-        not isinstance(remaining, int) or isinstance(remaining, bool)
-        or not (0 <= remaining <= MAX_REMAINING_MS)
-    ):
-        return False, "remaining_ms 必须是 0-600000 整数或 null"
+    if not isinstance(remaining, int) or isinstance(remaining, bool) or not (0 <= remaining <= MAX_REMAINING_MS):
+        return False, "remaining_ms 必须是 0-600000 整数"
     if slot == 0 and state != SKILL_UNKNOWN:
         pct = item.get("pct")
         if pct is not None and (

@@ -13,24 +13,31 @@ def _lines(image, scale=1.0):
             pass
     return [line.text for line in HudOcr().read_lines(image)]
 
+def _crop_region(image, x0, x1, y0, y1):
+    h, w = image.shape[:2]
+    return image[int(h*y0):int(h*y1), int(w*x0):int(w*x1)]
+
 def read_start_details(image: Any) -> dict[str, Any]:
-    detail = {"hit": False, "lines": [], "hits": 0, "attempts": 0, "threshold": 0, "result": "miss"}
+    detail = {"hit": False, "lines": [], "hits": 0, "attempts": 0, "threshold": 1, "result": "miss", "region": ""}
     if image is None:
         detail["result"] = "no_frame"
         return detail
-    try:
-        top = image[: max(40, int(image.shape[0] * 0.30))]
-        texts = _lines(top)
-    except Exception:
-        detail["result"] = "ocr_error"
-        return detail
-    detail["lines"] = [{"text": str(t), "box": []} for t in texts]
-    detail["attempts"] = 1
-    detail["threshold"] = 1
-    hits = sum(1 for text in texts if parse_countdown(text))
-    detail["hits"] = hits
-    detail["hit"] = bool(hits)
-    detail["result"] = "hit" if hits else "miss"
+    # 先小地图计时区（快），再顶部任务横幅区
+    for name, box in (("minimap", (0.05, 0.13, 0.29, 0.35)), ("banner", (0.30, 0.72, 0.09, 0.23))):
+        detail["attempts"] += 1
+        try:
+            crop = _crop_region(image, *box)
+            texts = _lines(crop)
+        except Exception:
+            continue
+        for text in texts:
+            detail["lines"].append({"text": str(text), "box": [], "region": name})
+        if any(parse_countdown(text) for text in texts):
+            detail["hit"] = True
+            detail["hits"] = 1
+            detail["result"] = "hit"
+            detail["region"] = name
+            return detail
     return detail
 
 def read_start_hit(image: Any) -> bool:

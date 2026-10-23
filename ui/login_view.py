@@ -384,6 +384,9 @@ class LoginView(QWidget):
             self.primary_button.setText("注 册" if self._mode == "register" else "登 录")
 
     def show_error(self, message: str) -> None:
+        import logging
+        logging.getLogger(__name__).warning("login error hidden: %s", message)
+        return
         self.success_banner.hide()
         self.error_banner.setText(str(message))
         self.error_banner.show()

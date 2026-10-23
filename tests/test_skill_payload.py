@@ -124,12 +124,11 @@ class CleaningTests(unittest.TestCase):
         self.assertTrue(valid, reason)
         for item in payload:
             remaining = item["remaining_ms"]
-            if remaining is not None:
-                self.assertIsInstance(remaining, int)
-                self.assertTrue(0 <= remaining <= MAX_REMAINING_MS)
+            self.assertIsInstance(remaining, int)
+            self.assertTrue(0 <= remaining <= MAX_REMAINING_MS)
             self.assertNotIn(None, {k: v for k, v in item.items() if k != "remaining_ms"}.values())
         self.assertEqual("unknown", payload[1]["state"])
-        self.assertIsNone(payload[1]["remaining_ms"])
+        self.assertEqual(0, payload[1]["remaining_ms"])
         self.assertEqual("ready", payload[2]["state"])
         self.assertEqual(1, payload[2]["max_charges"])
         self.assertEqual(0, payload[2]["charges"])
@@ -217,5 +216,5 @@ class UnknownNullTests(unittest.TestCase):
         import json
         state=SkillState.from_ws({"user_id":"1","captured_at":1,"skills":{"ultimate":{"state":"unknown"},"ability":{"state":"unknown"},"throwable":{"state":"unknown"}}})
         payload=serialize_skill_state(state)
-        self.assertTrue(all(item["remaining_ms"] is None for item in payload))
-        self.assertIn('"remaining_ms": null', json.dumps(payload))
+        self.assertTrue(all(item["remaining_ms"] == 0 for item in payload))
+        self.assertIn('"remaining_ms": 0', json.dumps(payload))

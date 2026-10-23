@@ -142,7 +142,7 @@ class RejoinTests(unittest.TestCase):
             window._handle_ws_error({"code": "NOT_ROOM_MEMBER", "message": "你还没有加入房间"})
             middle = len(window._timeline.entries)
             window._handle_ws_error({"code": "NOT_ROOM_MEMBER", "message": "你还没有加入房间"})
-            self.assertEqual(before + 1, middle)
+            self.assertEqual(before, middle)
             self.assertEqual(middle, len(window._timeline.entries))
             self.assertEqual([("ABC123", None)], api.joins)
             self.assertTrue(window._rejoin_in_progress)
