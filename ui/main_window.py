@@ -327,6 +327,7 @@ class MainWindow(QMainWindow):
         self.diagnostics = DiagnosticsBuffer(APP_VERSION)
         self.diagnostics.client_diag_id = self.config.client_diag_id
         self._diag_record_env()
+        self._diag_flush()
         self._status_text = QLabel("未登录")
         self._status_text.setObjectName("Muted")
         self.statusBar().addWidget(self._status_text, 1)
@@ -1065,6 +1066,7 @@ class MainWindow(QMainWindow):
         self.room_view.skill_panel.set_clock_offset(0)
         self.room_view.set_room(room)
         self._diag_event("room_join")
+        self._diag_flush()
         self.room_view.set_user(self._username(), self._user_id())
         self.room_view.skill_panel.set_self_user_id(self._user_id())
         self.room_view.clear_chat()
@@ -2309,21 +2311,22 @@ class MainWindow(QMainWindow):
         try:
             if not self.session.is_logged_in or self._current_room is None or not self.match_flow.shared:
                 self.match_timer.stop(); return
-            self._diag_tick()
             if self._find_game_window() is None:
                 self._diag_event("window_lost")
                 self.match_flow.window_closed(); self._stop_match_tasks(); self._sync_match_ui(); return
             if self.match_flow.phase == MatchPhase.IDLE:
                 if not self.match_flow.auto_start:
                     return
-                frame, _err = self._capture_hud_frame()
+                frame, err = self._capture_hud_frame()
+                self._diag_tick(capture=self._diag_capture(frame, err))
                 if frame is None:
                     return
                 generation = self._match_generation
                 future = self._match_executor.submit(self._match_read_start, frame.image)
                 future.add_done_callback(lambda f: self._match_post(generation, lambda: self._on_match_start_result(f)))
             elif self.match_flow.phase == MatchPhase.RUNNING:
-                frame, _err = self._capture_hud_frame()
+                frame, err = self._capture_hud_frame()
+                self._diag_tick(capture=self._diag_capture(frame, err))
                 if frame is None:
                     self._schedule_match_end()
                     return
@@ -2342,9 +2345,20 @@ class MainWindow(QMainWindow):
             logger.debug("match tick failed", exc_info=True)
 
     @staticmethod
+    def _diag_capture(frame, err) -> dict:
+        if frame is None:
+            return {"ok": False, "fail_reason": str(err or "no_frame"), "width": 0, "height": 0, "mean_luma": 0.0}
+        try:
+            image = frame.image
+            mean = float(image.mean()) if hasattr(image, "mean") else 0.0
+        except Exception:
+            mean = 0.0
+        return {"ok": True, "fail_reason": "", "width": int(frame.width), "height": int(frame.height), "mean_luma": mean}
+
+    @staticmethod
     def _match_read_start(image):
-        from core.match_ocr import read_start_hit
-        return read_start_hit(image)
+        from core.match_ocr import read_start_details
+        return read_start_details(image)
 
     @staticmethod
     def _match_recognize(image, catalog, profile):
@@ -2353,8 +2367,8 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _match_read_settlement(image):
-        from core.match_ocr import read_settlement_hit
-        return read_settlement_hit(image)
+        from core.match_ocr import read_settlement_details
+        return read_settlement_details(image)
 
     def _match_post(self, generation: int, callback) -> None:
         if generation != self._match_generation:
@@ -2366,9 +2380,15 @@ class MainWindow(QMainWindow):
 
     def _on_match_start_result(self, future) -> None:
         try:
-            hit = bool(future.result())
+            detail = future.result()
         except Exception:  # noqa: BLE001
-            hit = False
+            detail = {}
+        if isinstance(detail, dict):
+            hit = bool(detail.get("hit"))
+            self._diag_tick(start_ocr=detail)
+        else:
+            hit = bool(detail)
+            self._diag_tick(start_ocr={"hit": hit, "result": "hit" if hit else "miss"})
         result = self.match_flow.observe_start(hit)
         self._sync_match_ui()
         if result == "hit":
@@ -2380,6 +2400,12 @@ class MainWindow(QMainWindow):
             result = future.result() or {}
         except Exception:  # noqa: BLE001
             result = {}
+        self._diag_tick(
+            operator={"top3": result.get("top3") or [], "locked": bool(result.get("operator_id")),
+                      "fallback": False, "unknown": not bool(result.get("operator_id"))},
+            skill_bar={**({"found": bool(result.get("skills")), "roi": (result.get("skill_bar") or {}).get("roi", {}),
+                           "slots": result.get("slots") or [], "ocr_lines": []})},
+        )
         now = time.monotonic()
         if not self.match_flow.locked_operator:
             score = float(result.get("score") or 0.0)
@@ -2437,12 +2463,21 @@ class MainWindow(QMainWindow):
 
     def _on_match_end_result(self, future) -> None:
         try:
-            hit = bool(future.result())
+            detail = future.result()
         except Exception:  # noqa: BLE001
-            hit = False
-        self._match_end_observe(hit)
+            detail = {}
+        if isinstance(detail, dict):
+            self._match_end_observe(bool(detail.get("hit")), detail)
+        else:
+            self._match_end_observe(bool(detail), {})
 
-    def _match_end_observe(self, hit: bool) -> None:
+    def _match_end_observe(self, hit: bool, detail: dict | None = None) -> None:
+        detail = detail or {}
+        self._diag_tick(end_async={
+            "delay_ms": 3000, "scans": int(detail.get("scans") or 0),
+            "hits": int(detail.get("hits") or 0), "threshold": int(detail.get("threshold") or 0),
+            "result": str(detail.get("result") or ("hit" if hit else "miss")),
+        })
         result = self.match_flow.observe_end(hit)
         if result == "hit":
             self._finish_match()
@@ -2460,6 +2495,7 @@ class MainWindow(QMainWindow):
             pass
         self._send_match_state("idle")
         self._diag_event("match_end")
+        self._diag_flush()
         self.match_flow.terminate()
         self._sync_match_ui()
         logger.info("match ended by settlement OCR")
@@ -2581,6 +2617,18 @@ class MainWindow(QMainWindow):
             "sharing_enabled": bool(self._skill_share_enabled),
         }
 
+    @staticmethod
+    def _redact_exe(path: str) -> str:
+        text = str(path or "").strip().replace("/", "\\")
+        if not text:
+            return ""
+        import os as _os
+        name = _os.path.basename(text)
+        drive = ""
+        if len(text) >= 2 and text[1] == ":":
+            drive = text[:2]
+        return (drive + "\\…\\" if drive else "…\\") + name
+
     def _diag_record_env(self) -> None:
         try:
             screen = QApplication.primaryScreen()
@@ -2598,7 +2646,7 @@ class MainWindow(QMainWindow):
             game = {
                 "title": getattr(window, "title", "") if window else "",
                 "process": getattr(window, "process_name", "") if window else "",
-                "exe": getattr(window, "process_path", "") if window else "",
+                "exe": self._redact_exe(getattr(window, "process_path", "")) if window else "",
                 "client_rect": ({"x": int(window.client_rect[0]), "y": int(window.client_rect[1]), "width": int(window.client_rect[2]), "height": int(window.client_rect[3])} if window else {"x":0,"y":0,"width":0,"height":0}),
                 "display_mode": "unknown",
             }
