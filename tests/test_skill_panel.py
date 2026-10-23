@@ -132,9 +132,26 @@ class SkillPanelTests(unittest.TestCase):
         old = state()
         panel.set_states([old])
         row = panel._rows["2"]
-        self.assertEqual("● 已共享", row.status_label.text())
+        self.assertTrue("对局进行中" in row.status_label.text())
+        self.assertFalse(row.slots_widget.isHidden())
         row.update_state(old, old.captured_at + 30 * 60 * 1000 + 1)
-        self.assertEqual("未共享", row.status_label.text())
+        self.assertIn("对局", row.status_label.text())
+
+    def test_card_three_states(self) -> None:
+        from core.skills import SkillState
+        panel = self._panel()
+        idle = SkillState(user_id="2", nickname="队友2", match_state="idle", captured_at=CAPTURED_AT)
+        panel.set_states([idle]); row = panel._rows["2"]
+        self.assertIn("对局未进行", row.status_label.text())
+        self.assertFalse(row.unrecognized_label.isHidden())
+        self.assertTrue(row.slots_widget.isHidden())
+        running = SkillState(user_id="2", nickname="队友2", match_state="running", captured_at=CAPTURED_AT)
+        panel.upsert(running)
+        self.assertIn("对局进行中", row.status_label.text())
+        self.assertEqual("—", row.operator_label.text())
+        panel.upsert(state("2"))
+        self.assertFalse(row.slots_widget.isHidden())
+        self.assertTrue(row.unrecognized_label.isHidden())
 
     def test_upsert_and_remove(self) -> None:
         panel = self._panel()
@@ -332,16 +349,27 @@ class SkillPanelTests(unittest.TestCase):
         try:
             rows = list(panel._rows.values())
             self.assertEqual("1", rows[0].squad_badge.text())
-            self.assertTrue(rows[0].squad_badge.isVisibleTo(rows[0]))
+            self.assertFalse(rows[0].squad_badge.isHidden())
             self.assertEqual("1", rows[1].squad_badge.text())
-            self.assertTrue(rows[1].squad_badge.isVisibleTo(rows[1]))
+            self.assertFalse(rows[1].squad_badge.isHidden())
             # 编号允许重复，不做去重/合并
             self.assertEqual(2, len(rows))
             panel.upsert(replace(state("2"), squad_number=None))
-            self.assertFalse(rows[0].squad_badge.isVisibleTo(rows[0]))
+            self.assertTrue(rows[0].squad_badge.isHidden())
         finally:
             panel.close()
             panel.deleteLater()
+
+    def test_header_top_same_empty_and_with_cards(self) -> None:
+        panel = self._panel()
+        panel.resize(520, 520)
+        panel.show()
+        self.app.processEvents()
+        empty_top = panel.header_widget.geometry().top()
+        panel.set_states([state("2")])
+        self.app.processEvents()
+        self.assertEqual(empty_top, panel.header_widget.geometry().top())
+        self.assertEqual(30, panel.header_widget.height())
 
     def test_multi_member_scroll_and_card_height(self) -> None:
         panel = self._panel()

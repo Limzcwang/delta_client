@@ -312,11 +312,12 @@ class WsClient:
         operator_id: str = "",
         operator_name: str = "",
         squad_number: int | None = None,
+        match_state: str = "idle",
     ) -> bool:
         """E2/E3a：上报本机技能状态（服务端时钟口径的 captured_at）。"""
         return await self._send(
             protocol.skill_share_update_message(
-                room_id, captured_at, skills, operator_id, operator_name, squad_number
+                room_id, captured_at, skills, operator_id, operator_name, squad_number, match_state
             )
         )
 

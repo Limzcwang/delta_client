@@ -165,6 +165,7 @@ class SkillState:
     operator_id: str = ""
     operator: str = ""
     captured_at: int = 0
+    match_state: str = "idle"
     squad_number: int | None = None
     updated_at: int = 0
     server_received_at: int = 0
@@ -215,6 +216,9 @@ class SkillState:
         )
         if not captured_at:
             captured_at = updated_at
+        match_state = str(payload.get("match_state") or "idle").strip().lower()
+        if match_state not in ("idle", "running"):
+            match_state = "idle"
         squad_raw = _first(payload, "squad_number", "squadNumber")
         squad_number: int | None = None
         try:
@@ -255,6 +259,7 @@ class SkillState:
             operator_id=operator_id,
             operator=operator,
             captured_at=max(0, captured_at),
+            match_state=match_state,
             squad_number=squad_number,
             updated_at=max(0, updated_at),
             server_received_at=max(0, server_received_at),

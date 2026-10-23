@@ -225,12 +225,14 @@ def skill_share_update_message(
     operator_id: str = "",
     operator_name: str = "",
     squad_number: int | None = None,
+    match_state: str = "idle",
 ) -> dict[str, Any]:
     """E2/E3a：上报本机技能状态（``captured_at`` 为服务器时钟毫秒）。"""
     message: dict[str, Any] = {
         "type": WS_SKILL_SHARE_UPDATE,
         "room_id": str(room_id),
         "captured_at": int(captured_at),
+        "match_state": "running" if str(match_state) == "running" else "idle",
         "skills": skills,
     }
     if operator_id:

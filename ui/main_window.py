@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
+import threading
 import time
 import asyncio
 import concurrent.futures
+import hashlib
+import uuid
 from dataclasses import replace
 from typing import Any, Mapping
 
@@ -24,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from config import (
+    APP_VERSION,
     AppConfig,
     ConfigError,
     connection_candidates,
@@ -42,6 +47,7 @@ from core.canvas import (
 )
 from core.chat import ChatTimeline
 from core.connection import is_network_failure
+from core.diagnostics import DiagnosticsBuffer
 from core.match_flow import MatchPhase, MatchStateMachine
 from core.errors import ApiError, ErrorKind, to_user_message
 from core.models import (
@@ -316,6 +322,12 @@ class MainWindow(QMainWindow):
         self._auto_controller.operator_detected.connect(self._on_auto_operator_detected)
         self._apply_auto_config()
 
+        if not self.config.client_diag_id:
+            self.config = replace(self.config, client_diag_id=uuid.uuid4().hex)
+        self.diagnostics = DiagnosticsBuffer(APP_VERSION)
+        self.diagnostics.client_diag_id = self.config.client_diag_id
+        self._diag_record_env()
+        self._diag_flush()
         self._status_text = QLabel("未登录")
         self._status_text.setObjectName("Muted")
         self.statusBar().addWidget(self._status_text, 1)
@@ -1053,6 +1065,8 @@ class MainWindow(QMainWindow):
         self._sync_overlay_states()
         self.room_view.skill_panel.set_clock_offset(0)
         self.room_view.set_room(room)
+        self._diag_event("room_join")
+        self._diag_flush()
         self.room_view.set_user(self._username(), self._user_id())
         self.room_view.skill_panel.set_self_user_id(self._user_id())
         self.room_view.clear_chat()
@@ -1418,6 +1432,10 @@ class MainWindow(QMainWindow):
             if isinstance(user, Mapping):
                 member = Member.from_api(user)
                 self.room_view.remove_member(member)
+                if member.id:
+                    self._skills.remove(str(member.id))
+                    self.room_view.skill_panel.remove(str(member.id))
+                    self._sync_overlay_states()
                 reason = str(message.get("reason") or "")
                 reason_text = {
                     "left": "离开",
@@ -2267,10 +2285,12 @@ class MainWindow(QMainWindow):
             set_current_step("running")
 
     def _on_match_reset(self) -> None:
+        self._diag_event("reset_match")
         was_running = self.match_flow.phase == MatchPhase.RUNNING
         self.match_flow.reset()
         if self.match_flow.phase == MatchPhase.RUNNING:
             self._start_match_running()
+            self._send_match_state("running")
         else:
             if was_running:
                 self._finish_match()
@@ -2292,18 +2312,21 @@ class MainWindow(QMainWindow):
             if not self.session.is_logged_in or self._current_room is None or not self.match_flow.shared:
                 self.match_timer.stop(); return
             if self._find_game_window() is None:
+                self._diag_event("window_lost")
                 self.match_flow.window_closed(); self._stop_match_tasks(); self._sync_match_ui(); return
             if self.match_flow.phase == MatchPhase.IDLE:
                 if not self.match_flow.auto_start:
                     return
-                frame, _err = self._capture_hud_frame()
+                frame, err = self._capture_hud_frame()
+                self._diag_tick(capture=self._diag_capture(frame, err))
                 if frame is None:
                     return
                 generation = self._match_generation
                 future = self._match_executor.submit(self._match_read_start, frame.image)
                 future.add_done_callback(lambda f: self._match_post(generation, lambda: self._on_match_start_result(f)))
             elif self.match_flow.phase == MatchPhase.RUNNING:
-                frame, _err = self._capture_hud_frame()
+                frame, err = self._capture_hud_frame()
+                self._diag_tick(capture=self._diag_capture(frame, err))
                 if frame is None:
                     self._schedule_match_end()
                     return
@@ -2322,9 +2345,20 @@ class MainWindow(QMainWindow):
             logger.debug("match tick failed", exc_info=True)
 
     @staticmethod
+    def _diag_capture(frame, err) -> dict:
+        if frame is None:
+            return {"ok": False, "fail_reason": str(err or "no_frame"), "width": 0, "height": 0, "mean_luma": 0.0}
+        try:
+            image = frame.image
+            mean = float(image.mean()) if hasattr(image, "mean") else 0.0
+        except Exception:
+            mean = 0.0
+        return {"ok": True, "fail_reason": "", "width": int(frame.width), "height": int(frame.height), "mean_luma": mean}
+
+    @staticmethod
     def _match_read_start(image):
-        from core.match_ocr import read_start_hit
-        return read_start_hit(image)
+        from core.match_ocr import read_start_details
+        return read_start_details(image)
 
     @staticmethod
     def _match_recognize(image, catalog, profile):
@@ -2333,8 +2367,8 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _match_read_settlement(image):
-        from core.match_ocr import read_settlement_hit
-        return read_settlement_hit(image)
+        from core.match_ocr import read_settlement_details
+        return read_settlement_details(image)
 
     def _match_post(self, generation: int, callback) -> None:
         if generation != self._match_generation:
@@ -2346,13 +2380,20 @@ class MainWindow(QMainWindow):
 
     def _on_match_start_result(self, future) -> None:
         try:
-            hit = bool(future.result())
+            detail = future.result()
         except Exception:  # noqa: BLE001
-            hit = False
+            detail = {}
+        if isinstance(detail, dict):
+            hit = bool(detail.get("hit"))
+            self._diag_tick(start_ocr=detail)
+        else:
+            hit = bool(detail)
+            self._diag_tick(start_ocr={"hit": hit, "result": "hit" if hit else "miss"})
         result = self.match_flow.observe_start(hit)
         self._sync_match_ui()
         if result == "hit":
             self._start_match_running()
+            self._send_match_state("running")
 
     def _on_match_recognize(self, frame, future) -> None:
         try:
@@ -2360,13 +2401,22 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001
             result = {}
         now = time.monotonic()
+        fallback = False
         if not self.match_flow.locked_operator:
             score = float(result.get("score") or 0.0)
             operator_id = str(result.get("operator_id") or "")
             if operator_id and score >= 0.75:
                 self.match_flow.lock_operator(operator_id, score)
             elif now - getattr(self, "_match_running_since", now) >= 15.0:
+                fallback = True
                 self.match_flow.lock_operator(operator_id, 0.0 if not operator_id else score)
+        bar = result.get("skill_bar") or {}
+        self._diag_tick(
+            operator={"top3": result.get("top3") or [], "locked": bool(self.match_flow.locked_operator),
+                      "fallback": fallback, "unknown": not bool(self.match_flow.locked_operator)},
+            skill_bar={"found": bool(result.get("skills")), "roi": bar.get("roi", {}),
+                       "slots": result.get("slots") or [], "ocr_lines": bar.get("ocr_lines") or []},
+        )
         if not result.get("avatar") and not result.get("skills"):
             self._schedule_match_end()
         else:
@@ -2416,12 +2466,21 @@ class MainWindow(QMainWindow):
 
     def _on_match_end_result(self, future) -> None:
         try:
-            hit = bool(future.result())
+            detail = future.result()
         except Exception:  # noqa: BLE001
-            hit = False
-        self._match_end_observe(hit)
+            detail = {}
+        if isinstance(detail, dict):
+            self._match_end_observe(bool(detail.get("hit")), detail)
+        else:
+            self._match_end_observe(bool(detail), {})
 
-    def _match_end_observe(self, hit: bool) -> None:
+    def _match_end_observe(self, hit: bool, detail: dict | None = None) -> None:
+        detail = detail or {}
+        self._diag_tick(end_async={
+            "delay_ms": 3000, "scans": int(detail.get("scans") or 0),
+            "hits": int(detail.get("hits") or 0), "threshold": int(detail.get("threshold") or 0),
+            "result": str(detail.get("result") or ("hit" if hit else "miss")),
+        })
         result = self.match_flow.observe_end(hit)
         if result == "hit":
             self._finish_match()
@@ -2434,9 +2493,12 @@ class MainWindow(QMainWindow):
         # 先停任务（timer/异步/识别）再改状态/UI；任何结束路径都走这里。
         self._stop_match_tasks()
         try:
-            self._remove_own_skill_state(); self._send_skill_off()
+            self._remove_own_skill_state()
         except Exception:  # noqa: BLE001
             pass
+        self._send_match_state("idle")
+        self._diag_event("match_end")
+        self._diag_flush()
         self.match_flow.terminate()
         self._sync_match_ui()
         logger.info("match ended by settlement OCR")
@@ -2453,6 +2515,7 @@ class MainWindow(QMainWindow):
             pass
 
     def _on_skill_sharing_toggled(self, enabled: bool) -> None:
+        self._diag_event("share_on" if enabled else "share_off")
         self._skill_share_enabled = bool(enabled)
         if hasattr(self, "_auto_controller"):
             self._apply_auto_config()
@@ -2467,6 +2530,7 @@ class MainWindow(QMainWindow):
                 self._stop_match_tasks()
             self._sync_match_ui()
         if not enabled:
+            self._diag_flush()
             # 无论 WS 是否连通，都先本地移除自己，避免卡片残留。
             self._remove_own_skill_state()
             self._send_skill_off()
@@ -2476,12 +2540,13 @@ class MainWindow(QMainWindow):
             self.room_view.skill_panel.set_sharing(False)
             self._skill_share_enabled = False
             return
-        if self._self_skill_state is None:
-            self._self_skill_state = self._build_simulated_skill()
-            self._skills.update(self._self_skill_state)
-            self.room_view.skill_panel.upsert(self._self_skill_state)
-        self._send_skill_state(self._self_skill_state)
-        self.room_view.set_status("技能共享已开启（本地限频 2 次/秒）")
+        self.room_view.skill_panel.set_sharing(True)
+        # 只上报对局状态（无技能数据），不伪造技能内容。
+        if self._self_skill_state is not None and self._self_skill_state.match_state == "running":
+            self._send_skill_state(self._self_skill_state)
+        else:
+            self._send_match_state("idle")
+        self.room_view.set_status("技能共享已开启（等待对局数据）")
 
     def _remove_own_skill_state(self) -> None:
         uid = self._user_id()
@@ -2509,6 +2574,8 @@ class MainWindow(QMainWindow):
             self.room_view.set_status("技能上报失败：captured_at 非法", error=True)
             return
         state = replace(state, captured_at=captured_at)
+        if any(str(getattr(state.slot(kind), "state", "unknown")) != "unknown" for kind in ("ultimate", "ability", "throwable")):
+            state = replace(state, match_state="running")
         self._self_skill_state = state
         self._skills.update(state)
         self.room_view.skill_panel.upsert(state)
@@ -2527,8 +2594,135 @@ class MainWindow(QMainWindow):
                 state.operator_id,
                 state.operator,
                 state.squad_number,
+                state.match_state,
             )
         )
+
+    def _send_match_state(self, match_state: str) -> None:
+        room = self._current_room
+        if room is None or not self._skill_share_enabled:
+            return
+        state = SkillState(
+            user_id=self._user_id(),
+            nickname=self._username(),
+            captured_at=self._server_now_ms(),
+            match_state="running" if match_state == "running" else "idle",
+            slots={},
+        )
+        self._send_skill_state(state)
+
+    def _diag_settings(self) -> dict:
+        return {
+            "auto_start": bool(self.config.match_auto_start),
+            "interval": int(self.config.match_interval_ms),
+            "interval_ms": int(self.config.match_interval_ms),
+            "overlay_enabled": bool(self.config.overlay_enabled),
+            "sharing_enabled": bool(self._skill_share_enabled),
+        }
+
+    @staticmethod
+    def _redact_exe(path: str) -> str:
+        text = str(path or "").strip().replace("/", "\\")
+        if not text:
+            return ""
+        import os as _os
+        name = _os.path.basename(text)
+        drive = ""
+        if len(text) >= 2 and text[1] == ":":
+            drive = text[:2]
+        return (drive + "\\…\\" if drive else "…\\") + name
+
+    def _diag_record_env(self) -> None:
+        try:
+            screen = QApplication.primaryScreen()
+            rect = screen.geometry() if screen is not None else None
+            monitor = {
+                "width": int(rect.width()) if rect else 0,
+                "height": int(rect.height()) if rect else 0,
+                "dpi": int(screen.logicalDotsPerInch()) if screen else 0,
+                "scale": float(screen.devicePixelRatio()) if screen else 1.0,
+                "refresh_hz": float(screen.refreshRate()) if screen else 0.0,
+                "name": str(screen.name()) if screen else "",
+                "count": len(QApplication.screens()),
+            }
+            window = self._find_game_window()
+            game = {
+                "title": getattr(window, "title", "") if window else "",
+                "process": getattr(window, "process_name", "") if window else "",
+                "exe": self._redact_exe(getattr(window, "process_path", "")) if window else "",
+                "client_rect": ({"x": int(window.client_rect[0]), "y": int(window.client_rect[1]), "width": int(window.client_rect[2]), "height": int(window.client_rect[3])} if window else {"x":0,"y":0,"width":0,"height":0}),
+                "display_mode": "unknown",
+            }
+            from core.hud_profile import HudProfile
+            profile = HudProfile.from_dict(self.config.hud_profile or {})
+            hud = {
+                "avatar_box": profile.self_avatar_roi.to_dict(),
+                "skill_bar_rect": profile.skill_bar.to_dict(),
+                "minimap_radius": 0,
+                "text_height_px": int(profile.text_row.height),
+                "estimated": True,
+            }
+            self.diagnostics.record("env", {
+                "client_version": APP_VERSION, "os_version": sys.platform,
+                "is_admin": False, "monitor": monitor, "game_window": game, "hud_geometry": hud,
+            })
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _diag_event(self, event_type: str, extra: dict | None = None) -> None:
+        try:
+            payload = {
+                "event_type": str(event_type), "ts": int(time.time() * 1000),
+                "room_id": getattr(self._current_room, "id", "") or "",
+                "client_version": APP_VERSION, "settings": self._diag_settings(),
+            }
+            if extra:
+                payload.update(extra)
+            self.diagnostics.record("event", payload)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _diag_tick(self, **values) -> None:
+        try:
+            payload = {
+                "ts": int(time.time() * 1000),
+                "phase": "running" if self.match_flow.phase == MatchPhase.RUNNING else "idle",
+                "shared": bool(self._skill_share_enabled),
+                "auto_start": bool(self.config.match_auto_start),
+                "interval_ms": int(self.config.match_interval_ms),
+                "capture": {"ok": False, "fail_reason": "", "width": 0, "height": 0, "mean_luma": 0.0},
+                "start_ocr": {"lines": [], "hits": 0, "attempts": 0, "threshold": 0, "result": ""},
+                "operator": {"top3": [], "locked": self.match_flow.locked_operator, "fallback": self.match_flow.operator_unknown, "unknown": not self.match_flow.locked_operator},
+                "skill_bar": {"found": False, "roi": {}, "slots": [], "ocr_lines": []},
+                "end_async": {"delay_ms": 3000, "scans": 0, "hits": 0, "threshold": 0, "result": ""},
+                "error": {"code": "", "message": "", "trace_digest": ""},
+            }
+            for key, value in values.items():
+                if isinstance(value, dict) and isinstance(payload.get(key), dict):
+                    payload[key].update(value)
+                else:
+                    payload[key] = value
+            self.diagnostics.record("tick", payload)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _diag_flush(self) -> None:
+        """后台守护线程上传，绝不阻塞 UI/退出。"""
+        try:
+            events = list(self.diagnostics.events)
+            if not events:
+                return
+            url = self.config.server_url
+            token = self.session.token
+            def _run() -> None:
+                try:
+                    import asyncio
+                    asyncio.run(self.diagnostics.upload(url, token, timeout=4.0))
+                except Exception:  # noqa: BLE001
+                    pass
+            threading.Thread(target=_run, name="diag-upload", daemon=True).start()
+        except Exception:  # noqa: BLE001
+            pass
 
     def _send_skill_off(self) -> None:
         room = self._current_room
@@ -2960,6 +3154,8 @@ class MainWindow(QMainWindow):
         self._sync_overlay_states()
 
     def _on_leave_room(self) -> None:
+        self._diag_event("room_leave")
+        self._diag_flush()
         room = self._current_room
         save_canvas = True
         if room is not None and self._canvas_loaded and self._canvas_snapshot_for_save() is None:
@@ -2996,15 +3192,9 @@ class MainWindow(QMainWindow):
         self._hud_service.reset_tracker()
         if self._current_room is None:
             return
-        state = self._build_simulated_skill()
-        self._self_skill_state = state
-        self._skills.update(state)
-        self.room_view.skill_panel.upsert(state)
-        self._sync_overlay_states()
-        if self._skill_share_enabled:
-            self._send_skill_state(state)
-        else:
-            self.room_view.set_status(f"已切换干员：{state.operator or state.operator_id}")
+        # 0.2.11：切换干员不再生成模拟技能，等待真实识别结果。
+        self._remove_own_skill_state()
+        self.room_view.set_status("已切换干员，等待真实识别数据")
 
     def _on_settings(self) -> None:
         if self.ui_mode == "qml" and self.qml_conn is not None:
@@ -3411,6 +3601,8 @@ class MainWindow(QMainWindow):
 
     # ---------- 关闭 ----------
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt 覆盖
+        self._diag_event("ws_disconnect")
+        self._diag_flush()
         try:
             self._stop_lobby_timer()
             room = self._current_room

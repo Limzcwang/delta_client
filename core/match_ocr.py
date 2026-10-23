@@ -13,34 +13,52 @@ def _lines(image, scale=1.0):
             pass
     return [line.text for line in HudOcr().read_lines(image)]
 
-def read_start_hit(image: Any) -> bool:
+def read_start_details(image: Any) -> dict[str, Any]:
+    detail = {"hit": False, "lines": [], "hits": 0, "attempts": 0, "threshold": 0, "result": "miss"}
     if image is None:
-        return False
+        detail["result"] = "no_frame"
+        return detail
     try:
         top = image[: max(40, int(image.shape[0] * 0.30))]
-    except Exception:
-        return False
-    try:
         texts = _lines(top)
     except Exception:
-        return False
-    return any(parse_countdown(t) for t in texts)
+        detail["result"] = "ocr_error"
+        return detail
+    detail["lines"] = [{"text": str(t), "box": []} for t in texts]
+    detail["attempts"] = 1
+    detail["threshold"] = 1
+    hits = sum(1 for text in texts if parse_countdown(text))
+    detail["hits"] = hits
+    detail["hit"] = bool(hits)
+    detail["result"] = "hit" if hits else "miss"
+    return detail
 
-def read_settlement_hit(image: Any) -> bool:
+def read_start_hit(image: Any) -> bool:
+    return bool(read_start_details(image)["hit"])
+
+def read_settlement_details(image: Any) -> dict[str, Any]:
+    detail = {"hit": False, "scans": 0, "hits": 0, "threshold": 1, "result": "miss", "lines": []}
     if image is None:
-        return False
+        detail["result"] = "no_frame"
+        return detail
     for scale in (1.2, 1.6, 2.0, 2.5):
+        detail["scans"] += 1
         try:
             texts = _lines(image[image.shape[0]//3:], scale)
         except Exception:
             continue
+        detail["lines"] = [{"text": str(t), "box": []} for t in texts]
         if parse_settlement_texts(texts):
-            return True
-    return False
+            detail["hit"] = True; detail["hits"] += 1; detail["result"] = "hit"; break
+    return detail
+
+def read_settlement_hit(image: Any) -> bool:
+    return bool(read_settlement_details(image)["hit"])
 
 def recognize_joint(image: Any, catalog, profile) -> dict[str, Any]:
     """头像模板 + 技能图标联合分；无 cv2/模板时安全降级。"""
-    result: dict[str, Any] = {"operator_id": "", "score": 0.0, "avatar": False, "skills": False, "slots": []}
+    result: dict[str, Any] = {"operator_id": "", "score": 0.0, "avatar": False, "skills": False,
+                              "slots": [], "top3": [], "skill_bar": {"found": False, "roi": {}}}
     if image is None or catalog is None:
         return result
     try:
@@ -51,16 +69,30 @@ def recognize_joint(image: Any, catalog, profile) -> dict[str, Any]:
         result["operator_id"] = operator_id or ""
         result["score"] = float(score or 0.0)
         result["avatar"] = bool(operator_id)
+        if operator_id:
+            result["top3"] = [{"id": str(operator_id), "score": float(score or 0.0)}]
     except Exception:
         pass
     try:
         from core.skill_icons import load_skill_icons, match_skill_icons
         slots = profile.slot_rois()
+        bar_roi = profile.skill_bar
+        result["skill_bar"] = {"found": True, "roi": bar_roi.to_dict(), "ocr_lines": []}
+        try:
+            from core.hud_ocr import HudOcr
+            bar_image = image[bar_roi.y:bar_roi.bottom, bar_roi.x:bar_roi.right]
+            for line in HudOcr().read_lines(bar_image):
+                result["skill_bar"]["ocr_lines"].append({
+                    "text": str(line.text),
+                    "box": [{"x": int(p[0]), "y": int(p[1])} for p in (line.box or ())],
+                })
+        except Exception:
+            pass
         for index, roi in enumerate(slots):
             crop = image[roi.y:roi.bottom, roi.x:roi.right]
             if crop is None or getattr(crop, "size", 0) == 0:
                 continue
-            result["slots"].append({"slot": index, "state": "ready"})
+            result["slots"].append({"slot": index, "state": "ready", "charges": 0, "max_charges": 1, "pct": None})
         result["skills"] = bool(result["slots"])
     except Exception:
         pass
