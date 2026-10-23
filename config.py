@@ -170,6 +170,7 @@ class AppConfig:
     operator_recognition_threshold: float = 0.65
     hud_debug_export: bool = False
     request_timeout: float = DEFAULT_TIMEOUT
+    client_diag_id: str = ""
     source: str = "default"
 
     @property
@@ -208,6 +209,7 @@ class AppConfig:
             "operator_recognition_threshold": self.operator_recognition_threshold,
             "hud_debug_export": self.hud_debug_export,
             "request_timeout": self.request_timeout,
+            "client_diag_id": self.client_diag_id,
         }
 
 
@@ -360,6 +362,7 @@ def load_config(
     except (TypeError, ValueError):
         operator_recognition_threshold = 0.65
 
+    client_diag_id = str(file_data.get("client_diag_id") or "").strip()
     timeout = DEFAULT_TIMEOUT
     raw_timeout = file_data.get("request_timeout")
     if isinstance(raw_timeout, (int, float)) and raw_timeout > 0:
@@ -391,6 +394,7 @@ def load_config(
         operator_recognition_threshold=operator_recognition_threshold,
         hud_debug_export=hud_debug_export,
         request_timeout=timeout,
+        client_diag_id=client_diag_id,
         source=source,
     )
 

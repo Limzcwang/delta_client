@@ -18,9 +18,11 @@ import json
 import logging
 import sys
 import tempfile
+from dataclasses import replace
 from pathlib import Path
+import uuid
 
-from config import APP_VERSION, AppConfig, ConfigError, load_config
+from config import APP_VERSION, AppConfig, ConfigError, load_config, save_config
 from state.logging_setup import setup_logging
 from state.paths import app_data_dir, migrate_legacy_data
 from state.session import Session, default_session_path
@@ -136,6 +138,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.check:
         return _check_dependencies(config)
+    if not config.client_diag_id:
+        config = replace(config, client_diag_id=uuid.uuid4().hex)
+        try:
+            save_config(config)
+        except OSError:
+            pass
 
     from state.crash_logging import (
         clear_current_step,

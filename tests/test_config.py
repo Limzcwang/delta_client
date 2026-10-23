@@ -70,6 +70,13 @@ class LoadConfigTests(unittest.TestCase):
         self.assertNotIn("shortcut_edit", public)
         self.assertNotIn("hotkeys", public)
 
+    def test_client_diag_id_persisted(self) -> None:
+        cfg = AppConfig(client_diag_id="diag-test-123")
+        save_config(cfg, self.config_path)
+        loaded = load_config(path=self.config_path, env={})
+        self.assertEqual("diag-test-123", loaded.client_diag_id)
+        self.assertEqual("diag-test-123", loaded.public_dict()["client_diag_id"])
+
     def test_legacy_shortcut_keys_ignored_and_dropped(self) -> None:
         self._write({"shortcut_toggle": "F9", "shortcut_edit": "F11", "operator_id": "honglang"})
         cfg = load_config(path=self.config_path, env={})

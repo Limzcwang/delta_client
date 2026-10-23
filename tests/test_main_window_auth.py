@@ -164,6 +164,7 @@ class WsFatalSessionTests(unittest.TestCase):
             window.room_view.skill_panel.upsert(window._self_skill_state)
             fake = FakeWs(); window._ws = fake
             window._finish_match()
+            self.assertEqual(0, fake.off)
             self.assertIn("12", window.room_view.skill_panel._rows)
             self.assertTrue(window.room_view.skill_panel._rows["12"].unrecognized_label.isVisibleTo(window.room_view.skill_panel._rows["12"]))
             self.assertEqual("结束技能共享", window.room_view.skill_panel.share_toggle_button.text())

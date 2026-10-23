@@ -1,6 +1,6 @@
 """0.2.12 内建诊断：内存环形缓冲，纯文本批量上传。"""
 from __future__ import annotations
-import logging, time, uuid
+import json, logging, time, uuid
 from collections import deque
 from typing import Any
 logger=logging.getLogger(__name__)
@@ -19,11 +19,15 @@ class DiagnosticsBuffer:
     def drain(self) -> list[dict[str, Any]]:
         events = list(self.events); self.events.clear(); return events
     def batch(self) -> dict[str, Any]:
+        events = self.drain()
+        # 512KB 上限：超限丢最旧事件，避免请求被服务端裁剪。
+        while events and len(json.dumps(events, ensure_ascii=False).encode("utf-8")) > 512 * 1024:
+            events.pop(0)
         return {
             "client_diag_id": self.client_diag_id,
             "session_id": self.session_id,
             "client_version": self.version,
-            "events": self.drain(),
+            "events": events,
         }
     async def upload(self, server_url: str, token: str | None = None, *, timeout: float = 8.0) -> bool:
         events = self.drain()

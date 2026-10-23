@@ -274,7 +274,7 @@ class RoomView(QWidget):
         self.canvas = CanvasView()
         layout.addWidget(self.canvas, stretch=1)
 
-        note = QLabel("截屏与识别只会在本机进行")
+        note = QLabel("截图仅本地处理、不上传；仅上报识别文本日志")
         note.setObjectName("Hint")
         note.setWordWrap(True)
         layout.addWidget(note)
