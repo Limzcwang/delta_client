@@ -77,9 +77,6 @@ class LoginView(QWidget):
         features.setObjectName("BrandBullet")
         features.setWordWrap(True)
 
-        notice = QLabel("仅桌面端 · 不收集屏幕内容\n截屏与识别全部在本机完成")
-        notice.setObjectName("Hint")
-        notice.setWordWrap(True)
         self.diag_notice = QLabel(
             "仅采集用于排查识别问题的技术日志（窗口/OCR/识别结果），\n"
             "不含聊天、截图或账号密码；保留 7 天。"
@@ -95,7 +92,6 @@ class LoginView(QWidget):
         layout.addSpacing(16)
         layout.addWidget(features)
         layout.addStretch(2)
-        layout.addWidget(notice)
         layout.addWidget(self.diag_notice)
         return panel
 
