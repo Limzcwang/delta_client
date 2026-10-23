@@ -235,10 +235,8 @@ def skill_share_update_message(
         "match_state": "running" if str(match_state) == "running" else "idle",
         "skills": skills,
     }
-    if operator_id:
-        message["operator_id"] = str(operator_id)
-    if operator_name:
-        message["operator_name"] = str(operator_name)
+    message["operator_id"] = str(operator_id or "")
+    message["operator_name"] = str(operator_name or "")
     if squad_number in (1, 2, 3):
         message["squad_number"] = int(squad_number)
     return message

@@ -408,8 +408,10 @@ class RoomView(QWidget):
             self.chat_input.setText(text)
 
     def set_status(self, text: str, error: bool = False) -> None:
+        if error:
+            return
         self.status_label.setText(str(text))
-        self.status_label.setStyleSheet("color: #ff9b8f;" if error else "")
+        self.status_label.setStyleSheet("")
 
     def focus_chat_input(self) -> None:
         self.chat_input.setFocus()

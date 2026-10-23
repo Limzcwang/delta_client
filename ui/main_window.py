@@ -328,6 +328,10 @@ class MainWindow(QMainWindow):
         self.diagnostics.client_diag_id = self.config.client_diag_id
         self._diag_record_env()
         self._diag_flush()
+        self._diag_timer = QTimer(self)
+        self._diag_timer.setInterval(30000)
+        self._diag_timer.timeout.connect(self._diag_flush)
+        self._diag_timer.start()
         self._status_text = QLabel("未登录")
         self._status_text.setObjectName("Muted")
         self.statusBar().addWidget(self._status_text, 1)
@@ -423,7 +427,8 @@ class MainWindow(QMainWindow):
         self.login_view.focus_first()
         self._auto_fill_saved_login()
         if message:
-            self.login_view.show_error(message)
+            self._diag_event("error", {"code": "LOGIN_FAILED", "message": message[:300]})
+        logger.warning("login failed: %s", message)
         if self.qml_login is not None:
             self.qml_login.set_server_text(self.config.server_url, self.config.mode_label)
             self.qml_login.set_busy(False)
@@ -656,8 +661,8 @@ class MainWindow(QMainWindow):
         text = "无法连接服务器（已尝试 443/8443）"
         if attempted:
             text += f"\n已尝试：{attempted}"
-        self.login_view.show_error(text)
-        self._set_status(text)
+        self._diag_event("error", {"code": "LOGIN_CONNECT_FAILED", "message": text[:300]})
+        logger.warning("login connect failed: %s", text)
 
 
     def _on_login_success(
@@ -667,6 +672,7 @@ class MainWindow(QMainWindow):
         if self.qml_login is not None:
             self.qml_login.set_busy(False)
         self.session.set_login(result.token, result.user)
+        self._diag_flush()
         account = str(result.user.get("username") or username or "").strip()
         if account and password:
             # H2：登录成功记录历史账号（密码 DPAPI 加密；失败则只存账号）
@@ -688,6 +694,8 @@ class MainWindow(QMainWindow):
             self.qml_login.set_busy(False)
             self.qml_login.show_error(to_user_message(exc))
         message = to_user_message(exc)
+        self._diag_event("error", {"code": "LOGIN_FAILED", "message": message[:300]})
+        logger.warning("login failed: %s", message)
         if (
             username
             and isinstance(exc, ApiError)
@@ -732,7 +740,8 @@ class MainWindow(QMainWindow):
 
     def _on_register_failure(self, exc: BaseException) -> None:
         self.login_view.set_busy(False)
-        self.login_view.show_error(to_user_message(exc))
+        self._diag_event("error", {"code": "REGISTER_FAILED", "message": to_user_message(exc)[:300]})
+        logger.warning("register failed: %s", to_user_message(exc))
         if self.qml_login is not None:
             self.qml_login.set_busy(False)
             self.qml_login.show_error(to_user_message(exc))
@@ -893,7 +902,7 @@ class MainWindow(QMainWindow):
         try:
             validate_room_delete_confirmation(text, mine.display_name)
         except ValidationError as exc:
-            QMessageBox.warning(self, "确认失败", str(exc))
+            logger.warning("delete room confirm failed: %s", exc)
             return
         self.room_list_view.my_rooms.set_room_busy(mine.key, True)
         self._safe_submit(
@@ -919,9 +928,8 @@ class MainWindow(QMainWindow):
             self._handle_auth_expired(exc)
             return
         self.room_list_view.my_rooms.set_room_busy(mine.key, False)
-        self.room_list_view.set_status(
-            f"{action}「{mine.display_name}」失败：{to_user_message(exc)}", error=True
-        )
+        self._diag_event("error", {"code": "ROOM_ACTION_FAILED", "message": to_user_message(exc)[:300]})
+        logger.warning("room action failed: %s", to_user_message(exc))
 
     @staticmethod
     def _room_matches_my_room(room: Room, mine: MyRoom) -> bool:
@@ -1002,6 +1010,7 @@ class MainWindow(QMainWindow):
         self._enter_room(room, password=password)
 
     def _on_join_failed(self, exc: BaseException, code: str, attempt: int) -> None:
+        self._diag_event("error", {"code": "JOIN_FAILED", "message": to_user_message(exc)[:300]})
         if isinstance(exc, ApiError) and exc.needs_room_password and attempt < 2:
             self.room_list_view.set_status(exc.user_message, error=True)
             password_focus = exc.kind == ErrorKind.ROOM_PASSWORD_INVALID
@@ -1010,13 +1019,12 @@ class MainWindow(QMainWindow):
         if isinstance(exc, ApiError) and exc.is_auth_error:
             self._handle_auth_expired(exc)
             return
-        self.room_list_view.set_status(to_user_message(exc), error=True)
 
     def _on_room_action_failed(self, exc: BaseException) -> None:
+        self._diag_event("error", {"code": "ROOM_ACTION_FAILED", "message": to_user_message(exc)[:300]})
         if isinstance(exc, ApiError) and exc.is_auth_error:
             self._handle_auth_expired(exc)
             return
-        self.room_list_view.set_status(to_user_message(exc), error=True)
 
     def _on_logout(self) -> None:
         room = self._current_room
@@ -1251,8 +1259,10 @@ class MainWindow(QMainWindow):
             self.room_view.set_status(f"成员同步失败：{to_user_message(exc)}", error=True)
 
     def _on_ws_run_failed(self, exc: BaseException) -> None:
-        self.room_view.set_connection_state("error", to_user_message(exc))
-        self._system_message(f"实时连接失败：{to_user_message(exc)}")
+        message = to_user_message(exc)
+        self._diag_event("error", {"code": "WS_RUN_FAILED", "message": message[:300]})
+        logger.warning("ws run failed: %s", message)
+        self.room_view.set_connection_state("error", message)
         if self._current_room is not None:
             self._refresh_members_http(self._current_room, fallback=True)
 
@@ -1528,7 +1538,7 @@ class MainWindow(QMainWindow):
         ):
             self._set_status(text)
             return
-        QMessageBox.warning(self, "已被移出房间", text)
+        logger.warning("kicked from room: %s", text)
         self._stop_ws()
         self._current_room = None
         self._room_password = None
@@ -2709,11 +2719,15 @@ class MainWindow(QMainWindow):
     def _diag_flush(self) -> None:
         """后台守护线程上传，绝不阻塞 UI/退出。"""
         try:
+            self._diag_flush_calls = getattr(self, "_diag_flush_calls", 0) + 1
             events = list(self.diagnostics.events)
             if not events:
                 return
             url = self.config.server_url
             token = self.session.token
+            if not token:
+                # 未登录时先把 env/tick 留在内存，登录成功后再发。
+                return
             def _run() -> None:
                 try:
                     import asyncio
@@ -3085,42 +3099,29 @@ class MainWindow(QMainWindow):
 
     def _handle_ws_error(self, message: Mapping[str, Any]) -> None:
         code = str(message.get("code") or message.get("error_code") or "")
-        text = str(message.get("message") or code or "未知错误")
+        text = str(message.get("message") or code or "unknown")
+        self._diag_event("error", {"code": code, "message": text[:300]})
+        logger.warning("ws error code=%s message=%s", code, text)
         membership_error = code in ("NOT_ROOM_MEMBER", "ROOM_NOT_MEMBER") or any(
-            marker in text for marker in ("不在该房间", "还没有加入房间", "未加入房间", "not a member")
+            marker in text for marker in ("not a member",)
         )
-        now = time.monotonic()
-        first_seen = not (
-            text == self._last_membership_error
-            and now - self._last_membership_error_at < 10.0
-        )
-        if first_seen:
-            self._last_membership_error = text
-            self._last_membership_error_at = now
-            self._timeline.add_system(
-                "连接状态已失效，正在重新加入房间…" if membership_error else f"服务端错误：{text}"
-            )
         if membership_error:
             self._membership_confirmed = False
             if not self._rejoin_in_progress:
                 self._start_http_rejoin(RuntimeError(text))
-            self._render_chat()
             return
         chat_reason = _CHAT_ERROR_REASONS.get(code)
         if chat_reason:
             failed = self._timeline.fail_all_pending(chat_reason)
             if failed:
                 self.room_view.append_chat_input(failed[-1].content)
-                self.room_view.set_status(f"发送失败：{chat_reason}", error=True)
+                self._diag_event("error", {"code": code, "message": chat_reason})
         self._render_chat()
-
-        canvas_reason = _CANVAS_ERROR_REASONS.get(code)
-        if canvas_reason and code not in ("ROOM_CLOSED",):
-            self.room_view.set_status(canvas_reason, error=True)
+        if _CANVAS_ERROR_REASONS.get(code) and code != "ROOM_CLOSED":
+            self._diag_event("error", {"code": code, "message": str(_CANVAS_ERROR_REASONS[code])})
         if code == "RATE_LIMITED" and self._canvas_queue:
             QTimer.singleShot(700, self._drain_canvas_queue)
         if code == "ROOM_CLOSED":
-            self.room_view.set_status("房间已关闭，即将返回房间列表", error=True)
             QTimer.singleShot(1200, self._on_room_closed)
 
     def _on_room_closed(self) -> None:
@@ -3237,7 +3238,7 @@ class MainWindow(QMainWindow):
         try:
             saved_path = save_config(new_config)
         except OSError as exc:
-            QMessageBox.warning(self, "保存失败", f"无法写入配置文件：{exc}")
+            logger.warning("save config failed: %s", exc)
             return
         identity_changed = (
             new_config.server_url != self.config.server_url
@@ -3419,7 +3420,7 @@ class MainWindow(QMainWindow):
         try:
             saved_path = save_config(new_config)
         except OSError as exc:
-            QMessageBox.warning(self, "保存失败", f"无法写入配置文件：{exc}")
+            logger.warning("save config failed: %s", exc)
             return
 
         identity_changed = (
@@ -3601,6 +3602,10 @@ class MainWindow(QMainWindow):
 
     # ---------- 关闭 ----------
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt 覆盖
+        try:
+            self._diag_timer.stop()
+        except Exception:  # noqa: BLE001
+            pass
         self._diag_event("ws_disconnect")
         self._diag_flush()
         try:
@@ -3608,11 +3613,7 @@ class MainWindow(QMainWindow):
             room = self._current_room
             save_canvas = room is not None
             if save_canvas and self._canvas_loaded and self._canvas_snapshot_for_save() is None:
-                QMessageBox.warning(
-                    self,
-                    "画布已满",
-                    "画布已超过 5000 笔或 512KB，无法保存快照；本次关闭不会保存未保存的增量。",
-                )
+                logger.warning("canvas full on close; snapshot skipped")
                 save_canvas = False
             shutdown = self._stop_ws(
                 room.code if room is not None else None,

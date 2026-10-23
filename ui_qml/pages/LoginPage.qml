@@ -96,8 +96,8 @@ Item {
             }
 
             Text {
-                visible: loginApi.errorText.length > 0
-                text: loginApi.errorText
+                visible: false
+                text: ""
                 color: "#ff9b8f"; font.family: Theme.fontFamily; font.pixelSize: Theme.fontSizeSmall
                 wrapMode: Text.WordWrap; width: parent.width
             }
