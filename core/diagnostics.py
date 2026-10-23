@@ -6,6 +6,29 @@ from typing import Any
 logger=logging.getLogger(__name__)
 MAX_BATCH_BYTES=512*1024
 MAX_GZIP_BYTES=128*1024
+MAX_VALUE_CHARS=512
+MAX_LIST_ITEMS=100
+MAX_DICT_KEYS=64
+MAX_EVENT_BYTES=64*1024
+
+
+def _clip(value, depth=0):
+    if depth > 8:
+        return None
+    if isinstance(value, str):
+        return value[:MAX_VALUE_CHARS]
+    if isinstance(value, dict):
+        out = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= MAX_DICT_KEYS:
+                break
+            out[str(key)[:128]] = _clip(item, depth + 1)
+        return out
+    if isinstance(value, (list, tuple)):
+        return [_clip(item, depth + 1) for item in list(value)[:MAX_LIST_ITEMS]]
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    return str(value)[:MAX_VALUE_CHARS]
 
 class DiagnosticsBuffer:
     def __init__(self, version: str = "", max_events: int = 2000):
@@ -17,7 +40,11 @@ class DiagnosticsBuffer:
         kind = str(kind or "event")
         if kind not in ("env", "tick", "event"):
             kind = "event"
-        self.events.append({"kind": kind, "payload": dict(payload or {})})
+        event = {"kind": kind, "payload": _clip(dict(payload or {}))}
+        if len(json.dumps(event, ensure_ascii=False).encode("utf-8")) > MAX_EVENT_BYTES:
+            logger.debug("diagnostics event dropped: over %s bytes", MAX_EVENT_BYTES)
+            return
+        self.events.append(event)
     def drain(self) -> list[dict[str, Any]]:
         events = list(self.events); self.events.clear(); return events
     def _envelope(self, events: list[dict[str, Any]]) -> dict[str, Any]:
@@ -25,6 +52,14 @@ class DiagnosticsBuffer:
                 "client_version": self.version, "events": events}
     def split_batches(self, events: list[dict[str, Any]], *, max_bytes: int = MAX_BATCH_BYTES,
                       gzip_enabled: bool = False, max_gzip_bytes: int = MAX_GZIP_BYTES) -> list[dict[str, Any]]:
+        sanitized: list[dict[str, Any]] = []
+        for event in events:
+            clipped = {"kind": str(event.get("kind") or "event"), "payload": _clip(event.get("payload") or {})}
+            if len(json.dumps(clipped, ensure_ascii=False).encode("utf-8")) <= MAX_EVENT_BYTES:
+                sanitized.append(clipped)
+            else:
+                logger.debug("diagnostics event dropped: over %s bytes", MAX_EVENT_BYTES)
+        events = sanitized
         batches: list[dict[str, Any]] = []
         current: list[dict[str, Any]] = []
         def fits(candidate):
@@ -39,8 +74,9 @@ class DiagnosticsBuffer:
             if current:
                 batches.append(self._envelope(current)); current = [event]
             else:
-                # 单条超大也保留，避免丢整批；服务端可裁剪
-                current = [event]
+                # 单条裁剪后仍超限则丢弃，绝不发送超限批
+                logger.debug("diagnostics event dropped: batch over limit")
+                current = []
         if current:
             batches.append(self._envelope(current))
         return batches

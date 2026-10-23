@@ -76,7 +76,18 @@ def recognize_joint(image: Any, catalog, profile) -> dict[str, Any]:
     try:
         from core.skill_icons import load_skill_icons, match_skill_icons
         slots = profile.slot_rois()
-        result["skill_bar"] = {"found": True, "roi": profile.skill_bar.to_dict()}
+        bar_roi = profile.skill_bar
+        result["skill_bar"] = {"found": True, "roi": bar_roi.to_dict(), "ocr_lines": []}
+        try:
+            from core.hud_ocr import HudOcr
+            bar_image = image[bar_roi.y:bar_roi.bottom, bar_roi.x:bar_roi.right]
+            for line in HudOcr().read_lines(bar_image):
+                result["skill_bar"]["ocr_lines"].append({
+                    "text": str(line.text),
+                    "box": [{"x": int(p[0]), "y": int(p[1])} for p in (line.box or ())],
+                })
+        except Exception:
+            pass
         for index, roi in enumerate(slots):
             crop = image[roi.y:roi.bottom, roi.x:roi.right]
             if crop is None or getattr(crop, "size", 0) == 0:

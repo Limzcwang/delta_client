@@ -2400,20 +2400,23 @@ class MainWindow(QMainWindow):
             result = future.result() or {}
         except Exception:  # noqa: BLE001
             result = {}
-        self._diag_tick(
-            operator={"top3": result.get("top3") or [], "locked": bool(result.get("operator_id")),
-                      "fallback": False, "unknown": not bool(result.get("operator_id"))},
-            skill_bar={**({"found": bool(result.get("skills")), "roi": (result.get("skill_bar") or {}).get("roi", {}),
-                           "slots": result.get("slots") or [], "ocr_lines": []})},
-        )
         now = time.monotonic()
+        fallback = False
         if not self.match_flow.locked_operator:
             score = float(result.get("score") or 0.0)
             operator_id = str(result.get("operator_id") or "")
             if operator_id and score >= 0.75:
                 self.match_flow.lock_operator(operator_id, score)
             elif now - getattr(self, "_match_running_since", now) >= 15.0:
+                fallback = True
                 self.match_flow.lock_operator(operator_id, 0.0 if not operator_id else score)
+        bar = result.get("skill_bar") or {}
+        self._diag_tick(
+            operator={"top3": result.get("top3") or [], "locked": bool(self.match_flow.locked_operator),
+                      "fallback": fallback, "unknown": not bool(self.match_flow.locked_operator)},
+            skill_bar={"found": bool(result.get("skills")), "roi": bar.get("roi", {}),
+                       "slots": result.get("slots") or [], "ocr_lines": bar.get("ocr_lines") or []},
+        )
         if not result.get("avatar") and not result.get("skills"):
             self._schedule_match_end()
         else:

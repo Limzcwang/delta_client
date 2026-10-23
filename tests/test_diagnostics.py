@@ -9,7 +9,7 @@ class T(unittest.TestCase):
  def test_split_batches_512k_and_gzip(self):
   import json,gzip
   d=DiagnosticsBuffer("0.2.12")
-  events=[{"kind":"tick","payload":{"blob":"x"*20000,"i":i}} for i in range(100)]
+  events=[{"kind":"tick","payload":{**{f"k{j}":"x"*512 for j in range(64)},"i":i}} for i in range(100)]
   batches=d.split_batches(events)
   self.assertGreater(len(batches),1)
   for b in batches:
@@ -17,6 +17,14 @@ class T(unittest.TestCase):
   gz=d.split_batches(events,gzip_enabled=True)
   for b in gz:
    self.assertLessEqual(len(gzip.compress(json.dumps(b,ensure_ascii=False).encode(),6)),128*1024)
+ def test_single_huge_event_clipped(self):
+  import json
+  d=DiagnosticsBuffer("0.2.12"); d.record("tick",{"blob":"x"*600000})
+  batches=d.split_batches(d.drain())
+  self.assertTrue(batches)
+  for b in batches:
+   self.assertLessEqual(len(json.dumps(b,ensure_ascii=False).encode()),512*1024)
+   self.assertLessEqual(len(b["events"][0]["payload"]["blob"]),512)
  def test_redact_exe(self):
   from ui.main_window import MainWindow
   self.assertEqual(r"D:\…\DeltaForceClient-Win64-Shipping.exe", MainWindow._redact_exe(r"D:\Games\Delta\DeltaForceClient-Win64-Shipping.exe"))
